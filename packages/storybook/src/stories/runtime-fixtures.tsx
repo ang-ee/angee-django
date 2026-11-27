@@ -4,6 +4,7 @@ import {
   refineResourcesFromAngeeSchemaMetadata,
   schemaFieldMetadataFromAngeeSchemaMetadata,
   type AngeeSchemaMetadata,
+  type DataResourceFieldMetadata,
   type DataResourceMetadata,
 } from "@angee/metadata";
 import {
@@ -61,6 +62,14 @@ import {
 const FIXTURE_QUERY_CLIENT_CONFIG = { defaultOptions: { queries: { retry: retryAppQuery } } };
 
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+
+/** A story resource's field: a readable `String` scalar a person may create and update; override what the story needs. */
+export function storyField(name: string, overrides: Partial<DataResourceFieldMetadata> = {}): DataResourceFieldMetadata {
+  return {
+    name, kind: "scalar", scalar: "String", readable: true, aggregatable: false,
+    creatable: true, updatable: true, requiredOnCreate: false, ...overrides,
+  };
+}
 export { GraphQLError, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 export { resourceSnapshotOperations } from "../resource-snapshots";
 

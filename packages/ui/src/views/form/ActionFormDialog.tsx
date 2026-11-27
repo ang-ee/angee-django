@@ -143,7 +143,7 @@ function ActionArgsDialog({
     },
     // The fields the dialog renders when the answer lands, in its order: a reason under any other
     // name (a hidden field, a field of an inactive schema branch) shows on the banner.
-    fieldNames: (values) => shownFields(typeof fields === "function" ? fields(values) : fields, values).map((field) => field.name),
+    shownFieldNames: (values) => shownFields(typeof fields === "function" ? fields(values) : fields, values).map((field) => field.name),
     // The banner's line naming the refused fields, by the labels the dialog shows.
     fieldSummary: (fieldErrors: Record<string, readonly string[]>): string => fieldValidationSummary(fieldErrors, new Map(
       (typeof fields === "function" ? fields(actionForm.form.getValues()) : fields).map((field) => [field.name, field]),

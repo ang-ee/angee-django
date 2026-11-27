@@ -73,6 +73,7 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         "delete": None,
         "deletePreview": None,
         "changes": None,
+        "repairChoices": None,
     }
     assert wire["fields"][1]["requiredOnCreate"] is True
     assert wire["fields"][1]["statusDisplay"] == "dot"

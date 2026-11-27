@@ -73,7 +73,11 @@ export interface FieldDescriptor extends FieldPresentation {
   maxItems?: number;
   objectTemplate?: readonly FieldDescriptor[];
   itemTemplate?: FieldDescriptor;
-  /** Editable only while creating; read-only (and never patched) on an edit. */
+  /**
+   * Editable only while creating; read-only (and never patched) on an edit, except a create-only
+   * implementation selector the model's metadata names, which a record whose stored key is not
+   * registered offers once more (a repair). A page cannot unlock what the model's metadata locks.
+   */
   createOnly?: boolean;
   /** Editable only while editing; read-only (and never sent) on a create. */
   editOnly?: boolean;

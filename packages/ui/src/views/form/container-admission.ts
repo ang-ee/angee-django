@@ -2,15 +2,7 @@ import * as React from "react";
 import type { Row } from "@angee/metadata";
 
 import { EMPTY_CONTAINERS, resolveContainer, sessionPermitted, useAppRuntime, type ComposedContainerChild } from "../../runtime";
-import { optionToken } from "../../widgets/types";
-
-/** A row's implementation tokens (its `ImplClassField` values), which select `impl` children and variants. */
-export function rowImplementations(implFields: readonly string[] | undefined, record: Row | null | undefined): readonly string[] {
-  return (implFields ?? []).flatMap((field) => {
-    const impl = optionToken(record?.[field]);
-    return impl ? [impl] : [];
-  });
-}
+import { rowImplementations } from "../resource/implementation-fields";
 
 /** The children whose presence turns on the row: `impl` children, variants, and the originals they stand in for. */
 export function rowDependentChildren(entries: readonly ComposedContainerChild[]): ReadonlySet<string> {

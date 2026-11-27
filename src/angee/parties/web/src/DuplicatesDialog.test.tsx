@@ -770,22 +770,30 @@ describe("the batch merge dialog", () => {
       aggregate: { count: 2 },
       rows: [{ id: `p${number}` }, { id: `q${number}` }],
     });
-    /** The key a page continues after: the `_gt` the dialog adds to the list's `where`, none on the first page. */
+    /** The key a page continues after: the `_gt` (or `_lt`) the dialog adds to the list's `where`, none on the first page. */
     const cursorOf = (variables: unknown): string | null => {
-      const where = (variables as { where?: { _and?: readonly { display_name?: { _gt?: string } }[] } }).where;
-      return where?._and?.at(-1)?.display_name?._gt ?? null;
+      const where = (variables as { where?: { _and?: readonly { display_name?: { _gt?: string; _lt?: string } }[] } }).where;
+      const step = where?._and?.at(-1)?.display_name;
+      return step?._gt ?? step?._lt ?? null;
     };
-    /** The live groups in key order, a page past the cursor and offset, one stable result a page; ``shape`` may change one. */
+    /**
+     * The live groups in the order the read asks, a page past the cursor (above it with `_gt`, below it with `_lt`)
+     * and offset, one stable result a page; ``shape`` may change one.
+     */
     const groupPages = (live: number | (() => readonly number[]), shape: (number: number) => unknown = group) => {
       const cache = new Map<string, Read>();
-      return (variables: { where?: unknown; limit: number; offset?: number }): Read => {
+      return (variables: { where?: unknown; limit: number; offset?: number; order_by?: readonly { direction?: string }[] }): Read => {
         const numbers = typeof live === "number" ? Array.from({ length: live }, (_value, index) => index + 1) : live();
         const after = cursorOf(variables);
+        const below = (variables.where as { _and?: readonly { display_name?: { _lt?: string } }[] } | undefined)
+          ?._and?.at(-1)?.display_name?._lt !== undefined;
+        const descending = variables.order_by?.[0]?.direction === "DESC";
         const offset = variables.offset ?? 0;
-        const page = JSON.stringify([after, offset, numbers]);
+        const page = JSON.stringify([after, below, descending, offset, numbers]);
         if (!cache.has(page)) {
-          const listed = [...numbers].sort((left, right) => (keyOf(left) < keyOf(right) ? -1 : 1))
-            .filter((number) => after === null || keyOf(number) > after).slice(offset, offset + variables.limit);
+          const listed = [...numbers].sort((left, right) => (keyOf(left) < keyOf(right) ? -1 : 1) * (descending ? -1 : 1))
+            .filter((number) => after === null || (below ? keyOf(number) < after : keyOf(number) > after))
+            .slice(offset, offset + variables.limit);
           cache.set(page, { data: { groups: listed.map(shape) }, isFetching: false, isFetchedAfterMount: true, error: null });
         }
         return cache.get(page)!;
@@ -832,6 +840,24 @@ describe("the batch merge dialog", () => {
         const sent = variables as { sets: string[][]; groupings: string[][] };
         return sent.groupings.length === sent.sets.length && sent.groupings.every((fields) => fields[0] === "display_name");
       })).toBe(true);
+    }, PAGED_RUN_TIMEOUT_MS);
+
+    test("a list turned descending lists every group page after page below the last key, in the list's order", async () => {
+      // The People list's groups turned descending by its name header: the read asks for them so, nulls still last.
+      const descending: AllMatchingGroups["read"] = { ...read, orderBy: [{ field: "display_name", direction: "DESC", nulls: "LAST" }] };
+      mocks.groupsRead = groupPages(120);
+      mocks.previewRead = answering();
+      renderDialog(vi.fn(), [], false, undefined, undefined, { ...groupsOf(120), read: descending });
+
+      expect(await screen.findByText(message("duplicates.totals", { count: "120", merge: "108", look: "12" }))).toBeTruthy();
+      expect(groupReads().map(cursorOf)).toEqual([null, keyOf(71), keyOf(21)]);
+      // Each next page is the list's own request, its descending order kept, its `where` narrowed below the last key.
+      const wire = groupByVariables(descending);
+      for (const variables of groupReads()) expect(variables).toMatchObject({ order_by: wire.order_by, offset: 0 });
+      expect(groupReads()[1]).toMatchObject({ where: { _and: [read.where, { display_name: { _lt: keyOf(71) } }] } });
+      // The sets come in the list's order: the greatest name first.
+      expect(previewed().slice(0, 3)).toEqual(["p120", "p119", "p118"]);
+      expect(previewed()).toHaveLength(120);
     }, PAGED_RUN_TIMEOUT_MS);
 
     test("a group added and a group removed between two pages is neither repeated nor skipped", async () => {

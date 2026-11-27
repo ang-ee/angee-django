@@ -3,7 +3,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { useMemo, useState, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { createUiTestProviders } from "../../testing";
-import { RecordFieldMarksProvider, RecordFieldMarkControl, usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, type RecordFieldMark } from "./record-field-marks";
+import {
+  RecordFieldMarksProvider, RecordFieldMarkControl, UnregisteredImplementationExplanation, UnregisteredImplementationField,
+  usePublishActiveRecordForm, useRecordFieldMarks, useRevealedRecordField, useUnregisteredImplementationExplanation,
+  type RecordFieldMark,
+} from "./record-field-marks";
 
 vi.mock("../resource/record-chrome-context", () => ({ useRecordChromeContextMaybe: () => ({ recordId: "nte_7", canonicalResource: "notes.Note" }) }));
 vi.mock("../relation/RecordReference", () => ({
@@ -90,4 +94,27 @@ test("a reveal mark preserves its origin tooltip", async () => {
   expect(screen.getByText("Imported directory")).toBeTruthy();
   fireEvent.click(mark);
   expect(onReveal).toHaveBeenCalledOnce();
+});
+
+test("beside a field error saying the refusal, the explanation stays only where a mark is described by it", () => {
+  const REFUSED = "This actor may not choose an implementation.";
+  function Row() {
+    const explanation = useUnregisteredImplementationExplanation("backend");
+    return <><RecordFieldMarkControl field="backend" label="Backend" />
+      <UnregisteredImplementationExplanation explanation={explanation} messages={[REFUSED]} /></>;
+  }
+  const row = (marked: boolean) => <Provider><RecordFieldMarksProvider>
+    <UnregisteredImplementationField field="backend" marked={marked} readOnly refusal={REFUSED}><Row /></UnregisteredImplementationField>
+  </RecordFieldMarksProvider></Provider>;
+
+  // Marked and read-only: the mark is the keyboard's stop, described by the hidden explanation.
+  const { rerender } = render(row(true));
+  const mark = screen.getByRole("img", { name: "Not registered: Backend" });
+  const described = document.getElementById(mark.getAttribute("aria-describedby") ?? "");
+  expect(described?.textContent).toBe(REFUSED);
+  expect(described?.className).toContain("sr-only");
+  // No mark: nothing references it, and the row's error already says it, so nothing is rendered.
+  rerender(row(false));
+  expect(screen.queryByRole("img", { name: "Not registered: Backend" })).toBeNull();
+  expect(screen.queryAllByText(REFUSED)).toEqual([]);
 });

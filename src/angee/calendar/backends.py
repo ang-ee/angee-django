@@ -110,8 +110,8 @@ class ParsedCalendar:
 class ParsedAttendee:
     """One invited address of a parsed event, with its role and RSVP in the calendar's vocabulary.
 
-    ``address`` is as the source gave it; dedup and the projection read the handle
-    owner's normalized form (:func:`normalized_address`).
+    ``address`` is as the source gave it; dedup and the projection read
+    :func:`attendee_key`.
     """
 
     address: str
@@ -195,15 +195,17 @@ def organizer_first(
 
     A source gives its organizer's address (and ``name``) beside its raw attendee
     list. The organizer carries the response it is listed with, else accepted, and
-    its listed name when ``name`` is blank; its listed entries fold into it. Other
-    entries stay as given: ``CalendarEventManager.prepare`` collapses addresses that
-    normalize alike (``EventAttendee.collapse``, the stronger role and answer).
+    its listed name when ``name`` is blank; its listed entries, the ones
+    :func:`attendee_key` makes one attendee with it, fold into it. Other entries
+    stay as given: ``CalendarEventManager.prepare`` collapses those that key alike
+    (``EventAttendee.collapse``, the stronger role and answer).
     """
 
     listed = [attendee for attendee in attendees if attendee.address]
     if not organizer:
         return tuple(listed)
-    own = [attendee for attendee in listed if attendee.address.lower() == organizer.lower()]
+    key = attendee_key(organizer)
+    own = [attendee for attendee in listed if attendee_key(attendee.address) == key]
     first = own[0] if own else None
     return (
         ParsedAttendee(
@@ -212,15 +214,21 @@ def organizer_first(
             response=first.response if first is not None else AttendeeResponse.ACCEPTED,
             display_name=name or (first.display_name if first is not None else ""),
         ),
-        *(attendee for attendee in listed if attendee.address.lower() != organizer.lower()),
+        *(attendee for attendee in listed if attendee_key(attendee.address) != key),
     )
 
 
-def normalized_address(address: str) -> str:
-    """Return the ``parties.Handle`` owner's normalized form of an attendee address, ``""`` for none."""
+def attendee_key(address: str) -> str:
+    """Return what makes two addresses one attendee before either lands on a handle.
+
+    It is the handle owner's person-matching key (``Handle.normalize_value``), so a
+    provider's two aliases of one mailbox (a Gmail dot or plus-tag) are one
+    attendee, as before. Whether they should be two, by the spelling key
+    (``Handle.spelling_key_of``), is open for a ruling; this is where it changes.
+    """
 
     handles: Any = apps.get_model("parties", "Handle")
-    return str(handles.normalize_value(handles.Platform.for_value(address), address) or "")
+    return handles.normalize_value(handles.Platform.for_value(address), address)
 
 
 def attendee_identity(handle: Any | None, address: str) -> str:
@@ -229,10 +237,13 @@ def attendee_identity(handle: Any | None, address: str) -> str:
     ``handle`` is the canonical handle ``HandleManager.find_identity`` finds for the
     address (``CalendarEventManager.attendee_handles``). A stored attendee row
     compares on its handle the same way, so a merged pair of handles is one
-    attendee on both sides.
+    attendee on both sides. Before the handle exists, the address compares by
+    :func:`attendee_key`.
     """
 
-    return str(handle.pk) if handle is not None else f"new:{normalized_address(address)}"
+    if handle is not None:
+        return str(handle.pk)
+    return f"new:{attendee_key(address)}"
 
 
 def event_columns(event: Any, fields: Sequence[str] = PROJECTED_FIELDS) -> dict[str, Any]:

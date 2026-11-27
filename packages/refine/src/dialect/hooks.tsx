@@ -10,7 +10,7 @@ import {
   type HttpError,
 } from "@refinedev/core";
 
-import { listQueryMeta, type ListQueryTarget } from "../list-query";
+import { listQueryMeta, type ListOrderBy, type ListQueryTarget } from "../list-query";
 import {
   aggregateRequest,
   actionRequest,
@@ -108,7 +108,7 @@ export interface GroupByBatchScope {
 export interface AngeeListBatchScope {
   key: string;
   where: Record<string, unknown> | undefined;
-  orderBy: unknown;
+  orderBy: ListOrderBy | undefined;
   page: number;
   pageSize: number;
 }
@@ -126,7 +126,10 @@ export interface AngeeListBatchEntry {
 
 export interface UseAngeeFacetsResult {
   facets: Readonly<Record<string, ResourceFacetResult>>;
+  /** Each active facet's own read or decode error, or `null`, by facet id: a refused facet says why. */
+  errors: Readonly<Record<string, Error | null>>;
   fetching: boolean;
+  /** The first of `errors`. */
   error: Error | null;
   refetch: () => void;
 }
@@ -281,7 +284,8 @@ export function useAngeeFacets(
     () => activeFacets.map((facet) => ({ key: facet.id, query: facet })),
     [activeFacets],
   );
-  const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery });
+  // A facet says its own refusal where it is shown, so its read opens no notice; the auth check runs.
+  const batch = useGroupByRequestBatch(target, scopes, { document, enabled: canQuery }, { errorNotification: false });
   const root = target?.root ?? "";
   // A facet decodes again only when its own read does: two facets may share a read.
   // A payload the decoder refuses is the facets' error, as it is a group read's.
@@ -297,13 +301,16 @@ export function useAngeeFacets(
   useReportRefusedReads(batch, decoded);
   return useMemo(() => {
     const values = [...new Set(batch.values())];
+    const errors = Object.fromEntries(activeFacets.map((facet) => [
+      facet.id, batch.get(facet.id)?.error ?? decoded.get(facet.id)?.error ?? null,
+    ]));
     return {
       facets: Object.fromEntries(
         activeFacets.map((facet) => [facet.id, decoded.get(facet.id)?.result ?? EMPTY_FACET_RESULT]),
       ),
+      errors,
       fetching: values.some((entry) => entry.isFetching),
-      error: values.find((entry) => entry.error)?.error
-        ?? [...decoded.values()].find((facet) => facet.error)?.error ?? null,
+      error: Object.values(errors).find((error) => error !== null) ?? null,
       refetch: () => {
         values.forEach((entry) => { void entry.refetch(); });
       },
@@ -322,6 +329,7 @@ function useGroupByRequestBatch(
   target: CustomGraphQLOperationTarget | null,
   scopes: readonly GroupByBatchScope[],
   options: DialectQueryOptions,
+  { errorNotification }: { errorNotification?: false } = {},
 ): ReadonlyMap<string, QueryBatchEntry<unknown>> {
   const { document, enabled = true, refetchInterval, relatedModels } = options;
   const canQuery = enabled && target !== null;
@@ -343,6 +351,7 @@ function useGroupByRequestBatch(
   // the dialect owns only group variables and the caller's result labels.
   return useAuthoredQueryBatch(requests, {
     enabled: canQuery, dataProviderName: target?.dataProviderName, refetchInterval,
+    ...(errorNotification === false ? { errorNotification } : {}),
   });
 }
 

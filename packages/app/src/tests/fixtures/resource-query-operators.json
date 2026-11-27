@@ -523,7 +523,8 @@
         "save": null,
         "delete": null,
         "deletePreview": null,
-        "changes": null
+        "changes": null,
+        "repairChoices": null
       },
       "typeNames": {
         "query": null,
@@ -1052,7 +1053,8 @@
         "save": null,
         "delete": null,
         "deletePreview": null,
-        "changes": null
+        "changes": null,
+        "repairChoices": null
       },
       "typeNames": {
         "query": null,

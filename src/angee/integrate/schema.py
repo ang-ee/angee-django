@@ -56,7 +56,7 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.impl import ImplChoice, can_read_impl_choices
+from angee.graphql.impl import ImplChoice, require_impl_choices_admitted
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.related_counts import RelatedCount
@@ -66,7 +66,6 @@ from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import is_platform_admin
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
@@ -133,10 +132,8 @@ class ConsoleImplChoicesQuery:
 
     @strawberry.field
     def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
-        """Return registry choices under the administrator or owning model's policy."""
-        actor = _session_user(info)
-        if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
-            raise PermissionDenied("Implementation choices are not readable by this actor.")
+        """Return registry choices to an actor the create flow's admission admits (``impl_choices_admitted``)."""
+        require_impl_choices_admitted(info, model, field)
         return resolve_impl_choices(model, field)
 
 
@@ -1824,7 +1821,14 @@ def integration_input_extensions(resource: Any) -> list[type]:
 class IntegrationWriteBackend(AngeeHasuraWriteBackend):
     """Compose native patch authorization with model-owned credential attachment."""
 
-    def update(
+    def authorize_update(self, info: strawberry.Info, pk: str) -> Any:
+        """The integration's own write check on the target, before the write scope's (the update's order)."""
+
+        target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
+        target.require_access("write", _session_user(info))
+        return target
+
+    def _update_admitted(
         self,
         info: strawberry.Info,
         pk: str,
@@ -1832,13 +1836,14 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
         *,
         expected_revision: int | None = None,
     ) -> Any:
+        """The integration's write check and capability lock, after the selectors' admission (the update's order)."""
+
         with transaction.atomic():
-            target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
-            target.require_access("write", _session_user(info))
+            target = self.authorize_update(info, pk)
             # The final child is locked first, matching workers and parent-addressed writes.
             with system_context(reason="integrate.graphql.patch.lock"):
                 target.lock_capability()
-            return super().update(info, pk, data, expected_revision=expected_revision)
+            return super()._update_admitted(info, pk, data, expected_revision=expected_revision)
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """The integration factory owns defaults, the create decision and validation; it is claimed first."""

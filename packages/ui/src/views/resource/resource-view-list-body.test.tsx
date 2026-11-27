@@ -177,6 +177,49 @@ test("renders metadata enum labels in the normal list-cell path", () => {
   expect(screen.getByText("Needs approval")).toBeTruthy();
 });
 
+test("a null implementation key reads as not registered, a null in another enum column as absent", () => {
+  const enumField = (name: string): DataResourceFieldMetadata => ({
+    name, kind: "enum", values: [{ value: "LOCAL", description: "Local" }],
+    readable: true, filterable: false, sortable: false, aggregatable: false,
+    groupable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  });
+  const resource = testDataResource("tests.Bridge", {
+    fields: [enumField("backend_class"), enumField("status")], implFields: ["backend_class"],
+  });
+  const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  const [backend, status] = columnsWithMetadataDefaults([{ field: "backend_class" }, { field: "status" }], metadata);
+  const row = { backend_class: null, status: null };
+
+  const { container, rerender } = render(<ListCellContent column={backend!} row={row} metadata={metadata} />);
+  expect(container.textContent).toBe("Not registered");
+  rerender(<ListCellContent column={status!} row={row} metadata={metadata} />);
+  expect(container.textContent).toBe("—");
+  rerender(<ListCellContent column={backend!} row={{ backend_class: "LOCAL" }} metadata={metadata} />);
+  expect(container.textContent).toBe("Local");
+  // A row that redacts the column reads null for that reason alone: no claim about its key.
+  rerender(<ListCellContent column={backend!} row={{ backend_class: null, redacted_fields: ["backend_class"] }} metadata={metadata} />);
+  expect(container.textContent).toBe("—");
+});
+
+test("a not registered cell wears the warning badge; a custom cell and a column through a relation are left alone", () => {
+  const backendField: DataResourceFieldMetadata = {
+    name: "backend_class", kind: "enum", values: [{ value: "LOCAL", description: "Local" }],
+    readable: true, filterable: false, sortable: false, aggregatable: false,
+    groupable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  };
+  const resource = testDataResource("tests.Bridge", { fields: [backendField], implFields: ["backend_class"] });
+  const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
+  const [backend] = columnsWithMetadataDefaults([{ field: "backend_class" }], metadata);
+  const row = { backend_class: null, channel: { backend_class: null } };
+
+  const { container, rerender } = render(<ListCellContent column={backend!} row={row} metadata={metadata} />);
+  expect(screen.getByText("Not registered").className).toContain("bg-warning-soft");
+  rerender(<ListCellContent column={{ ...backend!, render: () => "Custom" }} row={row} metadata={metadata} />);
+  expect(container.textContent).toBe("Custom");
+  rerender(<ListCellContent column={{ field: "channel.backend_class" }} row={row} metadata={metadata} />);
+  expect(container.textContent).toBe("—");
+});
+
 test("passes declared company precision through column parsing to the cell widget", () => {
   const renderMoney = vi.fn(({ field }: WidgetRenderProps) => <span>{field?.fractionDigitsField}</span>);
   const [column] = parsePageColumns(<Column field="amount" widget="test.money" fractionDigitsField="company.display_places" />);

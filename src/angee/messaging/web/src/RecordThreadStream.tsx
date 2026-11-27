@@ -153,7 +153,7 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
   const preview = useRuntimeViewAs();
   const [body, setBody] = React.useState("");
   const form = useActionForm<Record<string, string>>({
-    fieldNames: [composer.bodyArg],
+    shownFieldNames: [composer.bodyArg],
     submit: async (values, options) => {
       const result = await action.submit(values, { record: action.record ?? null, selectedIds: [] }, options);
       return result && "status" in result ? result : actionOutcomeSubmitResult(result);
@@ -173,5 +173,5 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
     submitKey={submitKey} prompt={composer.prompt} submitLabel={action.label}
     readerLine={composer.readerLine ?? (composer.audience ? undefined : t("composer.audience"))}
     audience={composer.audience}
-    after={<ErrorBanner messages={[...(form.fieldErrors[composer.bodyArg] ?? []), ...form.formErrors]} />} />;
+    after={<ErrorBanner {...form.banner} messages={[...(form.fieldErrors[composer.bodyArg] ?? []), ...form.formErrors]} />} />;
 }

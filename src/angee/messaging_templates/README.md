@@ -6,7 +6,13 @@ renderer that turns a row and its values into a subject, a preheader, an HTML bo
 and a plain-text body. The [models module](models.py), the
 [rendering module](rendering.py), the [engine](engine.py) and the
 [walker](walker.py) own the contracts below; their docstrings carry the exact API.
-This addon sends nothing: a sender renders a row and hands the result on.
+A sender renders a row and hands the result on. `MessageTemplate.objects.send_as_system`
+renders a template as named system work and records it on messaging's system
+channel, which delivers it ([Sending as system work](#sending-as-system-work)):
+system mail, which a person's button may cause when the caller's own permission
+decided the send, the causing actor recorded in the caller's changeset. The addon
+requires messaging: enabling it enables messaging and what messaging requires,
+and mail settings are [messaging's](../messaging/README.md).
 
 ## The rows
 
@@ -72,8 +78,16 @@ Anything else fails to compile.
   (`brand.light.primary`), `lang` and `dir` the row's language and its writing
   direction, and a template or layout reads `subject` and `preheader`.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
-  gives an absolute `https`, `http` (to a named host, with no userinfo),
-  `mailto` or `tel` link, percent-encoded, or none; dates go through `date` (`date:"DATE_FORMAT"`), money through
+  gives an absolute `https`, `http` (to a domain name of two labels or more, or
+  to the deployment's own public origin as `angee.base.origins.configured_public_origin`
+  gives it, whatever its host: `http://localhost:8000` under `DEBUG`, an address;
+  with no userinfo), `mailto` or `tel` link, percent-encoded, or none. A render never sends that
+  none in place of a value it was given: before rendering, each value a row
+  prints through `url` (a Markdown link's destination among them) that `url`
+  would empty and that is not blank is refused, `value_not_linkable`, naming its
+  path and why; a blank value leaves an optional link empty. A sender asks
+  the same rule of a value before a run with `MessageTemplate.objects.clean_link(value, path="link")`
+  ([Sending as system work](#sending-as-system-work)). Dates go through `date` (`date:"DATE_FORMAT"`), money through
   `floatformat`. A path printed with a time (`DATETIME_FORMAT`, `H:i`) takes an
   aware `datetime`, never a bare date. `linebreaksbr` writes markup, so it is
   the last filter of a printed value.
@@ -193,14 +207,33 @@ rows and the brand kit through the caller's scope, the default kit when `kit` is
 carries its code in `error_list`, so a sender tells them apart:
 `invalid_values` (a value missing, misshapen, a lone surrogate, a number no
 float holds where `floatformat` or `pluralize` reads it, a moment the local zone
-cannot hold, a bare date printed with a time), `message_template_refused` (the
-walk), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
+cannot hold, a bare date printed with a time), `values_too_large` (the values
+over 50,000 characters of JSON), `message_template_refused` (the
+walk), `value_not_linkable` (a value printed through `url` that gives no link),
+`value_not_printed` (a value passed in `must_print` that a body does not
+print; see [Sending as system work](#sending-as-system-work)), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
-any other failure, which is logged with its traceback first. Every string value,
+any other failure, which is logged first as one error record naming the row (its
+kind, key and language) and the exception's type, never its message or its traceback,
+which may quote a value the render was given. Every code
+`send_as_system` returns from this addon is a constant of
+`angee.messaging_templates.engine`, to compare against rather than retype: the
+row's `NOT_A_TEMPLATE` and `NOT_EFFECTIVE`, and the render's `INVALID_VALUES`,
+`VALUES_TOO_LARGE`, `MESSAGE_TEMPLATE_REFUSED`, `VALUE_NOT_LINKABLE`,
+`VALUE_NOT_PRINTED`, `RENDER_BUDGET_EXCEEDED`, `SUBJECT_TOO_LONG`, `NO_BRAND_KIT` and
+`RENDER_FAILED`. `SEND_CODES` is all eleven: a sender compares its own handling
+against it, so a code added later fails the sender's test instead of falling
+into a default. The limits a sender may read are there too: `VALUES_JSON_LIMIT`,
+`VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` (the values a render admits) and
+`RENDER_ITERATION_LIMIT` (the loop and include renders one pass may do, which
+bounds the items a mail can list). A recipient's refusal and the system channel's
+are messaging's, from compose, and none of these. Every string value,
 and the subject and preheader, drop the control characters and the bidirectional
 overrides and isolates (`UNPRINTED`). A sender picks the row with
-`effective("template", key, person=recipient)`, renders it as the system actor,
-and sends the HTML part as `charset=utf-8`, the one character set a row
+`effective("template", key, person=recipient)` and renders it in its own scope:
+a user's request under that user, named system work inside its own
+`system_context`, as `send_as_system` does. It
+sends the HTML part as `charset=utf-8`, the one character set a row
 declares. The subject the renderer returns is a plain string a sender passes to
 its mail library as it is: it holds no line break, no control character, no
 bidirectional override and no encoded-word opener, so a mail library stores
@@ -228,6 +261,155 @@ One walk serves it: the one that validation ran, or the row's own when the
 patch changed only the name, the description or the sample. The console's
 `message_template_preview` read returns it to administrators (`preview`
 permission), in the kit it names or the default one.
+
+## Sending as system work
+
+`MessageTemplate.objects.send_as_system(row, *, reason, to, values, kit=None, must_print=())`
+sends one effective template to one address with the caller's values, as named
+system work: system mail, which a person's button may cause when the caller's
+own permission decided the send, the causing actor recorded in the caller's
+changeset. Call it only from system work whose own gate decided the send: a
+person's request reaches it only through such a gate, never from a resolver, an
+MCP tool or a view that hands it a person's choice of row, address or values
+unchecked. It checks no permission and decides nothing about the values, the
+links in them or who may be mailed. A test lists the modules that call it, so a
+new caller is a reviewed change.
+
+The caller picks the row for its recipient inside its own named work, so the
+lookup and the send are audited under one reason:
+
+```python
+with system_context(reason="<addon>.<verb>"):
+    row = MessageTemplate.objects.effective("template", key, person=person)
+MessageTemplate.objects.send_as_system(row, reason="<addon>.<verb>", to=address, values=values)
+```
+
+The verb takes a row: a key with no row raises `DoesNotExist` from the caller's
+own lookup, and a caller that offers the send to a person turns it into its own
+coded refusal.
+
+A caller that mails a credential or a call to action passes the paths of the
+values the mail is useless without as `must_print`, an iterable of paths
+(`["link"]`, `["person.first_name"]`; a bare string is a `TypeError`). Each is
+refused `value_not_printed`, one item per path and body, as follows. For every
+path, before anything renders: a path the row no longer declares, once (an
+override may edit `variables` as well as the text), and a body with no output of
+it, through any include, a condition around it or not (a value only tested, or
+printed only in the subject or preheader, is printed by no body). For a path
+with no `*`, after the render: a value that is not a string or is blank, and a
+body that does not hold the value as the render emits it (itself, or its link
+through `url`, escaped in the HTML), as when `{% if first_name %}` left the
+output out of this mail or it is printed only through another filter
+(`upper`). For a path through a list (`questions.*.link`), the text alone: the
+row prints the item's field inside the loop, not every item's value in this
+mail, and an empty list passes; a caller that needs each item's value guards its
+own values. Both bodies are required because some clients show only the
+plain-text part. A body is searched for the value as text, so a short value
+passes where the same characters stand in other text: a caller makes a
+must-print value distinct (a link or a long code is; a two-digit number is not).
+Before a run that mails one link to many recipients, a caller asks
+`MessageTemplate.objects.clean_link(value, path="link")`: for a value as a
+render prepares it, the link a mail prints, `""` for a blank one, or exactly the
+render's `value_not_linkable` refusal. The preview's "Nothing reads …" warning stays
+a warning: it knows no caller's requirement. The row renders as the instance holds it: edits not yet saved are
+sent, and a row never saved is refused `not_effective`. `to` is one entry as
+messaging's `clean_recipient` reads it; pass a bare address, since a typed name
+fills the display name of a handle that has none. Nothing is idempotent: a caller
+that retries sends again. In order:
+
+1. a blank `reason` is a `ValueError`, before anything is read;
+2. the row's side, `MessageTemplate.send_refusal()`: a layout, block or part is
+   refused (`not_a_template`), and so is a row that is not what renders for its
+   kind, key and language (`not_effective`), such as a shipped default its
+   override replaces;
+3. the render, inside `system_context(reason=reason)`, so it reads every row and
+   the default kit whoever calls, in the row's language and the active time
+   zone. Entering it writes one permission audit row at once, which stays when
+   the render then refuses with one of the codes above;
+4. messaging's `Message.objects.compose_as_system`, under the same reason,
+   outside that context, in the caller's own context and transaction, with the
+   rendered subject, plain text and HTML; it refuses as its docstring says, an
+   address the transport cannot carry among it (`cannot_carry`, under `to`).
+
+The render comes before every one of compose's refusals, so only a render
+refusal leaves the render's audit row. No message row is written before a
+refusal. The audit rows commit or roll back with the caller's transaction, and
+`reason` is recorded in them alone, never on the message. Each call records one message with its own Message-ID and hands it
+to delivery once, when the outermost transaction commits; the message is
+returned unbound, with the causing actor, if any, as its `created_by`, which
+grants nothing.
+
+**What the caller's values become.** Both this verb and the test send below
+store, on the system channel: a new thread titled with the rendered subject,
+kept in the thread's history; the message, whose preview is the first 280
+characters of its text; and its title, text and HTML parts, which point to
+content-addressed text fragments that carry a search vector and that nothing
+deletes, so they outlive the message. Who reads system mail, and how its
+handles are recorded, is messaging's ([System mail](../messaging/README.md#system-mail)):
+a value that is a credential, such as a sign-in link, is readable by those
+readers until it expires, and deleting the message does not remove its
+fragments. An exception's report hides the values, the rendered text and the
+address in every frame of a send, as Django's `sensitive_variables`: every local
+of `send_as_system`, of `send_test` (the keyed path holds the written message, whose
+string form is its preview) and of each frame they call, their shared step
+`_render_and_record` among them, the values in
+`MessageTemplate.render`, every local of `MessageTemplate.preview` (its sample and
+a patch's unsaved edits), of `TemplateWalk.render` and of `clean_link` and of each
+frame they call; messaging marks its system write below them
+([System mail](../messaging/README.md#system-mail)).
+Django's filter hides them only with `DEBUG` off, and it never filters an
+exception's own message: a `value_not_linkable` refusal names the link's host.
+
+### A test send
+
+`MessageTemplate.objects.send_test(row, *, actor, kit=None, idempotency_key=None)`
+is an administrator's check of a row before it goes out: the row rendered with
+its `sample` and sent to `actor`'s own account address. The administrator
+presses for it and the system writes the mail: the pressing is decided by the
+row's `preview` alone, as a preview is, and the mail is named system work on
+`send_as_system`'s one path, under the reason
+`messaging_templates.message_template.send_test`, with `actor` recorded as who
+caused it (the message's `created_by`, and the actor of the changeset its rows
+join). In order:
+
+1. `MessageTemplate.send_test_refusal()`, under `actor`: without `preview`,
+   `PermissionDenied` before the verb reads anything else, whatever the host's
+   channel or mail settings; then the row's side, as above;
+2. an account with no email address: `no_test_address`;
+3. with an `idempotency_key`, its claim for `actor` through provenance's keyed
+   creation (`claim_created`), the request being the row (its id, its
+   `content_hash` and its `sample`) and the kit's id: a retry of
+   the same request returns the message the first one sent, neither rendered nor
+   sent again, unless that message was trashed since, which messaging's replay
+   rule refuses (`replay_claimed`: `discarded`, under `idempotency_key`), and the
+   same key for another request raises `CreationKeyConflict`. A key names one
+   press: mint one per press and reuse it only to retry that press. So an edit of
+   the row's text or sample between two calls makes the second another request
+   (a conflict, never a stale replay), while an edit of a row it includes or of
+   the kit does not; after an address change a replay names the mail sent to the
+   old address; an omitted kit and the default kit named are two requests; and a
+   first message deleted outright leaves the key `unavailable`;
+4. the render inside the system context and `compose_as_system`, as for any send
+   (steps 3 and 4 above), with the rendered subject after `[Test] `
+   (`TEST_SUBJECT_PREFIX`).
+
+A test refused for its permission or its address writes nothing, not even a
+permission audit row; one refused at its render or by compose leaves the
+render's audit row, as any send does. No message row is written before a
+refusal. A keyed test runs in the claim's own transaction, so its refusal rolls
+back the claim and everything after it, the render's audit row among them, and
+the key stays free. The render reads what the administrator's own preview of the row
+reads: every signed-in reader reads every message template and brand kit, the
+render never reads an included row's sample, and the values are the sample of
+the row as the caller loaded it.
+
+It stores what any send stores (above), the thread titled `[Test] <subject>`;
+the recipient is the administrator's existing handle for the address when there
+is one. The mail holds the row's sample values and the administrator's address.
+Its readers are the system channel's
+([System mail](../messaging/README.md#system-mail)); through every verb those
+are administrators, who already read every sample and account address, and
+their inbox lists its thread.
 
 ## Shipped defaults, overrides and reset
 
@@ -267,9 +449,15 @@ Another addon ships a template as an `install` resource file targeting
 ```toml
 [tool.angee.resources]
 install = [
-  { path = "install/010_<addon>.messagetemplate.yaml", depends_on = "messaging_templates:install/030_messaging_templates.messagetemplate.yaml" },
+  { path = "install/010_messaging_templates.messagetemplate.yaml", depends_on = "messaging_templates:install/030_messaging_templates.messagetemplate.yaml" },
 ]
 ```
+
+The file's stem names the model its rows load, `[NNN_]<app label>.<model>`, so
+it carries the owning app's label, `messaging_templates`, never the shipping
+addon's: the loader infers `messaging_templates.MessageTemplate` from it
+(`ResourceEntry.infer_model_label`), while the file lives in, and loads with,
+the shipping addon's own resources.
 
 Each row states `kind: template`, a key `<addon label>.<name>`, `language`,
 `name`, `format`, `subject`, `preheader`, `layout: base`, `source` (and
@@ -327,8 +515,8 @@ deployment's override of a baseline; a deployment's own row has none) and
 ## Access
 
 Every signed-in actor reads message templates; platform admins create, edit and
-delete the deployment's own rows and overrides, read every sample and preview
-every row. Nobody but a resource load writes a baseline
+delete the deployment's own rows and overrides, read every sample, and preview
+and test-send every row. Nobody but a resource load writes a baseline
 ([permissions](permissions.zed): `messaging_templates/message_template`).
 
 ## Console
@@ -392,6 +580,26 @@ Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
 (`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
 says), which a page sets as `dir` on the subject, preheader and plain text it
 shows outside the mail's frame, rather than guessing from their first letter.
+
+`send_message_template_test(template, brand_kit, idempotency_key)` is the test send
+([A test send](#a-test-send)) of a row, in the named kit or the default one, to
+the caller's own address; it returns an `ActionResult` whose `id` is the
+message's. With an `idempotency_key`, a retry of the same request (the row and
+the kit) answers with the message the first one sent, and another request under
+the same key is a `CREATION_KEY_CONFLICT` GraphQL error. It reads the row and a
+named kit first, both readable by any
+signed-in reader, then refuses as the verbs do: a signed-out caller gets the
+session's GraphQL error and a caller who may not preview the row a
+`PERMISSION_DENIED` GraphQL error. The rest comes back in band (`ok: false`)
+with its code: a layout, block or part (`not_a_template`), a row that is not
+what renders (`not_effective`), an account with no address (`no_test_address`),
+a kit the caller does not read (`not_found`), a render refusal, whose messages
+name each path, and what `compose_as_system` refuses, keyed under its argument
+in `validation_errors`, as its docstring says. `ActionResult` keeps no code for
+a refusal raised as a list, as `invalid_values` is, so its `code` is null. A
+row projects `can_send_test`, what the verb asks first; it rides the list's
+statement, and it is the row's side alone, so a test it admits may still be
+refused in band for the account, the channel or the sample.
 
 ### The Message templates page
 

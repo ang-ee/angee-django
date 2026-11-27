@@ -212,6 +212,11 @@ function MessageForm({ resource: _resource, readOnly, ...props }: RegisteredForm
     <Group label={t("messages.groupEnvelope")} columns={2} pane="envelope">
       <Field name="platform" readOnly />
       <Field name="direction" readOnly />
+      {/* Why delivery last failed reads only for those who may act on it (send_held), as Retry does. */}
+      <Field name="delivery_error" label={t("messages.deliveryError")} readOnly widget="textarea"
+        showWhen={(record) => typeof record.delivery_error === "string"} />
+      <Field name="delivery_attempts" label={t("messages.deliveryAttempts")} readOnly
+        showWhen={(record) => typeof record.delivery_attempts === "number" && record.delivery_attempts > 0} />
     </Group>
   </Form>;
 }

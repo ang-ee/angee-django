@@ -649,6 +649,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
     },
     useAngeeFacets: () => ({
       facets: {},
+      errors: {},
       fetching: false,
       error: null,
       refetch: vi.fn(),
@@ -1324,7 +1325,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastActiveListCall()?.order).toEqual({ updatedAt: "desc", title: "asc" }),
+      expect(lastActiveListCall()?.order).toEqual([{ updatedAt: "desc" }, { title: "asc" }]),
     );
   });
 
@@ -1342,7 +1343,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastActiveListCall()?.order).toEqual({ title: "asc" }),
+      expect(lastActiveListCall()?.order).toEqual([{ title: "asc" }]),
     );
   });
 
@@ -1360,7 +1361,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastActiveListCall()?.order).toEqual({ priority: "desc" }),
+      expect(lastActiveListCall()?.order).toEqual([{ priority: "desc" }]),
     );
   });
 

@@ -38,7 +38,6 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
           prefill={backendClassPrefill}
           prefillPreserveDirty
           prefillReplace={["config"]}
-          createOnly
         />
         <Field name="credential" />
         <Field name="lifecycle" widget="statusbar" status readOnly />

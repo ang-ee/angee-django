@@ -1,9 +1,10 @@
 """What the message templates console reads and creates: a row's permissions, its kind's message fields, the rows
-naming it, the direction its preview says, and the deployment's own row, decided before any work and seeded by the
-server."""
+naming it, the direction its preview says, the deployment's own row, decided before any work and seeded by the
+server, and an administrator's test send."""
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import Iterator
@@ -11,23 +12,27 @@ from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from itertools import product
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.backends import backend
 from rebac.models import PermissionAuditEvent
 from rebac.schema.ast import PermNil
+from rebac.schema.parser import parse_zed
 from rebac.testing import install_schema
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
+from angee.messaging_templates.engine import NOT_A_TEMPLATE
 from angee.messaging_templates.models import (
     BASE_LAYOUT,
     SHIPPED_DEFAULT_MESSAGE,
@@ -39,9 +44,14 @@ from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TextDirection
 from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
+from tests.messaging_campaign import grant
 from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
 from tests.test_messaging_templates_render import TIMED, _recording, _text_read
+from tests.test_messaging_templates_render import kit as kit
+from tests.test_messaging_templates_send import installed as installed
+from tests.test_messaging_templates_send import mailing as mailing
+from tests.test_messaging_templates_send import sent as sent
 
 _LAYOUT: dict[str, Any] = {
     "source": "<div>{% block content %}{% endblock %}</div>",
@@ -137,9 +147,10 @@ def test_presence_asks_preview_because_create_is_not_decidable_for_the_type(db: 
 # ---------- what the verbs admit ----------
 
 
-_ADMISSIONS = "{ message_templates { id overrides_default can_override can_keep_override } }"
+_ADMISSIONS = "{ message_templates { id overrides_default can_override can_keep_override can_send_test } }"
 _OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok } }"
 _KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok } }"
+_SEND_TEST = "mutation($id: ID!) { send_message_template_test(template: $id) { ok } }"
 
 
 def _states() -> dict[str, Any]:
@@ -172,33 +183,46 @@ def _admitted(user: Any, document: str, row: Any) -> bool:
     return bool(answer["ok"])
 
 
-def test_each_verb_is_projected_as_what_it_then_admits(db: None) -> None:
+def test_each_verb_is_projected_as_what_it_then_admits(installed: Any) -> None:
     """For an administrator and a member, on every row state, each projected admission is what its verb does."""
 
-    del db
+    del installed
     admin = create_platform_admin("messaging-templates-console-verbs")
     member = create_user("messaging-templates-console-onlooker")
-    rows = _states()
-    expected = {  # overrides_default, Override, Keep override, for an administrator
-        "shipped default": (False, True, False),
-        "overridden default": (False, True, False),
-        "override": (True, False, True),
-        "override, default updated": (True, False, True),
-        "own row": (False, False, False),
+    rows = {
+        **_states(),
+        "own template": _template("tests.own", "Hello."),
+        "overridden template": _row("template", "tests.shipped", baseline=True),
+        "template override": _row("template", "tests.shipped", source="Ours."),
+        "block": _row("block", "card"),
+    }
+    expected = {  # overrides_default, Override, Keep override, Send test, for an administrator
+        "shipped default": (False, True, False, False),
+        "overridden default": (False, True, False, False),
+        "override": (True, False, True, False),
+        "override, default updated": (True, False, True, False),
+        "own row": (False, False, False, False),
+        "own template": (False, False, False, True),
+        "overridden template": (False, True, False, False),
+        "template override": (True, False, True, True),
+        "block": (False, False, False, False),
     }
     for user, administrator in ((admin, True), (member, False)):
         listed = {row["id"]: row for row in result_data(execute_schema(_schema(), _ADMISSIONS, user=user))[
             "message_templates"]}
         for state, row in rows.items():
             projected = listed[public_id_of(row)]
-            fact, override, keep = expected[state]
-            assert (projected["overrides_default"], projected["can_override"], projected["can_keep_override"]) == (
-                fact, override and administrator, keep and administrator), (state, user)
+            fact, override, keep, send = expected[state]
+            assert (
+                projected["overrides_default"], projected["can_override"], projected["can_keep_override"],
+                projected["can_send_test"],
+            ) == (fact, override and administrator, keep and administrator, send and administrator), (state, user)
             assert projected["can_override"] is _admitted(user, _OVERRIDE, row), (state, user)
             assert projected["can_keep_override"] is _admitted(user, _KEEP, row), (state, user)
+            assert projected["can_send_test"] is _admitted(user, _SEND_TEST, row), (state, user)
     overrides = "{ message_templates(where: {overrides_default: {_eq: true}}) { key } }"
     assert sorted(row["key"] for row in result_data(execute_schema(_schema(), overrides, user=member))[
-        "message_templates"]) == ["base", "letter"]
+        "message_templates"]) == ["base", "letter", "tests.shipped"]
 
 
 @contextmanager
@@ -240,6 +264,181 @@ def test_a_deployment_that_narrows_create_but_keeps_preview_is_not_offered_overr
         listed = result_data(execute_schema(_schema(), document, user=admin))
         assert listed["message_templates"] == [{"permissions": ["preview"], "can_override": False}]
         assert _admitted(admin, _OVERRIDE, shipped) is False
+
+
+_SEND_TEST_RESULT = (
+    "mutation($id: ID!, $kit: ID) { send_message_template_test(template: $id, brand_kit: $kit) "
+    "{ ok message code id validation_errors } }"
+)
+
+
+def test_the_test_send_answers_as_the_frameworks_actions_do(installed: Any) -> None:
+    """Signed out, the session's error; a member, ``PERMISSION_DENIED``; the rest in band, each with its code."""
+
+    del installed
+    admin = create_platform_admin("messaging-templates-console-tester")
+    member = create_user("messaging-templates-console-untested")
+    _row()  # the base layout
+    source, variables = "Hello {{ name }}.", {"name": "A name."}
+    template = _row("template", "tests.welcome", source=source, variables=variables, sample={"name": "Ana"})
+    unrenderable = _row("template", "tests.unrenderable", source=source, variables=variables)
+    block = _row("block", "card")
+
+    def answer(user: Any, row: Any, kit: str | None = None) -> dict[str, Any]:
+        result = execute_schema(_schema(), _SEND_TEST_RESULT, {"id": public_id_of(row), "kit": kit}, user=user)
+        if result.errors:
+            (error,) = result.errors
+            return {"code": error.extensions["code"], "message": error.message}
+        return dict(result.data["send_message_template_test"])
+
+    assert answer(AnonymousUser(), template) == {"code": "PERMISSION_DENIED", "message": "Authentication required."}
+    assert answer(member, template)["code"] == "PERMISSION_DENIED"
+    sent = answer(admin, template)
+    with system_context(reason="tests.messaging_templates.console.read"):
+        message = apps.get_model("messaging", "Message")._base_manager.get(sqid=sent["id"])
+    assert sent == {"ok": True, "message": "A test of this message template is queued.", "code": None,
+                    "id": message.sqid, "validation_errors": None}
+    assert {key: answer(admin, block)[key] for key in ("ok", "code")} == {"ok": False, "code": NOT_A_TEMPLATE}
+    refused = answer(admin, unrenderable)
+    assert (refused["ok"], refused["id"]) == (False, None) and refused["message"].startswith("name ")
+    unknown_kit = answer(admin, template, kit="bkt_unknown")
+    assert {key: unknown_kit[key] for key in ("ok", "code")} == {"ok": False, "code": "not_found"}
+
+
+def test_a_missing_system_channel_or_address_comes_back_in_band_with_its_code(mailing: None) -> None:
+    """The codes a page shows beside its button: the channel's refusal keyed ``channel``, and the account's."""
+
+    del mailing
+    _row()  # the base layout
+    template = _template("tests.welcome", "Hello.")
+    addressless = create_platform_admin("messaging-templates-console-addressless", email="")
+    admin = create_platform_admin("messaging-templates-console-channelless")
+    document = "mutation($id: ID!) { send_message_template_test(template: $id) { ok code validation_errors } }"
+    answers = [
+        result_data(execute_schema(_schema(), document, {"id": public_id_of(template)}, user=user))[
+            "send_message_template_test"]
+        for user in (admin, addressless)
+    ]
+    assert answers[0]["ok"] is False and answers[0]["code"] == "SYSTEM_CHANNEL_MISSING"
+    assert list(answers[0]["validation_errors"]) == ["channel"]
+    assert answers[1] == {"ok": False, "code": "no_test_address", "validation_errors": None}
+
+
+_KEYED_SEND_TEST = (
+    "mutation($id: ID!, $key: String) { send_message_template_test(template: $id, idempotency_key: $key) "
+    "{ ok code id validation_errors } }"
+)
+
+
+def test_the_test_send_replays_under_its_key_conflicts_for_another_request_and_refuses_an_uncarried_address(
+    installed: Any,
+) -> None:
+    """The retry rows of the decision table: a replay names the first message and sends nothing more; the key reused
+    for another row is ``CREATION_KEY_CONFLICT``; an address the transport cannot carry is refused in band, under
+    ``to``, with no message written."""
+
+    del installed
+    admin = create_platform_admin("messaging-templates-console-retrier")
+    uncarried = create_platform_admin("messaging-templates-console-uncarried", email="tëster@example.test")
+    _row()  # the base layout
+    template, other = _template("tests.welcome", "Hello."), _template("tests.other", "Hi.")
+    messages = apps.get_model("messaging", "Message")._base_manager
+
+    def answer(user: Any, row: Any, key: str | None) -> Any:
+        return execute_schema(_schema(), _KEYED_SEND_TEST, {"id": public_id_of(row), "key": key}, user=user)
+
+    first = result_data(answer(admin, template, "click-1"))["send_message_template_test"]
+    count = messages.count()
+    again = result_data(answer(admin, template, "click-1"))["send_message_template_test"]
+    assert (first["ok"], again, messages.count()) == (True, first, count)
+    conflict = answer(admin, other, "click-1")
+    assert [error.extensions["code"] for error in conflict.errors] == ["CREATION_KEY_CONFLICT"]
+    refused = result_data(answer(uncarried, template, "click-2"))["send_message_template_test"]
+    assert (refused["ok"], refused["id"], list(refused["validation_errors"])) == (False, None, ["to"])
+    assert messages.count() == count
+
+
+def _with_a_template_manager(original: Any) -> Any:
+    """``original`` with a deployment's template manager: a stored relation that may create, write and delete rows
+    as an administrator may, and neither preview nor read samples."""
+
+    path = Path(apps.get_app_config("messaging_templates").path, "permissions.zed")
+    text = path.read_text(encoding="utf-8").replace(
+        "    relation admin: angee/role // rebac:const=admin\n",
+        "    relation admin: angee/role // rebac:const=admin\n    relation manager: auth/user\n",
+    ).replace("admin->member - baseline->baseline_marker", "(admin->member + manager) - baseline->baseline_marker")
+    (parsed,) = parse_zed(text).definitions
+    widened = deepcopy(original)
+    widened.definitions = [
+        replace(existing, relations=parsed.relations, permissions=parsed.permissions)
+        if existing.resource_type == parsed.resource_type else existing
+        for existing in widened.definitions
+    ]
+    return widened
+
+
+def test_the_test_send_is_decided_by_preview_alone_at_every_point_for_every_seat(installed: Any) -> None:
+    """The decision table: only an administrator test-sends, at the model verb, the projection and the mutation.
+
+    The template manager writes templates and may not preview them, so it may not test-send them either; the member
+    is the system channel's own replier, which the channel's seal makes nobody's grant.
+    """
+
+    seats = {
+        "administrator": create_platform_admin("messaging-templates-seat-admin"),
+        "template manager": create_user("messaging-templates-seat-manager"),
+        "member": create_user("messaging-templates-seat-replier"),
+        "outsider": create_user("messaging-templates-seat-outsider"),
+        "anonymous": AnonymousUser(),
+    }
+    grant(installed, "replier", seats["member"])
+    _row()  # the base layout
+    row = _template("tests.decided", "Hello.")
+    listing = "{ message_templates { id can_send_test } }"
+    active = backend()
+    original = active.schema()
+    install_schema(_with_a_template_manager(original), backend=active)
+    try:
+        grant(row, "manager", seats["template manager"])
+        assert row.with_actor(seats["template manager"]).has_access("write")
+        assert not row.with_actor(seats["template manager"]).has_access("preview")
+        decided = {}
+        for seat, actor in seats.items():
+            with transaction.atomic():
+                try:
+                    MessageTemplate.objects.send_test(row, actor=actor)
+                except PermissionDenied:
+                    verb = False
+                else:
+                    verb = True
+                transaction.set_rollback(True)
+            listed = result_data(execute_schema(_schema(), listing, user=actor))["message_templates"]
+            projected = any(entry["can_send_test"] for entry in listed if entry["id"] == public_id_of(row))
+            decided[seat] = (verb, projected, _admitted(actor, _SEND_TEST, row))
+    finally:
+        install_schema(original, backend=active)
+    assert decided == {seat: (seat == "administrator",) * 3 for seat in seats}
+
+
+_TESTABLE = "{ message_templates { id can_send_test } }"
+
+
+def test_can_send_test_rides_the_lists_statements(db: None) -> None:
+    """The kind, the ``_is_effective`` annotation and the batched ``preview``: the same at 1 and at 25 rows."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-test-costed")
+    schema = _schema()
+    _row("template", "tests.mail_0", baseline=True)
+    one = _measured(schema, _TESTABLE, {}, admin)
+    for index in range(1, 25):
+        _row("template", f"tests.mail_{index}", baseline=index % 3 == 0)
+        if index % 3 == 0:
+            _row("template", f"tests.mail_{index}")
+    many = _measured(schema, _TESTABLE, {}, admin)
+    assert (len(one.data["message_templates"]), len(many.data["message_templates"])) == (1, 33)
+    assert {row["can_send_test"] for row in many.data["message_templates"]} == {True, False}
+    many.assert_ceiling(statements=one.statements, repeated=one.repeated)
 
 
 _KEEPABLE = "{ message_templates { id overrides_default can_keep_override } }"
@@ -1138,3 +1337,30 @@ def test_a_replayed_insert_returns_the_row_it_created(db: None) -> None:
     first = result_data(_insert(admin, "part", "fresh", idempotency="console-create"))
     assert result_data(_insert(admin, "part", "fresh", idempotency="console-create")) == first
     assert len(_rows("part", "fresh")) == 1 and _claimed("console-create")
+
+
+def test_a_failure_in_the_keyed_test_send_mutation_leaves_no_traceback_in_any_log_and_no_part_of_the_mail(
+    installed: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """What protects the resolver's frame, which holds the written message, without a mark of its own: the schema
+    records an unexpected error's class, path and frames as text and detaches the exception, so no log record carries
+    a traceback whose frames a report could show, and the answer names nothing of the mail."""
+
+    del installed
+    admin = create_platform_admin("messaging-templates-console-reporter")
+    _row()  # the base layout
+    template = _row("template", "tests.reported", layout="base", source="Hello {{ name }}.",
+                    variables={"name": "A name."}, sample={"name": "SECRET-marker"})
+
+    def refusing(self: Any, created: Any) -> None:
+        raise RuntimeError("The changeset refused the record.")
+
+    monkeypatch.setattr(changeset_model(), "record_created", refusing)
+    with caplog.at_level(logging.DEBUG):
+        result = execute_schema(_schema(), _KEYED_SEND_TEST, {"id": public_id_of(template), "key": "reported-1"},
+                                user=admin)
+    (error,) = result.errors
+    assert error.extensions == {"code": "INTERNAL"} and "SECRET-marker" not in error.message
+    assert any("Unexpected GraphQL resolver error (RuntimeError)" in record.getMessage() for record in caplog.records)
+    assert [record for record in caplog.records if record.exc_info] == []
+    assert all("SECRET-marker" not in record.getMessage() for record in caplog.records)

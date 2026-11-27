@@ -71,6 +71,28 @@ const preview: RuntimeViewAs = {
   viewablePeople: [], enter: () => undefined, exit: () => undefined,
 };
 
+test("a bound field marks the stored record's unregistered implementation key by the form's own model; the same name under a scope does not", async () => {
+  const backend = { name: "backend", kind: "enum" as const, values: [{ value: "LOCAL", description: "Local" }], readable: true,
+    filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false };
+  const resourceMetadata = { ...resource, fields: [...(resource.fields ?? []), backend], implFields: ["backend"] };
+  // The third binds through a model this host does not know: the mark still reads the form's own model.
+  for (const [scope, marked, model] of [["", true, "notes.Note"], ["config", false, "notes.Note"], ["", true, "notes.Elsewhere"]] as const) {
+    cleanup();
+    // The form saves the selector, so the bound control takes edits.
+    await fixture({ resourceMetadata, record: { backend: null, config: { backend: null } }, mountedFields: [],
+      viewFields: [...fields, { name: "backend" }],
+      boundFields: [{ field: { name: "backend", label: "Backend", widget: "select", options: [{ value: "LOCAL", label: "Local" }] }, scope, resource: model }] });
+    expect((await screen.findAllByText("Backend")).length).toBeGreaterThan(0);
+    expect(Boolean(screen.queryByLabelText("Not registered: Backend"))).toBe(marked);
+    if (marked) {
+      // The bound control is described by the explanation, as the form's own rows are.
+      const described = (screen.getByRole("combobox", { name: "Backend" }).getAttribute("aria-describedby") ?? "").split(" ")
+        .map((describedBy) => document.getElementById(describedBy)?.textContent ?? "").join(" ");
+      expect(described).toContain("Its implementation cannot run until another is chosen.");
+    }
+  }
+});
+
 test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {
   const submit = vi.fn(async () => ({ status: "ok" as const, data: { id: "created" } }));
   const f = await fixture({ preview, publicView: true, id: null, submit });
@@ -162,7 +184,7 @@ async function fixture(options: {
   presenceValues?: boolean;
   relationValues?: boolean;
   acknowledgedSource?: FormViewAcknowledgedSource;
-  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[];
+  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[];
   publicView?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
@@ -211,7 +233,7 @@ async function fixture(options: {
         }],
       } : resource);
   const formModel = schemaFieldMetadataFromDataResources([formResource]).labels["notes.Note"]!;
-  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: formResource, modelMetadata: formModel, formFields: viewFields, fieldByName, refineFields,
@@ -226,7 +248,7 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[] }) {
     return <Provider resources={[formResource]} dataProvider={provider} queryClient={client}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
