@@ -334,14 +334,24 @@ live in code docstrings.
   handle's `value`, as before: one a reply inherits from its parent, still
   answered as its handle stores it (a reply is handed no address of its own:
   To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one,
-  whose raw envelope stays in the message's metadata. A recorded address is always a spelling of its handle's
-  (`Handle.is_spelling_of`): `Recipient.save` and `full_clean` refuse another
-  with a `ValidationError` on `address` (`not_its_handle`) before writing, and
-  one written past them (a queryset `update`) is ignored, with a warning naming
-  the row, the mail going to the handle's own. From is written as the channel
-  configures it (`AnymailEmailChannelBackend.outbound_sender`: its `from_email`,
-  else `DEFAULT_FROM_EMAIL`) whenever the message's sender handle is that
-  address, whatever spelling the handle keeps. What a message shows and what
+  whose raw envelope stays in the message's metadata. A recorded address is
+  always, as written, a spelling of its handle's address or of a handle merged
+  into it (`Handle.is_spelling_of(value, merged=True)`, which reads the merged
+  handles once, only for an address that is not the handle's own): mail to a
+  merged handle's address, a contact administrator's merge of two addresses or
+  an alias folded, lands on the kept handle and is mailed at that address.
+  `Recipient.save` and `full_clean` refuse any other, or one with surrounding
+  space, with a `ValidationError` on `address` (`not_its_handle`) before
+  writing, and one written past them (a queryset `update`) is ignored, with a
+  warning naming the row, the mail going to the handle's own. An address the
+  transport cannot carry as given (`carries_address`) records nothing and is
+  mailed at the handle's value, as before. `HandleManager.find_identity_owners`
+  returns the row owning each identity before its merge redirect;
+  `find_identities` is it resolved to each survivor. From is written as the
+  channel configures it (`AnymailEmailChannelBackend.outbound_sender`: its
+  `from_email`, else `DEFAULT_FROM_EMAIL`) whenever the message's sender handle
+  is that address, whatever spelling the handle keeps, and from the sender's own
+  while the sender rule refuses the configured one. What a message shows and what
   search finds are unchanged: the handle; the GraphQL types and the resource
   metadata do not expose the column. The recorded address leaves with its row:
   with its handle, its message and its channel's purge.

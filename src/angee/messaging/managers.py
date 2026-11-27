@@ -105,7 +105,7 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import header_text, require_carried
+from angee.messaging.email import carries_address, header_text, require_carried
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -3616,19 +3616,28 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         return message if actor is None else message.with_actor(actor)
 
     @staticmethod
-    def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str, str]]:
-        """Return each recipient's ``(handle, role, address)`` in the order given, its addresses resolved in one read.
+    def _land_addressees(
+        recipients: Sequence[_Addressee], *, created_by_id: Any,
+    ) -> list[tuple[Any, str, str, Any]]:
+        """Return each recipient's ``(handle, role, address, addressed handle)`` in the order given, in one read.
 
         ``address`` is the address the caller handed for that recipient
         (``_Addressee.given``: a compose's own To/Cc/Bcc, as its recipient rule
-        cleaned it), which the row records and the message is mailed at
-        (``Recipient.envelope_address``). It is empty for a recipient the caller did
-        not hand as an address: one a reply inherits from its parent, which is
-        answered as its handle stores it, and one known only as a handle. A landed
-        recipient's handle is the instance, so the row's write reads nothing more.
+        cleaned it), when the transport can carry it as handed
+        (``email.carries_address``), which the row records and the message is mailed
+        at (``Recipient.envelope_address``); an address it cannot carry records
+        nothing, and the mail goes to the handle's value. It is empty for a recipient
+        the caller did not hand as an address: one a reply inherits from its parent,
+        which is answered as its handle stores it, and one known only as a handle.
+        ``handle`` is where the address lands, the survivor of any merge; ``addressed
+        handle`` is the handle owning the address before that redirect
+        (``HandleManager.find_identity_owners``), so an address a merged handle owns
+        is recorded on its survivor's row as given. Both are instances, so the row's
+        write and its check read nothing more.
 
         Known handles resolve through the handle owner's batch lookup
-        (``HandleManager.find_identities``); an address with no handle, or with a
+        (``HandleManager.find_identity_owners``, each owner resolved to its survivor
+        by ``canonical``, a read only for a merged one); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
         only a handle that has none and never renames a shared one. Those writes
         take the handles in one order, by their spelling key
@@ -3641,20 +3650,25 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         handle_model = apps.get_model("parties", "Handle")
         email = handle_model.Platform.EMAIL
-        found = handle_model.objects.find_identities(
+        owners = handle_model.objects.find_identity_owners(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
+        found = {identity: owner.canonical() for identity, owner in owners.items()}
         for addressee in sorted(recipients, key=lambda each: handle_model.spelling_key_of(email, each.address)):
             if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
                 found[(email, addressee.address)] = handle_model.objects.upsert(
                     platform=email, value=addressee.address, display_name=addressee.name,
                     fill_only=("display_name",), created_by_id=created_by_id,
                 )
-        return [
-            (addressee.handle_id, addressee.role, "") if addressee.handle_id is not None
-            else (found[(email, addressee.address)], addressee.role, addressee.address if addressee.given else "")
-            for addressee in recipients
-        ]
+        rows: list[tuple[Any, str, str, Any]] = []
+        for addressee in recipients:
+            if addressee.handle_id is not None:
+                rows.append((addressee.handle_id, addressee.role, "", None))
+                continue
+            identity = (email, addressee.address)
+            recorded = addressee.given and carries_address(addressee.address)
+            rows.append((found[identity], addressee.role, addressee.address if recorded else "", owners.get(identity)))
+        return rows
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
@@ -4868,7 +4882,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 for recipient in parsed.recipients
             ]
             self._write_recipients(
-                message, ((handle, role, "") for handle, role in recipients), created_by_id=created_by_id,
+                message, ((handle, role, "", None) for handle, role in recipients), created_by_id=created_by_id,
             )
             handles = [*([] if sender is None else [sender]), *(handle for handle, _role in recipients)]
         if expected_thread is not None:
@@ -5071,9 +5085,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         return file
 
     def _write_recipients(
-        self, message: Any, rows: Iterable[tuple[Any, str, str]], *, created_by_id: Any,
+        self, message: Any, rows: Iterable[tuple[Any, str, str, Any]], *, created_by_id: Any,
     ) -> None:
-        """Create ``message``'s recipient rows from ``(handle or handle id, role, address)``, once per handle and role.
+        """Create ``message``'s recipient rows from ``(handle or handle id, role, address, addressed handle)``, once per
+        handle and role.
 
         The write path owns envelope dedup (the unique constraint is the
         backstop): any producer may repeat an address within one role, and two
@@ -5082,20 +5097,24 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         handed address wins over the same handle inherited without one (a reply's
         parent's recipient), since the caller gave it. Each row takes its thread
         from ``message`` (``Recipient.save``); ``address`` is empty for a row whose
-        recipient no caller handed as an address.
+        recipient no caller handed as an address. The addressed handle, the handle
+        owning the address before a merge redirect, goes to the row's check
+        (``Recipient.addressed_handle``) and is not stored.
         """
 
         recipient_model = apps.get_model("messaging", "Recipient")
-        written: dict[tuple[Any, str], tuple[Any, str]] = {}
-        for handle, role, address in rows:
+        written: dict[tuple[Any, str], tuple[Any, str, Any]] = {}
+        for handle, role, address, owner in rows:
             key = (getattr(handle, "pk", handle), str(role))
             if key not in written or (address and not written[key][1]):
-                written[key] = (handle, address)
-        for (_handle_id, role), (handle, address) in written.items():
-            recipient_model.objects.create(
+                written[key] = (handle, address, owner)
+        for (_handle_id, role), (handle, address, owner) in written.items():
+            row = recipient_model(
                 message=message, role=role, address=address, created_by_id=created_by_id,
                 **({"handle": handle} if isinstance(handle, models.Model) else {"handle_id": handle}),
             )
+            row.addressed_handle = owner
+            row.save(force_insert=True)
 
 
 class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):

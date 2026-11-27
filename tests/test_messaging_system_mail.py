@@ -48,6 +48,7 @@ from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
 from tests.conftest import Vendor, create_platform_admin, make_integration
 from tests.messaging_campaign import make_user
+from tests.test_messaging_compose import _merge_as_contact_administrator
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -416,21 +417,58 @@ def test_a_system_mail_sent_again_is_mailed_at_the_address_its_caller_gave(
 
 
 def test_a_recipient_row_refuses_an_address_its_handle_does_not_name(system_mailer: Any) -> None:
-    """The row's validation, on save and on ``full_clean``: another address is refused before anything is written."""
+    """The row's validation, on save and on ``full_clean``: another address, or the address with surrounding space or a
+    line break, is refused before anything is written."""
 
     assert send_mail("Report", "Body.", None, ["Reader@Example.test"]) == 1
     (message,) = _recorded(system_mailer)
     with system_context(reason="tests.messaging.system_mail.invariant"):
         row = Recipient._base_manager.get(message=message)
-        row.address = "intruder@elsewhere.test"
-        for check in (row.save, row.full_clean):
-            with pytest.raises(ValidationError) as refused:
-                check()
-            assert [error.code for error in refused.value.error_dict["address"]] == ["not_its_handle"]
+        for written in ("intruder@elsewhere.test", "Reader@Example.test\r\n", " Reader@Example.test"):
+            row.address = written
+            for check in (row.save, row.full_clean):
+                with pytest.raises(ValidationError) as refused:
+                    check()
+                assert [error.code for error in refused.value.error_dict["address"]] == ["not_its_handle"]
         assert Recipient._base_manager.get(pk=row.pk).address == "Reader@Example.test"
         row.address = "READER@example.test"
         row.save()
         assert Recipient._base_manager.get(pk=row.pk).address == "READER@example.test"
+
+
+@pytest.mark.parametrize("entry", ["send-mail", "compose-as-system"])
+def test_a_system_mail_to_a_merged_handles_address_is_delivered_to_that_address_on_the_kept_handle(
+    system_mailer: Any, entry: str,
+) -> None:
+    """A contact administrator merged the account's address into another; the link still goes to the address the
+    caller gave, recorded on the kept handle's row."""
+
+    with system_context(reason="tests.messaging.system_mail.merged"):
+        merged = Handle.objects.upsert(platform="email", value="Account@Example.test")
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+    _merge_as_contact_administrator(kept, merged)
+    if entry == "send-mail":
+        assert send_mail("Your link", "Body.", None, ["account@example.test"]) == 1
+        (message,) = _recorded(system_mailer)
+    else:
+        message = Message.objects.compose_as_system(
+            reason="tests.messaging.system_mail.merged", to=["account@example.test"], subject="Your link", text="Body.",
+        )
+    assert _given(message) == [(kept.pk, "account@example.test")]
+    assert _deliver(message).to == ["account@example.test"]
+
+
+def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_recorded_sender(
+    system_mailer: Any, settings: Any,
+) -> None:
+    """The sender rule refuses the deployment's sender after the mail was written: From is the sender's own, as
+    recorded, and the mail is sent."""
+
+    settings.DEFAULT_FROM_EMAIL = "Ops <Ops@Example.test>"
+    assert send_mail("Report", "Body.", None, ["reader@example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    settings.DEFAULT_FROM_EMAIL = "not an address"
+    assert _deliver(message).from_email == "Ops <Ops@Example.test>"
 
 
 def test_a_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(

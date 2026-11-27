@@ -2260,10 +2260,15 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
     address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
     """The address the caller handed for this recipient, as its recipient rule cleaned it
-    (``MessageManager.clean_recipient``): a spelling of the handle's address (``Handle.is_spelling_of``).
-    Empty for a recipient no caller handed as an address (one a reply inherits from its parent, one known
-    only as a handle, an ingested one), which is mailed at the handle's own ``value``. It leaves with the
-    row: with its handle, its message and a channel's purge."""
+    (``MessageManager.clean_recipient``) and as the transport carries it: a spelling of the handle's address
+    or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``), so mail to a merged
+    handle's address goes to that address while the row is on the survivor. Empty for a recipient no
+    caller handed as an address (one a reply inherits from its parent, one known only as a handle, an
+    ingested one), which is mailed at the handle's own ``value``. It leaves with the row: with its handle,
+    its message and a channel's purge."""
+    addressed_handle: Any = None
+    """Not stored: the handle owning :attr:`address` before the merge redirect the compose writer followed to
+    :attr:`handle` (``HandleManager.find_identity_owners``), given for one save so its check reads nothing."""
 
     class Meta:
         """Django model options for the recipient source model."""
@@ -2290,27 +2295,49 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         """The address this row is mailed at: :attr:`address` while it spells the handle's address, else the handle's
         own ``value``.
 
-        A row whose ``address`` names another address, written past :meth:`save` (a queryset ``update``), is mailed at
-        its handle's ``value`` with a warning naming the row, so mail never goes where its handle does not name.
+        A recorded address of a handle merged into this row's handle is read once to confirm it. A row whose
+        ``address`` names neither, or carries surrounding space, written past :meth:`save` (a queryset ``update``),
+        is mailed at its handle's ``value`` with a warning naming the row, so mail never goes where its handle's
+        merges do not name.
         """
 
         handle = self.handle
-        if self.address and not handle.is_spelling_of(self.address):
+        if self.address and not self._names_its_handle():
             logger.warning("Recipient %s holds an address its handle does not name; it is mailed at the handle's own.",
                            self.pk)
             return str(handle.value)
         return self.address or str(handle.value)
 
     def clean(self) -> None:
-        """Validate the row as :meth:`save` does: an ``address`` is a spelling of the handle's address."""
+        """Validate the row as :meth:`save` does: an ``address`` is a spelling of its handle's address, or of a handle
+        merged into it, as written."""
 
         super().clean()
         self._require_its_address()
 
+    def _names_its_handle(self) -> bool:
+        """Whether :attr:`address` is written as itself and spells the handle's address or one merged into it.
+
+        Its own spelling and the writer's :attr:`addressed_handle` are checked in memory: that handle spells the address
+        and redirects to this row's handle, as a fold leaves every handle it merged. Otherwise the handle owner reads
+        the handles merged into this one, once.
+        """
+
+        address, handle, owner = self.address, self.handle, self.addressed_handle
+        if address != address.strip():
+            return False
+        if handle.is_spelling_of(address):
+            return True
+        if owner is not None and owner.merged_into_id == handle.pk and owner.is_spelling_of(address):
+            return True
+        return bool(handle.is_spelling_of(address, merged=True))
+
     def _require_its_address(self) -> None:
-        if self.address and not self.handle.is_spelling_of(self.address):
+        if self.address and not self._names_its_handle():
             raise ValidationError({"address": ValidationError(
-                "A recipient's address is a spelling of its handle's address.", code="not_its_handle",
+                "A recipient's address is a spelling of its handle's address, or of a handle merged into it, as "
+                "written.",
+                code="not_its_handle",
             )})
 
     def save(self, *args: Any, **kwargs: Any) -> None:

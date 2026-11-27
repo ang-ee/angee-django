@@ -349,7 +349,11 @@ well as the domain, though a mail server may tell `Ada@` and `ada@` apart.
 which keeps the spelling first written as its `value`, what readers show and a
 message to it is addressed to unless its writer was handed another spelling
 (messaging's `Recipient.address`, which mail goes to); its spelling key (`Handle.spelling_key_of`) is what a live email
-handle is unique by (`uq_handle_spelling_key`). One address, by that key, is
+handle is unique by (`uq_handle_spelling_key`). `Handle.is_spelling_of(value,
+merged=True)` also answers for every handle merged into it, in one read, as a
+fold re-points each redirect at the survivor; `HandleManager.find_identity_owners`
+returns the row owning each identity before its merge redirect, which
+`find_identities` resolves to the survivor. One address, by that key, is
 every letter case of it (lower-cased, not case-folded: `Straße@` and `STRASSE@`
 are two) and every spelling of its domain that the email backend sends as one
 domain (IDNA 2003, as Django's `punycode` writes it): a punycode label and its

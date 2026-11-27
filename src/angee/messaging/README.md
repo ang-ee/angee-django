@@ -72,14 +72,22 @@ stored address is that handle, which keeps the spelling it was first stored in
 and is what the message shows and search finds. The recipient row records the
 address as typed (`Recipient.address`), and the message is mailed at it
 (`Recipient.envelope_address`), From as the channel configures it
-(`outbound_sender`), so an address with no handle yet is stored, shown and
-addressed as typed; a provider's alias is a handle of its own. Only an address
+(`outbound_sender`; the sender's own while that is refused), so an address with
+no handle yet is stored, shown and addressed as typed; a provider's alias is a handle of its own. Only an address
 the caller handed is recorded: a recipient a reply inherits from its parent is
 answered as its handle stores it (a reply is handed no address of its own:
 To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one
-records none; a recorded address is always a spelling of its handle's
-(`Handle.is_spelling_of`, checked when the row is saved), and one written past
-that check is ignored with a warning, the mail going to the handle's own. A name inbound mail stored with a literal encoded word is
+records none. A recorded address is always, as written, a spelling of its
+handle's address or of a handle merged into it (`Handle.is_spelling_of(...,
+merged=True)`, checked when the row is saved): mail to a merged handle's
+address lands on the kept handle and goes to that address. An address the
+transport cannot carry as typed (`carries_address`) records nothing and is
+mailed at the handle's value. One written past that check is ignored with a
+warning, the mail going to the handle's own. The one place a recorded address
+can outlive its handle's value is `HandleManager.reidentify` (and `upsert`'s
+external-id path into it), which rewrites a live handle's value: the row keeps
+the spelling it was given, and the message is mailed at the handle's new value
+with that warning each time. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;

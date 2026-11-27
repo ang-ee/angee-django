@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import email.policy
+import logging
 import string
 import unicodedata
 from collections.abc import Iterator
@@ -24,7 +25,9 @@ from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import PermissionAuditEvent
+from rebac.roles import grant as grant_role
 
+from angee.base.models.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import (
     OutboundEmailChannelMissing,
@@ -39,12 +42,12 @@ from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.email import header_text
 from angee.messaging.managers import _Addressee, _preview
 from angee.messaging.tasks import deliver_message
-from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
+from angee.messaging.testing.models import Channel, Handle, Message, Part, Party, Recipient, Thread
 from angee.messaging_integrate_imap.parser import parse_message
 from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.chatterdemo.models import ChatterDoc
-from tests.conftest import File, create_platform_admin, make_integration
+from tests.conftest import File, create_platform_admin, create_user, make_integration
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging import _storage_drive
 
@@ -1334,6 +1337,141 @@ def test_an_address_handed_and_inherited_in_one_role_is_one_row_recording_the_ha
         "first@example.test": "first@example.test", "Client@Example.test": "client@example.test",
     }
     assert _wire(desk, message)["Cc"] == "client@example.test"
+
+
+def _merge_as_contact_administrator(kept: Any, merged: Any) -> Any:
+    """Merge ``merged`` into ``kept`` through the handle owner's merge, as a contact administrator, who may merge two
+    different addresses; return the administrator."""
+
+    administrator = create_user(f"compose-contact-administrator-{merged.pk}")
+    with system_context(reason="tests.messaging.compose.merge"):
+        grant_role(actor=administrator, role="parties/role:contact_admin")
+        party = Party._base_manager.create(display_name="Client", created_by=administrator)
+        for handle in (kept, merged):
+            Party.objects.assert_handle(party, handle, asserted_by=administrator)
+    with actor_context(administrator):
+        Handle._base_manager.get(pk=kept.pk).with_actor(administrator).merge(records=[public_id_of(merged)])
+    return administrator
+
+
+def _rows(message: Any) -> list[tuple[Any, str]]:
+    with system_context(reason="tests.messaging.compose.merge"):
+        return list(Recipient._base_manager.filter(message=message).values_list("handle_id", "address"))
+
+
+@pytest.mark.parametrize(
+    ("merged_address", "kept_address", "merge"),
+    [("client@example.test", "mine@example.net", "contact-administrator"),
+     ("client.example@gmail.com", "clientexample@gmail.com", "fold")],
+    ids=["two-addresses-merged", "an-alias-folded"],
+)
+def test_mail_to_a_merged_handles_address_lands_on_the_kept_handle_and_is_delivered_to_that_address(
+    desk: Any, merged_address: str, kept_address: str, merge: str,
+) -> None:
+    """The row is the kept handle's, as the merge says; the address the caller gave is a spelling of a handle merged
+    into it, so it is recorded and the mail goes there."""
+
+    with system_context(reason="tests.messaging.compose.merge"):
+        merged = Handle.objects.upsert(platform="email", value=merged_address)
+        kept = Handle.objects.upsert(platform="email", value=kept_address)
+    if merge == "fold":
+        with system_context(reason="tests.messaging.compose.merge"):
+            Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+    else:
+        _merge_as_contact_administrator(kept, merged)
+    message = Message.objects.compose(channel=desk, to=[merged_address], text="Hi.", actor=desk.owner, queued=True)
+    with system_context(reason="tests.messaging.compose.merge"):
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
+    assert _rows(message) == [(kept.pk, merged_address)]
+    assert _delivered(message)["To"] == merged_address
+
+
+def test_an_address_two_merges_deep_is_one_read_of_the_kept_handles_merges_and_is_delivered_as_given(
+    desk: Any,
+) -> None:
+    """A fold re-points what was merged into the folded handle at the survivor, so the kept handle's merges are one
+    read at any depth; a compose there reads nothing for it, its writer holding the handle the address named."""
+
+    with system_context(reason="tests.messaging.compose.merge"):
+        first, middle, kept = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("first@example.test", "middle@example.test", "kept@example.test")
+        )
+        Handle._base_manager.get(pk=middle.pk).fold([Handle._base_manager.get(pk=first.pk)])
+        survivor = Handle._base_manager.get(pk=kept.pk)
+        survivor.fold([Handle._base_manager.get(pk=middle.pk)])
+        assert Handle._base_manager.get(pk=first.pk).merged_into_id == kept.pk
+        with CaptureQueriesContext(connection) as lineage:
+            assert survivor.is_spelling_of("FIRST@example.test", merged=True)
+        assert len(lineage) == 1
+        assert not survivor.is_spelling_of("other@example.test", merged=True)
+    message = Message.objects.compose(
+        channel=desk, to=["FIRST@example.test"], text="Hi.", actor=desk.owner, queued=True,
+    )
+    assert _rows(message) == [(kept.pk, "FIRST@example.test")]
+    assert _delivered(message)["To"] == "FIRST@example.test"
+
+
+def test_a_compose_to_a_merged_handles_address_reads_only_its_redirect_more(desk: Any) -> None:
+    """The writer holds the handle the address named, so the row's check reads nothing for the merge: what a compose
+    to a merged handle's address costs beyond one to the kept handle's own is the redirect's own two reads."""
+
+    with system_context(reason="tests.messaging.compose.merge"):
+        merged, kept = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("client@example.test", "mine@example.net")
+        )
+        Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+    counts: dict[str, int] = {}
+    for _round in range(3):
+        for address in ("mine@example.net", "client@example.test"):
+            with CaptureQueriesContext(connection) as queries:
+                Message.objects.compose(channel=desk, to=[address], text="Hi.", actor=desk.owner)
+            counts[address] = min(counts.get(address, len(queries)), len(queries))
+    assert counts["client@example.test"] - counts["mine@example.net"] == 2, counts
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_message_written_while_two_addresses_were_merged_is_mailed_at_the_kept_handle_after_the_revert(
+    desk: Any, caplog: Any,
+) -> None:
+    """After the merge is reverted the merged address is another handle's again, which this row does not name: the
+    message, which names the kept handle, goes to the kept handle's address, with the warning naming the row."""
+
+    with system_context(reason="tests.messaging.compose.merge"):
+        merged = Handle.objects.upsert(platform="email", value="client@example.test")
+        kept = Handle.objects.upsert(platform="email", value="mine@example.net")
+    _merge_as_contact_administrator(kept, merged)
+    message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner,
+                                      queued=True)
+    assert _rows(message) == [(kept.pk, "client@example.test")]
+    reverter = create_platform_admin("compose-merge-reverter")
+    with system_context(reason="tests.messaging.compose.merge"):
+        boundary = Handle.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+    with actor_context(reverter):
+        boundary.with_actor(reverter).revert()
+    with system_context(reason="tests.messaging.compose.merge"):
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id is None
+        (row,) = Recipient._base_manager.filter(message=message)
+    caplog.set_level(logging.WARNING, logger="angee.messaging.models")
+    assert _delivered(message)["To"] == "mine@example.net"
+    assert [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"] == [
+        f"Recipient {row.pk} holds an address its handle does not name; it is mailed at the handle's own.",
+    ]
+
+
+def test_a_spelling_the_transport_cannot_carry_is_not_recorded_and_the_mail_goes_to_the_handles_address(
+    desk: Any,
+) -> None:
+    """The Kelvin sign lower-cases to ``k``, so it spells the handle's address, but no transport here carries a
+    non-ASCII name part: the row records nothing and the mail goes to the handle's own spelling."""
+
+    with system_context(reason="tests.messaging.compose.carry"):
+        handle = Handle.objects.upsert(platform="email", value="kate@example.test")
+    message = Message.objects.compose(channel=desk, to=["\u212aate@example.test"], text="Hi.", actor=desk.owner,
+                                      queued=True)
+    assert _rows(message) == [(handle.pk, "")]
+    assert _delivered(message)["To"] == "kate@example.test"
 
 
 @pytest.mark.parametrize("erasure", ["the-handle-deleted", "the-channel-purged"])

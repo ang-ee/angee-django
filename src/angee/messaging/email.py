@@ -291,13 +291,20 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
         A message the channel wrote has the configured address's handle as its sender, which keeps the
         spelling it was first stored in; From is written as the channel configures it
-        (:meth:`outbound_sender`). A sender the channel no longer configures keeps its own.
+        (:meth:`outbound_sender`). A sender the channel no longer configures keeps its own, and so does
+        every sender while the configured one is refused by the sender rule (a ``from_email`` or
+        ``DEFAULT_FROM_EMAIL`` made invalid after the message was written).
         """
 
         if message.sender_id is not None:
-            name, address = self.outbound_sender()
-            if message.sender.is_spelling_of(address):
-                return _mailbox(name, address)
+            try:
+                configured: tuple[str, str] | None = self.outbound_sender()
+            except OutboundEmailNotConfigured:
+                raise
+            except ValidationError:
+                configured = None
+            if configured is not None and message.sender.is_spelling_of(configured[1]):
+                return _mailbox(*configured)
             sender = _address(message.sender.display_name, message.sender.value)
             if sender:
                 return sender
