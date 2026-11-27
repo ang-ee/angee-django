@@ -1745,7 +1745,9 @@ def test_a_carried_config_is_valid_by_construction() -> None:
 
     feed = apps.get_model("posts", "Feed")._meta.get_field("feed_backend_class").resolve_class("manual")
     defaults = feed.carried_config({})
-    assert defaults == {"quota_limit": 10000, "reply_reserve": 100, "active_thread_days": 30, "reobserve_units_per_cycle": 100}
+    assert defaults == {
+        "quota_limit": 10000, "reply_reserve": 100, "active_thread_days": 30, "reobserve_units_per_cycle": 100,
+    }
     # quota_limit must be at least 1: that value alone falls back, the valid one is kept.
     assert feed.carried_config({"quota_limit": 0, "active_thread_days": 7}) == {**defaults, "active_thread_days": 7}
     # reply_reserve must be smaller than quota_limit, a rule across both: the defaults alone.
@@ -1951,7 +1953,7 @@ def test_a_feed_s_own_selector_is_repaired_leaving_the_channel_s_selector_and_it
 
 @pytest.mark.django_db
 def test_a_feed_whose_extra_keyed_config_is_repaired_by_its_selector_alone_keeps_what_the_new_class_reads() -> None:
-    """A YouTube-shaped config repaired to manual: the save writes what manual carries over, recheck_interval dropped."""
+    """A YouTube-shaped config repaired to manual: the save writes what manual carries over, recheck_interval gone."""
 
     feed_model = apps.get_model("posts", "Feed")
     feed = make_integration("feed-youtube-shaped", model=feed_model, feed_backend_class="manual")
