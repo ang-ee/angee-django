@@ -4147,7 +4147,9 @@ describe("FormView", () => {
     expect(draftAndError()).toEqual({ draft: true, error: true });
   });
 
-  test("guard: after a save that failed on its lines, a chosen pane dropped and returned gives way to the lines pane, which the failure selects again", async () => {
+  // Only a refusal's reveal selects a pane (`revealField`), once, when the refusal is answered: no effect of
+  // the lines selects them again when the strip returns, so the pane the person chose after it stands.
+  test("after a save that failed on its lines, a pane the person then chose, dropped and returned, is the selected one again", async () => {
     sdkMocks.record = { ...sdkMocks.record, wordCount: 5 };
     const submit = renderLinedNoteRefused();
     const selected = () => screen.queryAllByRole("tab").map((tab) => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
@@ -4158,7 +4160,9 @@ describe("FormView", () => {
     await setWords("3", []);
     expect(screen.getByRole("heading", { name: "Lines" })).toBeTruthy();
     await setWords("7", ["Lines", "Extra"]);
-    await waitFor(() => expect(selected()).toEqual(["Lines*", "Extra"]));
+    // Past every timer: an effect that selected the lines again would have run by now.
+    await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+    expect(selected()).toEqual(["Lines", "Extra*"]);
   });
 
   test("a lone tab kept mounted, put behind a tab that appears ahead of it, stays mounted hidden and keeps its own state when it is lone again", async () => {

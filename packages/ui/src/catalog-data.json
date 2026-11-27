@@ -8150,6 +8150,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useController",
+    "source": "packages/ui/src/views/index.ts",
+    "kind": null,
+    "reason": "upstream re-export",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDashboardRegistry",
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": "surface",

@@ -20,6 +20,7 @@ import { RecordReferenceChips } from "../../relation/RecordReference";
 import { AbsoluteTime } from "../../../fragments/AbsoluteTime";
 import { columnTone } from "../../page";
 import type { ColumnAggregate, ColumnDescriptor, PageColumnAlign } from "../../page";
+import { querySortFromSorting } from "../model/state";
 import type { GroupMeasure } from "./types";
 export function cellContent<TRow extends Row>(
   column: ColumnDescriptor<TRow>,
@@ -96,79 +97,114 @@ declare module "@tanstack/react-table" {
      * A table of your own that renders `ListHeaderCell` sets it for the same answer.
      */
     groupAxes?: readonly GroupAxis[];
+    /**
+     * The list's order as its view holds it (`useResourceViewTableState`): what the list stores,
+     * puts in its URL and saves in a view. The table's own sorting leads it with each group axis's
+     * key, ascending, whose column's comparator carries the groups' direction (`buildColumns`), so
+     * the headers, a press and the Order select read this one. Absent, they read the table's sorting.
+     */
+    sorting?: SortingState;
   }
 }
 
-/** Whether the records of one group of the list share the key `id` (`GroupAxis.shares`). */
-function sharedByGroups<TRow extends Row>(table: TableModel<TRow>, id: string): boolean {
-  return (table.options.meta?.groupAxes ?? []).some((axis) => axis.shares(id));
+/** The list's order (`TableMeta.sorting`), else the table's sorting. */
+function listSorting<TRow extends Row>(table: TableModel<TRow>): SortingState {
+  return table.options.meta?.sorting ?? table.getState().sorting;
 }
 
-/** The keys the rows visibly follow, in order: the table's sorting without the keys a group axis shares. */
+/** The first group axis of the list whose records share the key `id` (`GroupAxis.shares`). */
+function sharingAxis<TRow extends Row>(table: TableModel<TRow>, id: string): GroupAxis | undefined {
+  return (table.options.meta?.groupAxes ?? []).find((axis) => axis.shares(id));
+}
+
+/** Whether `axis`'s groups go descending under the list's order (`GroupAxis.direction`). */
+function groupsDescending<TRow extends Row>(axis: GroupAxis, table: TableModel<TRow>): boolean {
+  return axis.direction(querySortFromSorting(listSorting(table))) === "DESC";
+}
+
+/** The keys the rows visibly follow, in order: the list's order without the keys a group axis shares. */
 function followedSorting<TRow extends Row>(table: TableModel<TRow>): SortingState {
-  return table.getState().sorting.filter(({ id }) => !sharedByGroups(table, id));
+  return listSorting(table).filter(({ id }) => !sharingAxis(table, id));
 }
 
 /**
- * The sort a column's header shows; its `aria-sort` and its sort button read it. The
- * table's sorting holds the list's whole order, which a browser-sorted list sorts its rows
- * by, but the rows visibly follow only the keys no group axis of the list shares
- * (`GroupAxis.shares`): a group's records share the value of the field grouped by its whole
- * value (a `Date` grouped by day or a finer unit included) and a grouped relation's members. A header shows
- * the direction of the first key the rows follow; every other header shows none, a later
- * key's (it only breaks ties, `breaksTies`) and a shared key's. A grouping column's key
- * orders the groups in the browser; a server's groups read keeps its own group order. A
- * press sets the order `pressedSorting` gives. The URL (`model/search.ts`) and a saved view
+ * The sort a column's header shows, read from the list's order (`TableMeta.sorting`): its sort
+ * button's arrow and accessible name read it. A column whose key a group axis of the list shares
+ * (`GroupAxis.shares`: the field grouped by its whole value, a `Date` grouped by day or a finer
+ * unit included, and a grouped relation's members) shows the direction that axis's groups go
+ * in (`GroupAxis.direction`), always: groups are never unsorted. Any other column shows the
+ * direction of the first key the rows follow, the first of the order no axis shares; every
+ * other header shows none, a later key's included (it only breaks ties, `breaksTies`). A header
+ * that does not press (`headerPresses`) has no sort button, so shows none of it. A press
+ * sets the order `pressedSorting` gives. The URL (`model/search.ts`) and a saved view
  * (`model/favorites.ts`) keep the whole order.
  */
 export function headerSort<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
   table: TableModel<TRow>,
 ): false | SortDirection {
+  const axis = sharingAxis(table, column.id);
+  if (axis) return groupsDescending(axis, table) ? "desc" : "asc";
   const [followed] = followedSorting(table);
   return followed?.id === column.id ? (followed.desc ? "desc" : "asc") : false;
 }
 
 /**
- * The order a press on `column`'s header sets, decided from the table's live state: one rule
- * for every press. A press never drops the keys a group of the list shares (`headerSort`) that
- * the order holds: they are kept, ahead of the pressed column, so a list grouped in the browser
- * whose order leads with them keeps its groups in their order, and one grouped on the server
- * keeps asking for each group's records behind them. Behind them, a press is the table's own
- * single-sort toggle (`enableMultiSort: false`) over the keys the rows follow: on the last of
- * them it turns that key to its next direction (`getNextSortingOrder`) or removes it; on any
- * other column it sets that column alone in its next direction, except that a column that only
- * breaks ties sorts in its first direction (`getFirstSortDir`), where the toggle would turn it.
- * A press on a key a group shares (a grouping column's) turns that key in place, ascending and
- * descending, and the keys the rows follow go: in the browser it turns the groups; a server's
- * groups read keeps its own group order. Given `desc`, it is the order choosing a column no
- * group shares in that direction sets (the pane toolbar's Order select, `listOrderChoice`).
+ * What a column header's `aria-sort` says, which WAI-ARIA puts on one header at a time: the
+ * direction of the first key the rows follow, on that key's own header (`headerSort`), and
+ * `"none"` on every other. Here what a header shows and what it says part ways, for a column
+ * whose key a group axis shares, and only there: it shows its groups' direction, and says
+ * `"none"`, since the records follow another key, or none.
+ */
+export function headerAriaSort<TRow extends Row>(
+  column: TableColumn<TRow, unknown>,
+  table: TableModel<TRow>,
+): "ascending" | "descending" | "none" {
+  const sort = !sharingAxis(table, column.id) && headerSort(column, table);
+  return sort === "asc" ? "ascending" : sort === "desc" ? "descending" : "none";
+}
+
+/**
+ * Whether a column's header presses (`pressedSorting`): a group axis's column keeps its own
+ * press (`ListColumnMeta.pressable`), since it always sorts in the table; any other presses when
+ * the table can sort by it.
+ */
+export function headerPresses<TRow extends Row>(column: TableColumn<TRow, unknown>): boolean {
+  return columnMeta(column.columnDef).pressable ?? column.getCanSort();
+}
+
+/**
+ * The order a press on `column`'s header sets, decided from the list's live order
+ * (`TableMeta.sorting`): one rule for every press. A press on a column whose key a group axis
+ * shares (`headerSort`) turns that axis's groups: it sets the key to the direction its header
+ * does not show, so it turns between ascending and descending and is never removed, and the
+ * other keys that axis shares go. On any other column a press is the table's own single-sort
+ * toggle (`enableMultiSort: false`) over the keys the rows follow: on the last of them it turns
+ * that key to its next direction (`getNextSortingOrder`) or removes it; on any other column it
+ * sets that column alone in its next direction, except that a column that only breaks ties sorts
+ * in its first direction (`getFirstSortDir`), where the toggle would turn it. The pressed key
+ * leads the order it sets, a grouping column's wherever the order held it (the table state hands
+ * an axis's key ahead of the others whatever its place), and what a press keeps stays behind it
+ * in the order the list's order holds it: a press on a grouping column keeps every key its axis
+ * does not share, the records' keys and another level's, so turning the groups leaves the
+ * records' order alone; a press on another column keeps the keys a group axis shares, so it
+ * never drops them and never turns the groups. Given `desc`, it is the order choosing a column
+ * no group shares in that direction sets (the pane toolbar's Order select, `listOrderChoice`).
  */
 export function pressedSorting<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
   table: TableModel<TRow>,
   desc?: boolean,
 ): SortingState {
-  const sorting = table.getState().sorting;
-  const shared = sorting.filter(({ id }) => sharedByGroups(table, id));
-  const held = sorting.find(({ id }) => id === column.id);
-  if (sharedByGroups(table, column.id)) {
-    const turned = { id: column.id, desc: held ? !held.desc : column.getFirstSortDir() === "desc" };
-    if (held) return shared.map((key) => (key.id === column.id ? turned : key));
-    // A grouping key joins the others at its level of the grouping.
-    const axes = table.options.meta?.groupAxes ?? [];
-    const level = (id: string) => axes.findIndex((axis) => axis.shares(id));
-    return [...shared, turned].sort((left, right) => level(left.id) - level(right.id));
-  }
-  if (desc !== undefined) return [...shared, { id: column.id, desc }];
-  if (breaksTies(column, table)) return [...shared, { id: column.id, desc: column.getFirstSortDir() === "desc" }];
-  const followed = followedSorting(table);
+  const axis = sharingAxis(table, column.id);
+  const kept = listSorting(table).filter(({ id }) => (axis ? !axis.shares(id) : sharingAxis(table, id)));
+  if (axis) return [{ id: column.id, desc: !groupsDescending(axis, table) }, ...kept];
+  if (desc !== undefined) return [{ id: column.id, desc }, ...kept];
+  if (breaksTies(column, table)) return [{ id: column.id, desc: column.getFirstSortDir() === "desc" }, ...kept];
   const next = column.getNextSortingOrder();
   // The only key the rows follow, since a later one only breaks ties.
-  if (held && followed.at(-1)?.id === column.id) {
-    return [...shared, ...(next ? [{ id: column.id, desc: next === "desc" }] : [])];
-  }
-  return [...shared, { id: column.id, desc: next === "desc" }];
+  if (followedSorting(table).at(-1)?.id === column.id && !next) return kept;
+  return [{ id: column.id, desc: next === "desc" }, ...kept];
 }
 
 /** A list's order as its pane toolbar's Order select offers it (`listOrderChoice`), by column field. */
@@ -176,8 +212,9 @@ export interface ListOrderChoice {
   /** The first key the rows follow (`headerSort` shows it on its column, if there is one). */
   shown?: { field: string; desc: boolean };
   /**
-   * Whether the select offers `field`: a column its header can sort (`getCanSort`) whose key
-   * no group of the list shares, since no header ever shows such a key as chosen.
+   * Whether the select offers `field`: a column the table can sort by (`getCanSort`, which for a
+   * column no group axis shares is its header's press) whose key no group of the list shares,
+   * since such a key orders the groups, not the rows the select orders; its own header turns them.
    */
   offers: (field: string) => boolean;
   /** Sort by `field` in that direction; nothing when it is what is shown or is not offered. */
@@ -190,10 +227,10 @@ export interface ListOrderChoice {
  */
 export function listOrderChoice<TRow extends Row>(table: TableModel<TRow>): ListOrderChoice {
   const columns = table.getAllLeafColumns();
-  const fieldOf = (column: TableColumn<TRow, unknown>) => (column.columnDef.meta as { field?: string } | undefined)?.field ?? column.id;
+  const fieldOf = (column: TableColumn<TRow, unknown>) => columnMeta(column.columnDef).field ?? column.id;
   const columnOf = (field: string) => columns.find((column) => column.id === field) ?? columns.find((column) => fieldOf(column) === field);
   const offered = (column: TableColumn<TRow, unknown> | undefined): column is TableColumn<TRow, unknown> =>
-    Boolean(column?.getCanSort() && !sharedByGroups(table, column.id));
+    Boolean(column?.getCanSort() && !sharingAxis(table, column.id));
   const [followed] = followedSorting(table);
   const followedColumn = followed && columns.find((column) => column.id === followed.id);
   const shown = followed && { field: followedColumn ? fieldOf(followedColumn) : followed.id, desc: followed.desc };
@@ -349,28 +386,23 @@ export function columnHasInteractiveContent<TRow extends Row>(
   return columnMeta(column).interactive === true;
 }
 
-function columnMeta<TRow extends Row>(
-  column: ColumnDef<TRow>,
-): {
+/** A list column's `meta` as the list reads it, which `displayColumns` and `buildColumns` write. */
+interface ListColumnMeta {
   align?: PageColumnAlign;
   label?: React.ReactNode;
   field?: string;
   aggregate?: ColumnAggregate;
   queryOnly?: boolean;
   interactive?: boolean;
-} {
-  return (
-    (column.meta as
-      | {
-          align?: PageColumnAlign;
-          label?: React.ReactNode;
-          field?: string;
-          aggregate?: ColumnAggregate;
-          queryOnly?: boolean;
-          interactive?: boolean;
-        }
-      | undefined) ?? {}
-  );
+  /**
+   * Whether a group axis's column presses (`headerPresses`), which `buildColumns` keeps from the
+   * column's own sort (`displayColumns`) before it lets the table sort the axis's groups by it.
+   */
+  pressable?: boolean;
+}
+
+function columnMeta<TRow extends Row>(column: ColumnDef<TRow>): ListColumnMeta {
+  return (column.meta as ListColumnMeta | undefined) ?? {};
 }
 
 /** A native accessor column for query behavior outside the declared display columns. */

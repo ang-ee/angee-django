@@ -190,6 +190,15 @@ export interface UseFormViewSaveProps {
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
   onDiscarded?: () => void;
+  /**
+   * Bring a refused field into sight: a refused save or record patch that brings the person to a
+   * field (`applyFormErrors`'s `focus` names one) calls it with that field, then asks the refusal's
+   * focus, in the same batch; one that brings them to the banner does not call it. A save the
+   * form's own check stops calls it with the first errored field, which the form library then
+   * focuses. The record form passes its surface's `revealField` through a ref, because this hook
+   * runs before the surface knows its panes.
+   */
+  revealField?: (path: string) => void;
   t: UiTranslate;
 }
 
@@ -319,6 +328,7 @@ export function useFormViewSave({
   onFieldInteractionStart,
   onFieldInteractionCommit,
   onDiscarded,
+  revealField,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const preview = useRuntimeViewAs();
@@ -709,6 +719,11 @@ export function useFormViewSave({
       keyed,
     ],
   );
+  /** The fields the form shows for its values now, in its order, then its lines: what a refusal or a failed check can name. */
+  const shownNames = React.useCallback(
+    () => [...shownFields(checkFields, form.getValues()).map((field) => field.name), ...(linesField ? [linesField] : [])],
+    [checkFields, form, linesField],
+  );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
     if (!mounted.current) return null;
     // Every refused field's message is set at its path, so a control a page renders itself shows
@@ -716,15 +731,16 @@ export function useFormViewSave({
     // nor excluded by its condition, and gives any other its own message, one only a group the
     // record does not display declares, one the save cannot write and one the record redacts
     // among them.
-    const values = form.getValues();
-    const shown = shownFields(checkFields, values);
     return applyFormErrors(form, result, {
-      fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
+      shownFieldNames: shownNames(),
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
-      focus: focusSaveRefusal,
+      focus: (field) => {
+        if (field !== undefined) revealField?.(field);
+        focusSaveRefusal(field);
+      },
     }) ? null : result;
-  }, [checkFields, fieldByName, focusSaveRefusal, form, linesField, t]);
+  }, [fieldByName, focusSaveRefusal, form, revealField, shownNames, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -879,7 +895,7 @@ export function useFormViewSave({
         // whose generated IDs cannot be matched to a concurrently edited draft.
         if (lineBaseline.some((row) => row[linesConfig.idField] == null)
           || !sameObservedLines(lineBaseline, rowsFromRecord(latest) ?? [], linesConfig)) {
-          applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField });
+          applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField }, { shownFieldNames: [linesField] });
           return;
         }
       }
@@ -933,7 +949,13 @@ export function useFormViewSave({
       record,
     ],
   );
-  const submitForm = form.handleSubmit(submitValues);
+  // The form's own check failed: its first errored field, the lines among them, is brought into sight
+  // as a refusal's is (`revealField`); the form library then focuses, on its own deferred timer, the
+  // first errored control in its own mount order.
+  const submitForm = form.handleSubmit(submitValues, (errors) => {
+    const first = shownNames().find((name) => get(errors, name) !== undefined);
+    if (first !== undefined) revealField?.(first);
+  });
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {
       if (previewBlockedRef.current) return null;

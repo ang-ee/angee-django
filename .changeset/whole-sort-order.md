@@ -9,8 +9,10 @@ read back status alone, so Rank showed "not sorted" and the order was lost on re
 on a shared link and in a saved view; a saved view of a list ordered by rank and then
 title restored rank alone and did not show active right after it was saved.
 
-The URL's `sort` now holds every key, in order, as a comma list:
-`sort=status:asc,rank:desc`. A one-key link reads exactly as before. A link whose
+The URL's `sort` now holds every key, in order, as a comma list: an order of status, then
+rank descending, is `sort=status:asc,rank:desc`. On that grouped list a press on Rank now
+writes the pressed key first and the group's key behind it, `sort=rank:desc,status:asc`,
+and a reload reads both back. A one-key link reads exactly as before. A link whose
 order cannot be read (`rank:asc,`, `rank:asc:title`, a field the resource cannot sort
 by, or a field named twice) reads nothing and offers the list's reset, as an unreadable
 key always has.

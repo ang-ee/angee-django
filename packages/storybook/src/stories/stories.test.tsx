@@ -60,11 +60,15 @@ test.each(paths)("%s imports", (path) => {
 });
 
 /** The stories a browser pass reads, each checked by its own test below and so not rendered again here. */
-const RECORD_STORIES = ["EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit"] as const;
+const RECORD_STORIES = [
+  "EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit",
+  "RefusedSaveRevealsItsField", "RefusedSaveOpensItsSection",
+] as const;
 const REFUSED_SUBMIT_STORIES = ["MutationDialog", "ActionTypedArguments", "ActionSchemaArguments"] as const;
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
-  "./ListView.stories.tsx PaneWithOrder",
+  "./ListView.stories.tsx PaneWithOrder", "./ListView.stories.tsx GroupedBehindAnotherKey", "./ListView.stories.tsx GroupedOnTheServer",
+  "./ListView.stories.tsx GroupedByMonth", "./ListView.stories.tsx GroupedWithNoOrder",
   ...REFUSED_SUBMIT_STORIES.map((name) => `./RefusedSubmit.stories.tsx ${name}`),
 ]);
 /** The stories not rendered here, each with why. */
@@ -131,17 +135,62 @@ test("Views/FormView / Relation Without Edit's pickers list the people", async (
   expect(said.errors.filter((message) => message.includes("no handler answers"))).toEqual([]);
 });
 
+/** Render a refused-save story, edit Summary and press Save with its button holding focus, as a click leaves it. */
+async function pressRefusedSave(Story: ComponentType) {
+  render(<Story />);
+  const summary = await screen.findByDisplayValue("Ship the import flow to every workspace.");
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Budget" }).getAttribute("aria-selected")).toBe("true"));
+  fireEvent.change(summary, { target: { value: "Ship the import flow." } });
+  const save = await screen.findByRole("button", { name: "Save" });
+  save.focus();
+  fireEvent.click(save);
+}
+
+test("Views/FormView / Refused Save Reveals Its Field selects the refused field's pane and brings focus to its field", async () => {
+  const said = consoleMessages();
+  await pressRefusedSave(formView.RefusedSaveRevealsItsField);
+  await waitFor(() => expect(document.activeElement).toBe(screen.queryByRole("textbox", { name: "Venue" })));
+  // The banner's turn is the timer after the field's: focus stays on the field.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const venue = screen.getByRole("textbox", { name: "Venue" });
+  expect(document.activeElement).toBe(venue);
+  expect(venue.getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByText("Choose a venue that seats the whole team.")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Venue" }).getAttribute("aria-selected")).toBe("true");
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/FormView / Refused Save Opens Its Section opens the collapsed section and brings focus to its field, the pane staying", async () => {
+  const said = consoleMessages();
+  await pressRefusedSave(formView.RefusedSaveOpensItsSection);
+  await waitFor(() => expect(document.activeElement).toBe(screen.queryByRole("textbox", { name: "Risk notes" })));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Risk notes" }));
+  expect(screen.getByRole("button", { name: "Risks" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("tab", { name: "Budget" }).getAttribute("aria-selected")).toBe("true");
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
 const listView = composeStories(ListViewStories);
 const TASKS = /^(Draft the brief|Book the room|Collect quotes|Send invites|Archive notes|Approve budget)$/;
+/** What a header shows: the direction its sort button's name says, "none" for not sorted. */
+const sort = (name: string) =>
+  /\(currently (ascending|descending)\)$/.exec(screen.getByRole("button", { name: new RegExp(`^Sort ${name} \\(`) }).getAttribute("aria-label") ?? "")?.[1] ?? "none";
+/** The headers whose `aria-sort` says a direction, with it ("Rank ascending"): one at most, the key the rows follow. */
+const ariaSorted = () => screen.getAllByRole("columnheader").flatMap((cell) => {
+  const said = cell.getAttribute("aria-sort");
+  return said && said !== "none" ? [`${cell.querySelector("button[aria-label^='Sort ']")?.getAttribute("aria-label")?.split(" ")[1]} ${said}`] : [];
+});
 
 test("Views/ListView / Grouped With Tie-breakers shows on its headers the sort its rows follow, and title breaks the rank ties", async () => {
   const said = consoleMessages();
   render(<listView.GroupedWithTieBreakers />);
   const group = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}`) });
   const groups = [await group("closed"), await group("open")];
-  const sort = (name: string) => screen.getByRole("columnheader", { name: new RegExp(name) }).getAttribute("aria-sort");
-  // Status: a group's tasks share it. Rank: the rows of each group follow it. Title: it only breaks ties.
-  expect(["Status", "Rank", "Title"].map(sort)).toEqual(["none", "ascending", "none"]);
+  // Status: a group's tasks share it, so its button shows its groups' direction, and its aria-sort says none, since one
+  // header at a time says the rows' sort. Rank: the rows of each group follow it. Title: it only breaks ties.
+  expect(["Status", "Rank", "Title"].map(sort)).toEqual(["ascending", "ascending", "none"]);
+  expect(ariaSorted()).toEqual(["Rank ascending"]);
   for (const button of groups) fireEvent.click(button);
   await waitFor(() => expect(screen.queryAllByText(TASKS).map((cell) => cell.textContent)).toEqual([
     "Archive notes", "Approve budget", "Send invites", "Book the room", "Draft the brief", "Collect quotes",
@@ -155,13 +204,13 @@ test("Views/ListView / Pane With Order checks the key the rows follow, offers no
   const reads = vi.spyOn(ListViewStories.default.parameters.angeeFixture.schemas.public!, "fetch");
   render(<listView.PaneWithOrder />);
   for (const name of ["closed", "open"]) fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${name}`) }));
-  const sort = (name: string) => screen.getByRole("columnheader", { name: new RegExp(name) }).getAttribute("aria-sort");
   const shown = () => ({
     headers: ["Status", "Rank", "Title"].map(sort),
+    ariaSorted: ariaSorted(),
     groups: screen.getAllByRole("button", { name: /^(closed|open)/ }).map((button) => button.textContent?.replace(/\d+$/, "")),
     rows: screen.queryAllByText(TASKS).map((cell) => cell.textContent),
   });
-  const atLoad = { headers: ["none", "ascending", "none"], groups: ["closed", "open"],
+  const atLoad = { headers: ["ascending", "ascending", "none"], ariaSorted: ["Rank ascending"], groups: ["closed", "open"],
     rows: ["Archive notes", "Approve budget", "Send invites", "Book the room", "Draft the brief", "Collect quotes"] };
   await waitFor(() => expect(shown()).toEqual(atLoad));
   // The menu's Order group, opened with the pane toolbar's own More button when it is closed.
@@ -181,7 +230,7 @@ test("Views/ListView / Pane With Order checks the key the rows follow, offers no
   await choose("Rank, ascending");
   expect([shown(), reads.mock.calls.length]).toEqual([atLoad, loaded]);
   await choose("Title, descending");
-  const byTitle = { headers: ["none", "none", "descending"], groups: ["closed", "open"],
+  const byTitle = { headers: ["ascending", "none", "descending"], ariaSorted: ["Title descending"], groups: ["closed", "open"],
     rows: ["Send invites", "Archive notes", "Approve budget", "Draft the brief", "Collect quotes", "Book the room"] };
   await waitFor(() => expect(shown()).toEqual(byTitle));
   const chosen = reads.mock.calls.length;
@@ -189,6 +238,112 @@ test("Views/ListView / Pane With Order checks the key the rows follow, offers no
   await choose("Title, descending");
   expect([shown(), reads.mock.calls.length, (await items()).find(([, checked]) => checked === "true")?.[0]])
     .toEqual([byTitle, chosen, "Title, descending"]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+const CHORES = /^Chore \d\d$/;
+
+test("Views/ListView / Grouped Behind Another Key lists its groups by status whatever its order, the chores without one last, and Status turns them", async () => {
+  const said = consoleMessages();
+  render(<listView.GroupedBehindAnotherKey />);
+  const groups = () => screen.queryAllByRole("button", { name: /^(doing|done|todo|No value)/ }).map((button) => button.textContent?.replace(/\d+$/, ""));
+  // Ordered by effort, most first: before, the groups followed the sum of their efforts (done, none, doing, todo).
+  await waitFor(() => expect(groups()).toEqual(["doing", "done", "todo", "No value"]));
+  expect([["Status", "Effort", "Title"].map(sort), ariaSorted()]).toEqual([["ascending", "descending", "none"], ["Effort descending"]]);
+  const shownChores = () => screen.queryAllByText(CHORES).slice(0, 3).map((cell) => cell.textContent);
+  fireEvent.click(screen.getByRole("button", { name: /^doing/ }));
+  await waitFor(() => expect(shownChores()).toEqual(["Chore 12", "Chore 40", "Chore 28"]));
+  // The grouping column's press turns the groups and leaves the records' order alone: the effort key stays behind the
+  // status key, so the open group's chores keep their effort order and Effort keeps its aria-sort. (The effort key went:
+  // the chores fell to the read's order, Chore 04, 08, 12, and no header's aria-sort said a direction.)
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["todo", "done", "doing", "No value"]));
+  expect([["Status", "Effort", "Title"].map(sort), ariaSorted()]).toEqual([["descending", "descending", "none"], ["Effort descending"]]);
+  expect(shownChores()).toEqual(["Chore 12", "Chore 40", "Chore 28"]);
+  // Title's presses while the groups are turned: its second sorts it descending, the chores follow it, and the groups
+  // STAY turned, since a press on another column keeps the status key (were it dropped, the groups would fall back to
+  // ascending, which is also where they stand with no key held: so this is pressed while they are turned). Each
+  // press is decided from the order the list last rendered, so the second waits for the first's header.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Title / }));
+  await waitFor(() => expect(sort("Title")).toBe("ascending"));
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Title / }));
+  await waitFor(() => expect(shownChores()).toEqual(["Chore 40", "Chore 36", "Chore 32"]));
+  expect([groups(), ["Status", "Effort", "Title"].map(sort), ariaSorted()])
+    .toEqual([["todo", "done", "doing", "No value"], ["descending", "none", "descending"], ["Title descending"]]);
+  // Status pressed again: the groups turn back, the chores still by their titles.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["doing", "done", "todo", "No value"]));
+  expect([["Status", "Effort", "Title"].map(sort), ariaSorted(), shownChores()])
+    .toEqual([["ascending", "none", "descending"], ["Title descending"], ["Chore 40", "Chore 36", "Chore 32"]]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/ListView / Grouped On The Server asks for its groups in its grouping column's direction, the tasks without a status last, and Status turns them", async () => {
+  const said = consoleMessages();
+  render(<listView.GroupedOnTheServer />);
+  // A server group's toggle is named by its label.
+  const groups = () => screen.queryAllByRole("button", { name: /^(closed|open|No value)$/ }).map((button) => button.getAttribute("aria-label"));
+  await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
+  expect([["Status", "Rank", "Title"].map(sort), ariaSorted()]).toEqual([["ascending", "ascending", "none"], ["Rank ascending"]]);
+  // Each press is decided from the order the list last rendered: each waits for the groups the one before turned. The
+  // grouping column's button shows its groups' direction; the rank key stays behind the status key, so Rank keeps its
+  // aria-sort (the rank key went, and no header's aria-sort said a direction).
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["open", "closed", "No value"]));
+  expect([sort("Status"), ariaSorted()]).toEqual(["descending", ["Rank ascending"]]);
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
+  expect([sort("Status"), ariaSorted()]).toEqual(["ascending", ["Rank ascending"]]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+const ERRANDS = /^(Renew the lease|Book the venue|Order the badges|Pay the deposit|Collect the keys|Print the menus|Send the invoices|Hire the band|Water the plants|Archive the receipts)$/;
+/** A browser list's groups whose toggles' names match `name`, by the label each shows, without its count. */
+const browserGroups = (name: RegExp) => screen.queryAllByRole("button", { name }).map((button) => button.querySelector(".truncate")?.textContent);
+
+test("Views/ListView / Grouped By Month lists its months by their date, newest first, the errands without one last, and Due turns them", async () => {
+  const said = consoleMessages();
+  render(<listView.GroupedByMonth />);
+  const months = () => browserGroups(/^((January|February|March|April) 2026|No value)/);
+  await waitFor(() => expect(months()).toEqual(["April 2026", "March 2026", "February 2026", "January 2026", "No value"]));
+  // A month's errands share no date: Due shows the date's own sort and its aria-sort, and no column groups them.
+  expect([["Due", "Title"].map(sort), ariaSorted()]).toEqual([["descending", "none"], ["Due descending"]]);
+  const shownErrands = () => screen.queryAllByText(ERRANDS).map((cell) => cell.textContent);
+  fireEvent.click(screen.getByRole("button", { name: /^April 2026/ }));
+  await waitFor(() => expect(shownErrands()).toEqual(["Hire the band", "Order the badges"]));
+  // The date's own press turns the months, and their errands with them. Each press is decided from the order the list
+  // last rendered, so each waits for the months the one before turned.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Due / }));
+  await waitFor(() => expect(months()).toEqual(["January 2026", "February 2026", "March 2026", "April 2026", "No value"]));
+  expect([["Due", "Title"].map(sort), ariaSorted(), shownErrands()])
+    .toEqual([["ascending", "none"], ["Due ascending"], ["Order the badges", "Hire the band"]]);
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Due / }));
+  await waitFor(() => expect(months()).toEqual(["April 2026", "March 2026", "February 2026", "January 2026", "No value"]));
+  expect([["Due", "Title"].map(sort), ariaSorted(), shownErrands()])
+    .toEqual([["descending", "none"], ["Due descending"], ["Hire the band", "Order the badges"]]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/ListView / Grouped With No Order lists its groups ascending with no key held, the tasks without a status last, and Status writes its key", async () => {
+  const said = consoleMessages();
+  render(<listView.GroupedWithNoOrder />);
+  const groups = () => browserGroups(/^(closed|open|No value)/);
+  await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
+  // No key is held: the grouping column shows its groups ascending, and no other header shows a sort or says one.
+  expect([["Status", "Rank", "Title"].map(sort), ariaSorted()]).toEqual([["ascending", "none", "none"], []]);
+  fireEvent.click(screen.getByRole("button", { name: /^open/ }));
+  await waitFor(() => expect(screen.queryAllByText(TASKS).map((cell) => cell.textContent)).toEqual(["Draft the brief", "Book the room", "Collect quotes"]));
+  // Its first press writes the status key descending; the second waits for the groups the first turned.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["open", "closed", "No value"]));
+  expect([sort("Status"), ariaSorted()]).toEqual(["descending", []]);
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
+  expect([sort("Status"), ariaSorted()]).toEqual(["ascending", []]);
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
