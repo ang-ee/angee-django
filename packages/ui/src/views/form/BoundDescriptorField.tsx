@@ -92,13 +92,16 @@ export function BoundDescriptorField({
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
   const resolved = resolveField(declared, siblingValues);
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
+  // The control's descriptor is named by its path in the form, as every descriptor is: its own
+  // validation registers there and the form's write rules read it.
+  const descriptor = { ...resolved, name };
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
 
   return <BoundFormValue form={surface} name={name}>{(bound) => <LabeledDescriptorField
-    field={resolved}
+    field={descriptor}
     value={bound.value}
     dialogValues={siblingValues}
-    readOnly={readOnly || surface.fieldReadOnly({ ...resolved, name })}
+    readOnly={readOnly || surface.fieldReadOnly(descriptor)}
     controlRef={bound.controlRef}
     messages={bound.messages}
     onCommit={bound.onCommit}

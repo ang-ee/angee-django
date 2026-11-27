@@ -1317,6 +1317,15 @@ function jsonShown(label: string): unknown {
   return JSON.parse(EditorView.findFromDOM(screen.getByRole("textbox", { name: label }))!.state.doc.toString());
 }
 
+/** Replace a JSON editor's whole draft, as typing it does. */
+function typeDraft(editorElement: HTMLElement, text: string) {
+  const editor = EditorView.findFromDOM(editorElement)!;
+  act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } }));
+}
+
+/** Well past every timer: a request that would follow a press has been made by now. */
+const pastEveryTimer = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+
 type UndoFrame = "loaded" | "changed";
 const undoKinds: readonly {
   kind: string;
@@ -1551,6 +1560,36 @@ test("a create form renders a rows field's columns each time it opens", async ()
     expect(within(table).queryByRole("textbox")).toBeNull();
     cleanup();
   }
+});
+
+// Guards existing behaviour: a rows field names each cell's descriptor by the cell's path
+// (`mappings.1.config`), so a JSON cell's own check is held there and the cell shows it.
+test("guard: an invalid JSON draft in a rows field's cell stops Save at that cell, marked and named there, nothing sent; corrected, it goes out", async () => {
+  const configResource: DataResourceMetadata = {
+    ...rowsResource,
+    fields: rowsResource.fields?.map((field) => field.name === "mappings" ? { ...field, scalar: "JSON" } : field),
+  };
+  const configRows: FormSpecFieldDescriptor = { ...mappingsField, rowTemplate: [
+    { name: "source", label: "Source" }, { name: "config", label: "Config", widget: "json" },
+  ] };
+  const loaded = [{ source: "one", config: { n: 1 } }, { source: "two", config: { n: 2 } }];
+  const f = await presetForm({ mappings: loaded }, { fields: [{ name: "title", label: "Title" }, configRows], resource: configResource });
+  await waitFor(() => expect(screen.getAllByRole("textbox", { name: "Config" })).toHaveLength(2));
+  const [first, second] = screen.getAllByRole("textbox", { name: "Config" }) as [HTMLElement, HTMLElement];
+  typeDraft(second, '{"n": 21}');
+  typeDraft(second, '{"n": 2');
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(second.getAttribute("aria-invalid")).toBe("true"));
+  expect(second.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText("Enter a valid value.").id);
+  expect(first.getAttribute("aria-invalid")).toBeNull();
+  expect(f.surface().form.getFieldState("mappings.1.config").error?.message).toBe("Enter a valid value.");
+  await pastEveryTimer();
+  expect(f.update).not.toHaveBeenCalled();
+
+  typeDraft(second, '{"n": 22}');
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables).toEqual({ mappings: [loaded[0], { source: "two", config: { n: 22 } }] });
 });
 
 // The create rule for a container field, whichever widget holds it: untouched, it is sent as an
@@ -1974,7 +2013,6 @@ test("nested server errors and root failures share the native form store", async
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
   // The form-level reason, the line naming the refused field the form shows, then the reason no field shows.
   expect(f.surface().saveErrors).toEqual(["Cannot save", "form.fixHighlightedFieldsNamed", "lines.0.title: Invalid line"]);
-  expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
 });
@@ -2252,6 +2290,34 @@ test("a bound descriptor whose resolve returns another name reads and writes its
   expect((await screen.findByLabelText("Retry") as HTMLInputElement).value).toBe("later");
   edit("Retry", "soon");
   expect(f.surface().form.getValues("settings")).toEqual({ retry: "soon" });
+});
+
+test("a scoped bound descriptor's invalid JSON draft stops Save at its own path: marked, named and focused there, nothing sent; corrected, it goes out", async () => {
+  let surface!: FormViewSaveSurface;
+  const f = await fixture({
+    publicView: true, record: { settings: { payload: { n: 1 } } },
+    viewFields: [{ name: "title", label: "Title" }, { name: "settings", label: "Settings", hidden: true }],
+    formExtras: ({ form }) => {
+      surface = form;
+      return <BoundDescriptorField form={form} resource="notes.Note" scope="settings" field={{ name: "payload", label: "Payload", widget: "json" }} />;
+    },
+  });
+  const payload = await screen.findByRole("textbox", { name: "Payload" });
+  await waitFor(() => expect(jsonShown("Payload")).toEqual({ n: 1 }));
+  typeDraft(payload, '{"n": 2}');
+  typeDraft(payload, '{"n": 2');
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(payload.getAttribute("aria-invalid")).toBe("true"));
+  expect(payload.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText("Enter a valid value.").id);
+  await waitFor(() => expect(document.activeElement).toBe(payload));
+  expect([surface.form.getFieldState("settings.payload").error?.message, surface.form.getFieldState("payload").error]).toEqual(["Enter a valid value.", undefined]);
+  await pastEveryTimer();
+  expect(f.update).not.toHaveBeenCalled();
+
+  typeDraft(payload, '{"n": 3}');
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables).toEqual({ settings: { payload: { n: 3 } } });
 });
 
 test("a keystroke in a field without a preset evaluates the form's conditions no more than it has to", async () => {

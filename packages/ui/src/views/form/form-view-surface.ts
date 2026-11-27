@@ -68,10 +68,6 @@ import {
   type FormSectionModel,
 } from "./form-view-model";
 import {
-  lineRowErrorsFromDottedPaths,
-  type ValidationErrors,
-} from "./validation-errors";
-import {
   useFormViewRecordChrome,
   type FormViewRecordChromeSurface,
 } from "./use-form-view-record-chrome";
@@ -237,7 +233,6 @@ export interface FormViewSurface
   linesTrailing: boolean;
   railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
-  lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
   declaredActions: readonly RecordActionDescriptor[];
   genericActions: readonly RecordActionDescriptor[];
   actionsBlocked: boolean;
@@ -843,16 +838,6 @@ export function useFormViewSurface({
       ),
     [developerMode, id, modelMetadata, save.displayRecord, t],
   );
-  const lineRowErrors = React.useMemo(
-    () =>
-      save.linesActive && save.linesField
-        ? lineRowErrorsFromDottedPaths(
-            save.serverFieldErrors,
-            save.linesField,
-          )
-        : undefined,
-    [save.linesActive, save.linesField, save.serverFieldErrors],
-  );
   const recordToolbarContext = React.useMemo<RecordToolbarContext>(
     () => ({
       recordId: id ?? null,
@@ -977,7 +962,6 @@ export function useFormViewSurface({
     linesTrailing,
     railGroups: visibleRailGroups,
     subtitleParts,
-    lineRowErrors,
     declaredActions,
     genericActions,
     actionsBlocked,
