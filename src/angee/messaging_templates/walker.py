@@ -73,8 +73,11 @@ from angee.messaging_templates.engine import (
     MESSAGE_TEMPLATE_REFUSED,
     RENDER_FAILED,
     SUBJECT_TOO_LONG,
+    VALUE_ITEMS_LIMIT,
     VALUE_NOT_LINKABLE,
     VALUE_NOT_PRINTED,
+    VALUE_STRING_LIMIT,
+    VALUES_JSON_LIMIT,
     VALUES_TOO_LARGE,
     BudgetedIncludeNode,
     BudgetedLoopBody,
@@ -142,9 +145,6 @@ FORM_SPAN_LIMIT = 2 * 1_000
 checks read it: a walk admits at most :data:`NODE_LIMIT` nodes, and an opening tag is a node whose end tag is a
 second span."""
 DECLARED_LIMIT = 100
-VALUES_JSON_LIMIT = 50_000
-VALUE_STRING_LIMIT = 10_000
-VALUE_ITEMS_LIMIT = 500
 SUBJECT_LIMIT = 1_000
 """The longest rendered subject or preheader, after it is made one line."""
 

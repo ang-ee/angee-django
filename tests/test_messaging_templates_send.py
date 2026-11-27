@@ -12,13 +12,12 @@ from contextlib import nullcontext
 from email import message_from_bytes
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.template.base import Template as DjangoTemplate
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils.html import escape
@@ -48,9 +47,11 @@ from angee.messaging_templates.engine import (
     NOT_A_TEMPLATE,
     NOT_EFFECTIVE,
     RENDER_FAILED,
+    SEND_CODES,
     VALUE_NOT_LINKABLE,
     VALUE_NOT_PRINTED,
 )
+from angee.messaging_templates.testing.faults import failing_render
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
@@ -820,11 +821,7 @@ def test_an_engine_failure_quoting_a_value_logs_the_templates_identity_and_type_
     row = _decision(key="tests.decision_failing", sample={"link": link})
     tester = create_platform_admin("messaging-templates-failing-render")
 
-    def failing(self: Any, *args: Any, **kwargs: Any) -> str:
-        raise RuntimeError(f"engine failed near {link}")
-
-    monkeypatch.setattr(DjangoTemplate, "render", failing)
-    with caplog.at_level(logging.DEBUG):
+    with failing_render(RuntimeError(f"engine failed near {link}")), caplog.at_level(logging.DEBUG):
         if caller == "preview":
             with actor_context(tester):
                 preview = row.preview()
@@ -847,6 +844,39 @@ def test_an_engine_failure_quoting_a_value_logs_the_templates_identity_and_type_
         logging.ERROR,
         "A message template failed to render: the template tests.decision_failing in en raised RuntimeError.",
     )]
+
+
+def _raised_codes(tree: ast.AST) -> list[ast.expr]:
+    """Each code a raise site in ``tree`` names: a ``code=`` keyword, or the code handed to ``_refused``. The body of
+    ``_refused`` itself forwards the code its callers hand it, so it is read at those calls instead."""
+
+    found: list[ast.expr] = []
+    forwarding = {id(node) for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef) and fn.name == "_refused"
+                  for node in ast.walk(fn)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and id(node) not in forwarding:
+            found.extend(keyword.value for keyword in node.keywords if keyword.arg == "code")
+            if isinstance(node.func, ast.Name) and node.func.id == "_refused" and len(node.args) == 2:
+                found.append(node.args[1])
+    return found
+
+
+def test_every_code_a_send_raises_is_an_engine_constant_in_the_exported_set() -> None:
+    """The render's raise sites (``engine.py``, ``walker.py``) and a send's row and kit refusals (``send_refusal``,
+    ``_brand_kit``) each name their code by an engine constant, never a retyped string, and ``SEND_CODES`` is exactly
+    what they raise: a code added without the set, or left in it unraised, fails here."""
+
+    from angee.messaging_templates import engine as engine_module
+
+    addon = Path(engine_module.__file__).parent
+    trees: list[ast.AST] = [ast.parse((addon / name).read_text()) for name in ("engine.py", "walker.py")]
+    models = ast.parse((addon / "models.py").read_text())
+    trees += [node for node in ast.walk(models)
+              if isinstance(node, ast.FunctionDef) and node.name in {"send_refusal", "_brand_kit"}]
+    codes = [code for tree in trees for code in _raised_codes(tree)]
+    assert codes and all(isinstance(code, ast.Name) for code in codes), [ast.unparse(code) for code in codes]
+    raised = {getattr(engine_module, cast(ast.Name, code).id) for code in codes}
+    assert raised == SEND_CODES, (sorted(raised - SEND_CODES), sorted(SEND_CODES - raised))
 
 
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
