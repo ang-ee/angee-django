@@ -181,7 +181,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "vendor",
         "credential",
         "account",
-        "backend_class",
         "lifecycle",
         "config",
         "display_name",

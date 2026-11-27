@@ -78,7 +78,18 @@ live in code docstrings.
   (`angee.E052`) names such rows with the remedy an addon states in
   `ANGEE_IMPL_KEY_REMEDIES`. An update that is not changing such a key writes
   the column as itself, so a stale save never restores a retired key over one
-  committed since.
+  committed since. A repair saved with `update_fields` must name the config
+  too, and a stale row that would write another config is refused as stale
+  (code `stale`). `angee.graphql`: every update input carries its model's
+  create-only selectors (`create_only_selectors`, derived once in
+  `hasura_model_resource`), so `channels_set_input`,
+  `notion_connections_set_input`, `feeds_set_input` (both selectors) and any
+  consumer resource over such a model gain the column, and
+  `inference_providers_set_input` and `vcs_bridges_set_input` list it last; a
+  resource field's metadata gains `createOnly`. A resource with no update root
+  (calendar sources, directories, mounts) or a selector a connect flow chose is
+  repaired by installing the implementation's addon again or by connecting the
+  record again.
   **Upgrade:** a consumer with generated types takes
   `| null` on these fields (one in the framework's own documents:
   `ChannelBackendImpl` in messaging's overview); code that reads a selector's

@@ -31,6 +31,18 @@ class _LoadedImplKeys(Protocol):
         ...
 
 
+def create_only_selectors(model: type[models.Model]) -> tuple[str, ...]:
+    """The names of ``model``'s implementation columns declared ``create_only``, in field order.
+
+    The resource layer reads them once: it adds them to an update input and publishes them in the
+    resource's metadata, while the model's save decides when one may change (a repair).
+    """
+
+    return tuple(
+        field.name for field in model._meta.concrete_fields if isinstance(field, ImplClassField) and field.create_only
+    )
+
+
 class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
@@ -54,11 +66,15 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     carried over (``ImplBase.carried_config``), the new key is written only
     while the row still holds the old one, and afterwards the selector is
     create-only again. A repair that would drop a stored config key the new
-    implementation does not use is refused unless the config is sent with it.
-    A person meets that refusal as well as code does: a record form's edit
-    sends only the fields that changed, and a create-only preset seeds nothing
-    outside a create, so choosing the key alone sends the selector alone; its
-    words are a person's. ``check --database`` (``angee.E052``) names such rows.
+    implementation does not use is refused unless the config is sent with it;
+    a repair saved with ``update_fields`` names the config too, or is refused.
+    The console's form sends the config it shows with a repair, so a person
+    never meets those refusals; code and a bare GraphQL update do. A stale row
+    (loaded before its stored key moved) that would write another config is
+    refused as stale. Every update input of an Angee resource carries its
+    model's create-only selectors (:func:`create_only_selectors`), and its
+    metadata publishes them, so only the model decides when one may change.
+    ``check --database`` (``angee.E052``) names such rows.
 
     Reads forgive and writes do not: a lookup matches what a person or a URL
     may spell (``" local "``, the member's name ``"LOCAL"``), while a write

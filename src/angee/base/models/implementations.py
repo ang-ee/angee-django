@@ -371,11 +371,10 @@ class ImplDefaultsMixin(models.Model):
         A config other than the stored one is the one sent, which the new implementation validates
         as any write's (:meth:`validate_impl_configs`). Otherwise the stored config is carried over;
         a key the new implementation does not read is never dropped silently: the save is refused,
-        naming it, and the config must be sent.
+        naming it, and the config must be sent. A save with ``update_fields`` that would leave out a
+        config the new implementation reads is refused: it must name the config too.
         """
 
-        if update_fields is not None and self.impl_config_field not in update_fields:
-            return
         try:
             config_field = self._config_field()
         except FieldDoesNotExist:
@@ -383,9 +382,16 @@ class ImplDefaultsMixin(models.Model):
         impl = field.resolve_class(getattr(self, field.attname))
         if not (isinstance(impl, type) and issubclass(impl, ImplBase)):
             return
-        stored = self._stored_config(config_field)
-        if config_field.value_from_object(self) != stored:
+        if update_fields is not None and self.impl_config_field not in update_fields:
+            if impl.config_model is None:
+                return
+            raise ValidationError({config_field.name: (
+                f"A save that changes the {field.verbose_name} with update_fields must name {config_field.name} too."
+            )})
+        row = self._stored_values(config_field.attname)
+        if row is None or config_field.value_from_object(self) != row[0]:
             return
+        stored = row[0]
         carried = impl.carried_config(stored)
         dropped = sorted(set(stored or {}) - set(carried))
         if dropped:
@@ -395,25 +401,34 @@ class ImplDefaultsMixin(models.Model):
             )})
         config_field.save_form_data(self, carried)
 
-    def _stored_config(self, config_field: models.JSONField) -> Any:
-        """The config the stored row holds, read under the system context."""
+    def _stored_values(self, *attnames: str) -> tuple[Any, ...] | None:
+        """The stored row's values of ``attnames``, read under the system context; ``None`` without a row."""
 
-        with system_context(reason="base.impl.stored_config"):
-            return type(self)._base_manager.using(self._state.db).filter(pk=self.pk).values_list(
-                config_field.attname, flat=True,
-            ).first()
+        with system_context(reason="base.impl.stored_row"):
+            return type(self)._base_manager.using(self._state.db).filter(pk=self.pk).values_list(*attnames).first()
 
     def _refuse_changed_config_under(self, field: ImplClassField[Any]) -> None:
-        """Refuse a config other than the stored one while ``field`` keeps a key no implementation reads."""
+        """Refuse a config other than the stored one while ``field`` keeps a key no implementation reads.
+
+        Where the stored row no longer holds that key, this row was loaded before another save moved
+        it: the row is stale, and is refused as such (code ``stale``), never written over the new key's
+        config.
+        """
 
         try:
             config_field = self._config_field()
         except FieldDoesNotExist:
             return
-        if config_field.value_from_object(self) != self._stored_config(config_field):
-            raise ValidationError({config_field.name: (
-                f"The configuration cannot change while the {field.verbose_name} is not registered."
-            )})
+        stored = self._stored_values(field.attname, config_field.attname)
+        if stored is None or config_field.value_from_object(self) == stored[1]:
+            return
+        if stored[0] != getattr(self, field.attname):
+            raise ValidationError(
+                "This record changed after it was loaded. Load it again, then make the change again.", code="stale",
+            )
+        raise ValidationError({config_field.name: (
+            f"The configuration cannot change while the {field.verbose_name} is not registered."
+        )})
 
     def materialize_impl_defaults(
         self,

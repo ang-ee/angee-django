@@ -32,6 +32,7 @@ from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
 from rebac import PermissionDenied, actor_context, system_context
 
+from angee.base.fields import create_only_selectors
 from angee.base.models.identity import public_id_for
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -1751,6 +1752,44 @@ def test_a_writer_repairs_a_bridge_s_retired_key_once_and_a_person_who_may_not_w
     assert repaired["update_vcs_bridges_by_pk"] == {"backend_class": "STUB"}
     assert again.errors is not None and again.errors[0].extensions["validationErrors"] == {
         "backend_class": ["Implementation selection is create-only."],
+    }
+
+
+def test_every_update_input_carries_its_model_s_create_only_selectors_and_the_metadata_names_them() -> None:
+    """The resource layer derives it once: an update carries each create-only selector, published create-only."""
+
+    from django.apps import apps
+
+    schema = GraphQLSchemas.from_discovery().build("console")
+    carried: set[tuple[str, str]] = set()
+    published: set[tuple[str, str]] = set()
+    for resource in schema._schema.extensions["angee"]["resources"]:
+        if resource["modelLabel"] not in {model._meta.label for model in apps.get_models()}:
+            continue  # a resource over a projection (``iam.Role``) names no model
+        model = apps.get_model(resource["modelLabel"])
+        fields = {field["name"]: field for field in resource["fields"]}
+        for name in create_only_selectors(model):
+            if name not in fields:
+                continue
+            assert fields[name]["createOnly"] is True
+            published.add((resource["modelLabel"], name))
+            if resource["roots"]["update"]:
+                assert name in resource["updateFields"] and fields[name]["updatable"] is True
+                set_input = schema._schema.get_type(f"{resource['roots']['list']}_set_input")
+                assert name in set_input.fields
+                carried.add((resource["modelLabel"], name))
+        selectors = create_only_selectors(model)
+        assert not [name for name, field in fields.items() if field["createOnly"] and name not in selectors]
+
+    assert carried == {
+        ("agents.InferenceProvider", "backend_class"), ("integrate_vcs.VcsBridge", "backend_class"),
+        ("knowledge_integrate_notion.NotionConnection", "backend_class"), ("messaging.Channel", "backend_class"),
+        ("posts.Feed", "backend_class"), ("posts.Feed", "feed_backend_class"),
+    }
+    # No update root: the three connect-created resources publish the fact and carry nothing.
+    assert published - carried == {
+        ("calendar.CalendarSource", "backend_class"), ("parties.Directory", "backend_class"),
+        ("storage_integrate.Mount", "backend_class"),
     }
 
 

@@ -496,7 +496,19 @@ Use these owners instead of maintaining another contract in an addon:
   class does not read is never dropped silently (the save is refused, naming
   it, unless the config is sent), the new key is written only while the row
   still holds the old one, and afterwards the selector is create-only again.
-  `angee.E052` and `ANGEE_IMPL_KEY_REMEDIES` name such rows and the remedy.
+  A repair saved with `update_fields` names the config too, or is refused; a
+  stale row (loaded before its stored key moved) that would write another
+  config is refused as stale (code `stale`). The resource layer derives the
+  update surface once: every update input carries its model's create-only
+  selectors ([`create_only_selectors`](../../src/angee/base/fields/implementation.py),
+  read by `hasura_model_resource`) and the resource metadata publishes them
+  (`createOnly`), so no resource or page restates one; the model's save
+  decides. A record without an update root (calendar sources, directories,
+  mounts) or a selector a connect flow chose is not repaired in the console:
+  its mark says "It cannot be changed here.", and the remedy is installing
+  again the addon that provides the implementation, or removing the record
+  and connecting it again. `angee.E052` and `ANGEE_IMPL_KEY_REMEDIES` name
+  such rows and the remedy.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs

@@ -54,6 +54,7 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
+from angee.base.fields import create_only_selectors
 from angee.base.hooks import resolve_hook, resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
@@ -1628,6 +1629,20 @@ def _first_rows_per_group(
     return pages
 
 
+def _with_create_only_selectors(model: type[models.Model], declared: Sequence[str] | None) -> list[str] | None:
+    """The update allowlist ``declared``, joined by the model's create-only selectors it lacks.
+
+    A create-only selector (:func:`angee.base.fields.create_only_selectors`) changes only when its
+    model's save allows it (a repair), so the update input always carries it and the model decides.
+    No allowlist (``None``) already means every editable column, the selectors among them.
+    """
+
+    if declared is None:
+        return None
+    named = list(declared)
+    return [*named, *(name for name in create_only_selectors(model) if name not in named)]
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
@@ -1677,6 +1692,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     An ``AngeeHasuraWriteBackend`` declares relation identities once through
     ``public_id_fields``. Those fields supply the native input/filter decoders;
     explicit ``field_id_decode`` entries override their scalar conversion.
+
+    An update input always carries the model's create-only implementation selectors
+    (:func:`_with_create_only_selectors`); the model's save refuses a change to one except
+    while its stored key is not registered, and the resource metadata publishes them.
 
     ``delete=True`` also generates ``<res>_delete(id, confirm=False)`` and its
     delete-preview metadata. The active write backend must implement
@@ -1908,6 +1927,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write_adapter = resolve_hook("ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER") if insert else None
     if write_adapter is not None:
         resource_write_backend, insert_arguments = write_adapter(model, active_write_backend)
+    if update:
+        updatable = _with_create_only_selectors(model, updatable if updatable is not None else writable)
     declared_writable = [seq for seq in (writable, insertable, updatable) if seq is not None]
     _check_writable_relations_decoded(
         model,

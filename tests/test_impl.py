@@ -1843,22 +1843,28 @@ def test_each_create_only_selector_is_repaired_once_then_create_only(
 
 
 @pytest.mark.django_db
-def test_a_repair_saved_with_update_fields_naming_only_the_selector_leaves_the_stored_config_unreshaped() -> None:
-    """Pinned limit: the key moves; the config is not written, so it is not reshaped, checked or refused for a drop."""
+def test_a_repair_saved_with_update_fields_must_name_the_config_its_new_class_reads() -> None:
+    """Naming the selector alone is refused and moves nothing; naming the config too reshapes it."""
 
     bridge = _retired_bridge("repair-update-fields")
-    stored = {"local_root": "/srv/team", "retired_option": True}
     with system_context(reason="test.impl.repair.update_fields"):
-        VcsBridge._base_manager.filter(pk=bridge.pk).update(config=stored)
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
         row = VcsBridge._base_manager.get(pk=bridge.pk)
         row.backend_class = "local"
-        row.save(update_fields=["backend_class"])
-        assert VcsBridge._base_manager.values_list("backend_class", "config").get(pk=bridge.pk) == ("local", stored)
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            row.save(update_fields=["backend_class"])
+        assert refused.value.message_dict == {
+            "config": ["A save that changes the backend class with update_fields must name config too."],
+        }
+        assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "retired"
+        row.save(update_fields=["backend_class", "config"])
+        stored = VcsBridge._base_manager.values_list("backend_class", "config__local_root", "config__local_org")
+        assert stored.get(pk=bridge.pk) == ("local", "/srv/team", "local")
 
 
 @pytest.mark.django_db
-def test_a_stale_rename_after_a_repair_that_reshaped_the_config_is_refused_under_the_config() -> None:
-    """Pinned limit: a row loaded before a repair holds its loaded key, so its config must still be the stored one."""
+def test_a_stale_rename_after_a_repair_that_reshaped_the_config_is_refused_as_stale() -> None:
+    """A row loaded before a repair holds its loaded key; the stored row moved, so its old config is refused, stale."""
 
     bridge = _retired_bridge("stale-after-repair")
     with system_context(reason="test.impl.repair.stale"):
@@ -1870,11 +1876,38 @@ def test_a_stale_rename_after_a_repair_that_reshaped_the_config_is_refused_under
         stale.display_name = "Renamed after the repair"
         with pytest.raises(ValidationError) as refused, transaction.atomic():
             stale.save()
-        assert refused.value.message_dict == {
-            "config": ["The configuration cannot change while the backend class is not registered."],
-        }
+        assert [(error.code, error.message) for error in refused.value.error_list] == [
+            ("stale", "This record changed after it was loaded. Load it again, then make the change again."),
+        ]
         stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config__local_org")
         assert stored.get(pk=bridge.pk) == ("local", bridge.display_name, "local")
+
+
+@pytest.mark.django_db
+def test_a_feed_s_own_selector_is_repaired_leaving_the_channel_s_selector_and_its_repair_alone() -> None:
+    """The feed's selector owns the config: its repair reshapes it and leaves the channel's key, repaired after."""
+
+    feed_model = apps.get_model("posts", "Feed")
+    feed = make_integration("feed-two-selectors", model=feed_model, feed_backend_class="manual")
+    store_column(feed_model, feed.pk, "feed_backend_class", "retired")
+    # The channel's selector lives on the parent row (``inherits="messaging.Channel"``).
+    store_column(feed_model._meta.get_field("backend_class").model, feed.pk, "backend_class", "retired_channel")
+    with system_context(reason="test.impl.repair.feed"):
+        row = feed_model._base_manager.get(pk=feed.pk)
+        stored_config = row.config
+        row.feed_backend_class = "stub"
+        row.save()
+        assert feed_model._base_manager.values_list("feed_backend_class", "backend_class").get(pk=feed.pk) == (
+            "stub", "retired_channel",
+        )
+        row = feed_model._base_manager.get(pk=feed.pk)
+        reshaped = row.config
+        row.backend_class = "feed"
+        row.save()
+        stored = feed_model._base_manager.values_list("feed_backend_class", "backend_class", "config").get(pk=feed.pk)
+    assert stored == ("stub", "feed", reshaped)
+    stub = feed_model._meta.get_field("feed_backend_class").resolve_class("stub")
+    assert reshaped == stub.carried_config(stored_config)
 
 
 @pytest.mark.django_db

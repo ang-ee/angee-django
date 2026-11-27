@@ -39,6 +39,9 @@ class DataResourceFieldMetadata:
     aggregatable: bool = False
     creatable: bool = False
     updatable: bool = False
+    create_only: bool = False
+    """Whether the field is a create-only implementation selector: the update input carries it, and its
+    model's save allows a change only while the stored key is not registered (a repair)."""
     required_on_create: bool = False
     archivable: bool = False
     trashable: bool = False

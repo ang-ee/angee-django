@@ -18,7 +18,7 @@ from strawberry.types.lazy_type import LazyType
 from strawberry_django.utils.typing import get_django_definition
 from strawberry_django_hasura import SnakeNameConverter
 
-from angee.base.fields import ImplClassField
+from angee.base.fields import ImplClassField, create_only_selectors
 from angee.base.fields.state import StatusDisplay
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.graphql.data import contracts as data_contract
@@ -329,6 +329,7 @@ def final_resource_fields(
     aggregatable = set(aggregate_fields)
     creatable = set(create_fields)
     updatable = set(update_fields)
+    create_only = set(create_only_selectors(model)) if model is not None else set()
     required_on_create = set(required_create_fields)
     projected: list[data_contract.DataResourceFieldMetadata] = []
     for name, graphql_field in node.fields.items():
@@ -367,6 +368,7 @@ def final_resource_fields(
                            or (model_field is not None and model_field_name in creatable)),
                 updatable=(name in updatable or python_name in updatable
                            or (model_field is not None and model_field_name in updatable)),
+                create_only=model_field is not None and model_field_name in create_only,
                 required_on_create=(
                     name in required_on_create or python_name in required_on_create
                     or (model_field is not None and model_field_name in required_on_create)

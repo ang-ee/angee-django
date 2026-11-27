@@ -428,7 +428,7 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     groupable=["backend_class", "lifecycle", "runtime_status", "vendor", "vendor__display_name"],
     delete=True,
     insertable=["vendor", "credential", "account", "backend_class", "lifecycle", "config", "name", "base_url"],
-    updatable=["vendor", "credential", "account", "backend_class", "lifecycle", "config", "name", "base_url"],
+    updatable=["vendor", "credential", "account", "lifecycle", "config", "name", "base_url"],
     write_backend=IntegrationWriteBackend(
         InferenceProvider,
         public_id_fields=("vendor", "owner", "credential", "account"),
