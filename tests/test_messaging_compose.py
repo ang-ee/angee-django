@@ -1248,7 +1248,7 @@ def test_a_channels_sender_is_written_as_configured_over_an_earlier_spelling_of_
     assert _wire(channel, message)["From"] == "Desk <Desk@Example.TEST>"
 
 
-def _addresses(message: Any) -> list[str]:
+def _recorded_addresses(message: Any) -> list[str]:
     with system_context(reason="tests.messaging.compose.address"):
         return list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("address", flat=True))
 
@@ -1258,7 +1258,7 @@ def test_a_named_recipient_records_the_address_alone_as_compose_cleaned_it(desk:
 
     message = Message.objects.compose(channel=desk, to=["Client Name <Client@Example.test>"], text="Hi.",
                                       actor=desk.owner)
-    assert _addresses(message) == ["Client@Example.test"]
+    assert _recorded_addresses(message) == ["Client@Example.test"]
     assert _wire(desk, message)["To"] == "Client Name <Client@Example.test>"
 
 
@@ -1278,7 +1278,7 @@ def test_rows_written_from_a_handle_record_no_address(desk: Any) -> None:
         parent=_receive(desk, "rows-reply-to", reply_to="Answers <answers@example.test>"), text="Answer.",
         actor=desk.owner,
     )
-    assert [_addresses(message) for message in (ingested, answered, redirected)] == [[""], [""], [""]]
+    assert [_recorded_addresses(message) for message in (ingested, answered, redirected)] == [[""], [""], [""]]
 
 
 @pytest.mark.parametrize("erasure", ["the-handle-deleted", "the-channel-purged"])
@@ -1288,7 +1288,7 @@ def test_a_recipients_address_leaves_with_its_handle_and_with_its_channels_purge
     with system_context(reason="tests.messaging.compose.erasure"):
         contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
     message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
-    assert _addresses(message) == ["client@example.test"]
+    assert _recorded_addresses(message) == ["client@example.test"]
     if erasure == "the-handle-deleted":
         with system_context(reason="tests.messaging.compose.erasure"):
             Handle._base_manager.filter(pk=contact.pk).delete()
