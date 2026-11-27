@@ -7,6 +7,8 @@ import type { CreateAppInput } from "@angee/app/create-app";
 import { installTestLocalStorage } from "@angee/app/testing";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { ComposedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
+import ledgerAddon from "@angee/theme-ledger";
+import { themes as ledgerThemes } from "@angee/theme-ledger/themes";
 import stockAddon from "@angee/theme-stock";
 import { themes as stockThemes } from "@angee/theme-stock/themes";
 import { ConsoleLayout } from "@angee/ui";
@@ -17,6 +19,7 @@ import brandkit from "./index";
 import { ANGEE, HARBOUR, ORCHARD, brandKitResource, colorsOf, type KitRow } from "./views/brand-kits.test-support";
 
 const stock = stockThemes[0];
+const ledger = ledgerThemes[0];
 const TOKENS = ["--brand", "--surface-rail", "--surface-canvas"] as const;
 const NO_TOKENS = { "--brand": "", "--surface-rail": "", "--surface-canvas": "" };
 const root = () => document.documentElement;
@@ -161,16 +164,21 @@ describe("the default kit dresses the app", () => {
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(ORCHARD)));
   });
 
-  test("a fixed theme takes no kit and sends no read", async () => {
-    const fixed = defineTheme({
-      contractVersion: 1, id: "example.fixed", labelKey: "fixed.label", descriptionKey: "fixed.description", revision: 1,
-      tokens: { shared: {}, light: { "--brand": "#0a0a0a" }, dark: {} },
-    });
+  const fixed = defineTheme({
+    contractVersion: 1, id: "example.fixed", labelKey: "fixed.label", descriptionKey: "fixed.description", revision: 1,
+    tokens: { shared: {}, light: { "--brand": "#0a0a0a" }, dark: {} },
+  });
+  test.each([
+    { host: "a fixed theme", themeId: "example.fixed", token: "--brand", own: "#0a0a0a",
+      themes: [defineBaseAddon({ id: "theme.fixed", themes: [defineThemeContribution({ definition: fixed })] })] },
+    // As the ConsoleLedgerTheme story composes it: stock installed beside it, Orchard the default kit.
+    { host: "Ledger, which declines the host appearance source", themeId: "angee.ledger", token: "--surface-rail",
+      own: ledger.tokens.light["--surface-rail"], themes: [stockAddon, ledgerAddon] },
+  ] as const)("$host takes no kit and sends no read", async ({ themeId, token, own, themes }) => {
     const requests = recorder();
-    const themes = [defineBaseAddon({ id: "theme.fixed", themes: [defineThemeContribution({ definition: fixed })] })];
-    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} themeId="example.fixed" themes={themes} onRequest={requests.onRequest} />);
-    await waitFor(() => expect(root().dataset.themeId).toBe("example.fixed"));
-    expect(root().style.getPropertyValue("--brand")).toBe("#0a0a0a");
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} themeId={themeId} themes={themes} onRequest={requests.onRequest} />);
+    await waitFor(() => expect(root().dataset.themeId).toBe(themeId));
+    expect(root().style.getPropertyValue(token)).toBe(own);
     expect(requests.first("default_brand_kit_colors")).toBe(-1);
   });
 

@@ -29,6 +29,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from pydantic import BaseModel
 
+from angee.base.serialization import MAX_JSON_DOCUMENT_DEPTH
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.http import (
     HttpClient,
@@ -883,6 +884,20 @@ def test_a_refusal_has_a_status_or_a_failure() -> None:
         HttpRefusal()
     with pytest.raises(ValueError):
         HttpRefusal(status=503, failure=RequestNotSentError())
+
+
+def test_a_refusal_keeps_no_body_nested_past_the_document_bound() -> None:
+    """An error body a level past ``MAX_JSON_DOCUMENT_DEPTH`` is malformed JSON, which the refusal keeps none of."""
+
+    def body(depth: int) -> bytes:
+        levels = depth - 1
+        return b'{"error": ' + b"[" * levels + b"0" + b"]" * levels + b"}"
+
+    kept = HttpRefusal.of(httpx2.Response(502, content=body(MAX_JSON_DOCUMENT_DEPTH)))
+    dropped = HttpRefusal.of(httpx2.Response(502, content=body(MAX_JSON_DOCUMENT_DEPTH + 1)))
+
+    assert kept.body == json.loads(body(MAX_JSON_DOCUMENT_DEPTH))
+    assert (dropped.status, dropped.body) == (502, None)
 
 
 @pytest.mark.parametrize(

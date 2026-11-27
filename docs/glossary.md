@@ -718,7 +718,8 @@ source ([host and user precedence](frontend/appearance.md#host-and-user-preceden
 
 **Brand kit** — a deployment's brand facts, one `angee.brandkit` row per kit; once
 any exists, exactly one is the **default kit**. A theme owns structure and applies a
-kit (see the [brand kit README](../src/angee/brandkit/README.md)).
+kit, unless its options decline the host appearance source (see the
+[brand kit README](../src/angee/brandkit/README.md)).
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.

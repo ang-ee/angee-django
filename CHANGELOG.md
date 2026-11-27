@@ -10,6 +10,43 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
+  answers for `user`. It checked the ambient REBAC actor instead, so asking about
+  someone else returned the current actor's answer, and asking outside any actor
+  (a worker, a mail bridge) returned `False` even for an administrator. It now
+  checks `user`'s own effective membership of the platform-admin role
+  (`REBAC_UNIVERSAL_ADMIN_ROLE`), under any actor and inside a system context; an
+  anonymous user or `None` is still never an administrator. The framework's
+  callers (the platform-admin GraphQL gate, IAM's role and grant catalogues,
+  integrate's implementation choices and the profiling hook) pass the request's
+  own user, so their answers are unchanged. New
+  `angee.iam.roles.platform_admin_holders()` lists the user ids holding the role
+  in the shape of `protected_account_holders()`: every path REBAC's subject lookup
+  follows, `None` when every user holds it, empty when no role is configured.
+  **Upgrade:** a caller that passed one user while relying on the answer for the
+  ambient actor now gets that user's answer; pass the actor it means
+  (`get_current_user(info)` in a resolver), or ask
+  `angee.iam.permissions.current_actor_has_role(role)` about the ambient actor.
+  Code that spelled `platform_admin_role()` with `subject_has_role` or a subject
+  lookup to read someone else's membership or the role's holders can call
+  `is_platform_admin` or `platform_admin_holders()`.
+
+- Framework images: `django-angee-base` and `django-angee` build on the CPython
+  release `.python-version` pins, `python:3.14.9-slim`. The Dockerfile's
+  `PYTHON_VERSION` default stayed `3.14`, a tag that now carries 3.14.10, while the
+  dependency stage's `uv sync` reads the pin and never downloads an interpreter, so
+  every image build since the pin failed with `No interpreter found for Python
+  3.14.9` and no framework image was published. The default names the pin, and the
+  static tier's runtime image tests refuse a Dockerfile whose default differs from
+  `.python-version`: a pin change edits both. Docker rebuilds only the current
+  patch release's tags, so the base stage first upgrades the Debian packages of
+  `python:3.14.9-slim`'s last build (2026-10-21) when it builds.
+
+- CI: a pull request that changes `.python-version` runs the whole SQLite suite on
+  the interpreter it pins. The changed-path selection did not count the pin among
+  the inputs every test reads, so a pin change alone started no SQLite shard,
+  although the pin exists for the SQLite library that suite needs.
+
 - `angee.iam_messaging`: **Changed behaviour.** The emailed sign-in link is mailed
   from a message template, as system mail. The addon ships the template
   `iam_messaging.sign_in_link` in English and Spanish (`install` resources, in the
@@ -327,6 +364,22 @@ live in code docstrings.
   `saveBanner`. **Upgrade:** replace
   `focus: true` with that hook's `focusBanner` and spread its `banner` on the
   surface's `ErrorBanner`.
+- `@angee/ui`: **Changed behaviour.** A customised theme's link, and each tone's text
+  (`--brand-soft-text`, `--accent-soft-text` and the four status texts), read at 4.5:1
+  on their own fills and on every surface of their scheme (canvas, sheets, popover and
+  inset), in light and dark, wherever any colour can; where the surfaces pull opposite
+  ways and none can, the text is the colour that comes nearest. The link was worked out
+  against plain white and the dark ink and fell under that on a kit's sheets, most in
+  dark. Texts move toward the ink in hundredths, as the mail palette's do. A surface left
+  at its default counts as the theme's definition states it, else as its defaults derive
+  it, with a 1% margin; `ThemeOptionsDefinition.resolve(value, base?)` receives the
+  definition's own token layers from `resolveThemeOptions`. A text is worked out only
+  when its own input changes, so changing only surfaces keeps the theme's own link and
+  tone texts. A customisation may therefore show a darker link and tone text in light
+  and a lighter one in dark; a theme's own colours are unchanged. The theme runtime
+  feeds the theme catalogue's fingerprint, so each device drops its first-paint cache
+  once, on its first visit after the upgrade.
+
 - `angee.workflows`: **Changed behaviour.** A trigger row a resource load re-applies
   without a change to the trigger's rule keeps its state: enabled or disabled, its
   reason, the workflow principal's grant, its schedule cursor and its pending
@@ -388,9 +441,10 @@ live in code docstrings.
   row published although the entry declared `publish: false`. **Upgrade:** remove
   `draft` and `publish` from a workflow entry's `create_only`; no shipped entry lists
   either.
-- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`, `angee.theme_fyltr`,
+  `angee.theme_ledger`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
-  it, signed in or not.
+  it, signed in or not, unless its theme declines them.
   - `@angee/app` gains the install-one manifest key `hostAppearance`, a
     `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
     per render of its session frame; two providers fail composition, as two dashboard
@@ -402,6 +456,14 @@ live in code docstrings.
     `CreateAppInput.appearance` takes none.
     Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
     precedence".
+  - A customisable theme declines the source with
+    `createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`,
+    `@angee/ui`'s new optional `ThemeOptionsDefinition.acceptsHostAppearanceSource`
+    (default true; `defineTheme` refuses a non-boolean). `createApp` then asks the source
+    about no theme and no build options and wears none of its answer, as it wears none
+    for a theme without options, so the build's options for its own theme apply whole,
+    unheld. The flag is not in the options envelope: no options version changes. Fyltr
+    and Ledger decline; Default and Angee accept.
   - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
     colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
   - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
@@ -417,13 +479,17 @@ live in code docstrings.
     has, the public root answers `null` with no error and the app wears the build's
     colours. Once the addon is provisioned a default kit always exists, so on a host with
     `angee.brandkit`: a project on the stock theme (the full profile's default) wears
-    the shipped Angee kit's colours; a project on another customisable theme, such as
-    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
-    states in `appearance_options` show only on a device's first visit, before the read
-    answers; and every app of a deployment with per-app themes wears the kit's palette,
-    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
-    hosts without the addon, and a theme that ships its own default kit stating its own
-    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+    the shipped Angee kit's colours; a project on another customisable theme that
+    accepts the source, as one that says nothing does, wears the kit's palette in place
+    of its own; on such a theme, colours a build states in `appearance_options` show
+    only on a device's first visit, before the read answers; and every app of a
+    deployment with per-app themes wears the kit's palette on its own theme when that
+    theme accepts the source, locked apps too. Unchanged: the Angee theme under the
+    shipped kit, fixed themes, hosts without the addon, a theme that ships its own
+    default kit stating its own colours, and the Fyltr and Ledger themes, which decline
+    the source: a project or app on either sends no read and wears its own palette, or,
+    on the build's own theme, the build's `appearance_options` whole. To keep other
+    colours, edit the default kit in Settings > Brand kits.
   - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
     (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
     because the workshop's toolbar is the host's appearance there; a story about the
@@ -547,6 +613,93 @@ live in code docstrings.
   than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
   so a client holding the spent key starts a new request. A trigger admission
   still records the refusal on its event.
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
+  - A request body, WebSocket message or ACP record nested deeper than
+    `MAX_JSON_DOCUMENT_DEPTH` (128) is malformed JSON on every machine,
+    through `decode_json` in `angee.base.serialization`: the GraphQL view
+    answers Strawberry's own 400, a refused view-as preview still answers its
+    403, the GraphQL WebSocket closes with Strawberry's 4400, anonymous
+    ingress refuses it as `invalid_request`, and an agent's ACP WebSocket
+    skips the record as invalid JSON. Before, only the decoder's own limit
+    stood in the way, and on Python 3.14 it follows the thread's C stack (some
+    60,000 levels on a macOS main thread, 100,000 and more on GitHub's Linux
+    runners): past it, the decoder raised an uncaught `RecursionError`; within
+    it, the document reached the recursive walks behind the decoder. A
+    document too deep for a small thread's stack is malformed JSON too.
+  - The document bound admits every value the value bound admits. The deepest
+    envelope, a graphql-transport-ws message carrying a nested insert's line
+    field, encloses a value in 7 arrays and objects, so 71 is the least such
+    bound; a GraphQL HTTP body encloses one in 6, an ACP record its view
+    context in 4, and an ingress body its fields in 1. The rest of 128 leaves
+    an envelope room to grow and keeps graphql-core's input coercion and
+    strawberry-django-hasura's input reduction far inside Python's recursion
+    limit. `json_bound_violation` measures it, without the member bound.
+  - `angee.integrate` decodes a pasted key file and a vendor's error body
+    through `decode_json` as well: a key file nested past the document bound
+    is refused as "Paste the provider's JSON key file.", and a refusal keeps
+    no body nested past it.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
+- `angee.appearance_integrate`: **Changed behaviour.** Website appearance
+  analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
+  signed-in contract states. It refused only a request with no actor at all, so
+  the anonymous actor REBAC gives an unauthenticated request was admitted: it
+  could make the server fetch outside URLs, and every anonymous caller spent
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
@@ -1309,6 +1462,27 @@ live in code docstrings.
   compares the permission names, and one typed by `UserAccountAction` reads the
   field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
   `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
+- `angee.base`: **Changed behaviour.** A `DATABASE_URL` whose libpq `options`
+  carry other server settings now connects with JIT off too:
+  `angee.base.conf.disable_jit` puts `-c jit=off` before those options, where
+  the URL's options used to replace it and leave JIT at the server's default.
+  For example, `-c lock_timeout=1234` becomes `-c jit=off -c lock_timeout=1234`.
+  PostgreSQL applies the last setting, so a `jit` the URL sets itself still
+  wins, and a URL with no options still connects with `-c jit=off`. PostGIS URLs
+  (`postgis://`, `prometheus_postgis://`) now get the JIT setting and
+  `ANGEE_DB_POOL` too: one set of the PostgreSQL engines django-environ selects
+  replaces two `"postgresql" in ENGINE` checks. The test settings compose the
+  same rule, so the PostgreSQL CI lane's sessions now run with JIT off, as
+  deployed ones do. A hand-written `DATABASES` entry opts in by calling
+  `disable_jit`, which recognises only those four engines; a custom backend
+  path gets no setting. `PGOPTIONS` stays ignored on the connections built from
+  `DATABASE_URL`, because they always pass `options`; a hand-written `DATABASES`
+  entry without `options` still uses it. A direct client such as psql or
+  `dbshell` still gets the server's default; a diagnostic runs `SET jit = off`
+  first, or `PGOPTIONS='-c jit=off' manage.py dbshell`. **Upgrade:** nothing,
+  unless a deployment relied on URL options to leave JIT on; it now adds
+  `-c jit=on` to them. A PostGIS deployment with `ANGEE_DB_POOL` set now gets
+  the pool.
 - Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
   behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
   which judged only what `makemigrations` autodetects, now also judges the plan
@@ -1869,19 +2043,41 @@ live in code docstrings.
     drafts. Every signed-in actor reads kits; platform admins create, edit and
     delete them (`brandkit/brand_kit`).
   - **Font stacks** are a field, `FontStackField`, that checks every write
-    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
-    family names of letters, digits, spaces and hyphens, bare or single-quoted,
-    closed by an unquoted generic family. A bare family with a word that starts
-    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
-    refused. Double quotes are stored as single quotes.
+    reaching the database: a value written by `save`, `bulk_create` or
+    `update()`, of any type, is checked, and an expression (`F()`, `Value()`, a
+    function, and `bulk_update`, which writes through `Case`) is refused with a
+    `FieldError`, since the database computes its result past the check. It
+    admits family names of letters, digits, spaces and hyphens, bare or
+    single-quoted, closed by an unquoted generic family. A bare family with a
+    word that starts with a digit, a lone hyphen or a hyphen and a digit, or a
+    CSS-wide keyword is refused. Double quotes are stored as single quotes.
   - **Logos** are images storage's `FileManager.ingest_image` put on its image
     drive; `BrandKit.clean` refuses any other file when a logo changes. The
     console reads the logos and writes neither.
   - **Exactly one default kit.** Once any kit exists, writes through `save()` and
     `clean()` keep one: the first kit saved becomes the default, saving another
     kit as the default takes the flag from the previous one, and the default can
-    be neither unticked nor deleted, on any delete path. A conditional unique
-    constraint refuses a second default written past the save.
+    be neither unticked nor deleted, on any delete path. Changes of default made
+    at once take turns: every kit is locked, in key order
+    (`BrandKitManager.lock_default`), before any kit row by a save that can move
+    the default, every console write and changeset revert of a kit, every delete,
+    and a resource load that writes kits (once, before its first row), so the
+    second change waits and then takes the default from the first. A save that
+    marks a stored kit not the default rereads its flag under the kit's row lock,
+    so an edit cleaned before its kit became the default is refused, as `clean()`
+    refuses it, instead of leaving no default. A changeset revert restores the
+    kit that was the default before the changeset ahead of every other kit, so
+    reverting a change of default does not meet that refusal, unless the previous
+    default points at a row the same changeset deleted (a purged file it showed as
+    a logo or dark logo): the revert restores that row first, and another kit can
+    then go ahead of the previous default and be refused. Two writers take kit
+    rows without the lock: a file purge that clears the logo or dark logo of two
+    or more kits, which can deadlock with a change of default (one of the two
+    fails with a database error); and the
+    second of two first kits created at once into an empty table, which fails on
+    the conditional unique constraint with a database error (provisioning loads
+    the first kit, so a person does not reach it). The same constraint refuses a
+    second default written past the save.
     `BrandKit.objects.default()` returns it, or `None` before any kit exists,
     after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail

@@ -182,6 +182,16 @@ Use these owners instead of maintaining another contract in an addon:
   `check --database default`) verifies the co-location. Permission reads never
   run on a replica: a lagging replica serves grants already revoked on the
   primary.
+- **PostgreSQL JIT:** the Django connections Angee builds from `DATABASE_URL`
+  run with JIT off ([`disable_jit`](../../src/angee/base/conf/__init__.py)),
+  unless the URL's libpq `options` set `jit` themselves. An authored `DATABASES`
+  stays authoritative; `disable_jit` is public so a hand-written entry can opt
+  in. It recognises only the four PostgreSQL engines django-environ selects, and
+  a custom backend path gets no setting. Because Angee always passes `options`,
+  libpq ignores `PGOPTIONS` on these connections: put session settings in the
+  URL's `options`. A direct client (psql, `dbshell`, a measurement script) gets
+  the server's default, so a diagnostic runs `SET jit = off` first, or starts as
+  `PGOPTIONS='-c jit=off' manage.py dbshell`.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -1852,6 +1862,25 @@ open fresh evaluator scopes for authorization and change-feed reads.
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
+- **A `JSON` input keeps Angee's JSON bounds.** Every schema
+  [`GraphQLSchemas`](../../src/angee/graphql/schema.py) builds maps Strawberry's
+  `JSON` scalar to `JSON_SCALAR`, which holds a `JSON` argument or input field,
+  variable or literal, to `MAX_JSON_DEPTH` and `MAX_JSON_MEMBERS`
+  ([`json_bound_violation`](../../src/angee/base/serialization.py)): how many
+  arrays and objects may enclose a member, and how many members it holds as an
+  expanding walk counts them, a repeated reference counted each time. A value
+  past either is refused as `BAD_USER_INPUT` while the request is coerced, so
+  no resolver, permission check or query runs for it. A `JSON` literal cannot
+  embed a variable; a client passes the whole value as one variable, which
+  graphql-core coerces once per operation. `validation_issues` and `validate`
+  apply the same bounds before a JSON Schema keyword walks a value. A body or
+  WebSocket message nested past `MAX_JSON_DOCUMENT_DEPTH` is malformed JSON
+  (`decode_json`), answered as Strawberry answers any other. That document
+  bound admits a value at `MAX_JSON_DEPTH` inside the deepest envelope its
+  docstring measures; an input path that nests a `JSON` field deeper
+  re-derives it. A domain bound stays with its owner:
+  `GraphQLSchemas.resource_filter` bounds a stored resource condition's depth
+  with the same walk.
 - **Delete previews are generated with the resource's delete surface.**
   [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
   `<resource>_delete(id, confirm)` and its metadata when `delete=True`.

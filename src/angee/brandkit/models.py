@@ -9,7 +9,8 @@ voice note for people and AI drafts.
 and :meth:`BrandKit.clean` keep exactly one default (:meth:`BrandKitQuerySet.default`):
 the first kit saved while none is the default takes the flag, saving another kit
 as the default takes it from the previous one, and the default can neither be
-unticked nor, on any delete path, deleted. A write past ``save`` and ``clean``
+unticked nor, on any delete path, deleted. Changes of default made at once take
+turns (:meth:`BrandKitManager.lock_default`). A write past ``save`` and ``clean``
 can leave none.
 
 **Colours are theme inputs.** Each colour column is named exactly as the theme
@@ -35,10 +36,10 @@ else of any kit, through the ``read_colors`` disclosure (``permissions.zed``).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -47,11 +48,14 @@ from rebac import PermissionDenied
 
 from angee.base.fields.text import ColorField
 from angee.base.models.base import AngeeDataModel
+from angee.base.querysets import row_lock_queryset
 from angee.base.validators import HEX_COLOR_VALIDATOR
 from angee.brandkit.fields import FontStackField
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.brandkit.resources import BrandKitResource
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 
 DEFAULT_DELETE_MESSAGE = "This is the default kit. Make another kit the default before deleting it."
 DEFAULT_UNTICK_MESSAGE = "This is the default kit: make another kit the default instead."
@@ -251,16 +255,41 @@ _BrandKitManagerBase = AngeeHistoryManager.from_queryset(BrandKitQuerySet)
 class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
     """Owns the one-default rule across brand kits."""
 
+    def lock_default(self) -> None:
+        """Lock every kit, in key order: the lock a write takes before it moves or judges the default.
+
+        No one row stands for the default, so every kit row is the lock. These
+        writers take it before any kit row, so they take kit rows in one order and a
+        second change of default waits for the first, then reads the default it left:
+        a save that can move the default (:meth:`demote_defaults`); every write that
+        locks its kit before saving it, the console's and a changeset revert's
+        (:meth:`BrandKit.lock_subject`); every delete (:meth:`BrandKit.lock_for_delete`);
+        and a resource load that writes kits, once before its first row
+        (:class:`~angee.brandkit.resources.BrandKitResource`). A save that cannot
+        move the default takes only its own row.
+
+        Two writers take kit rows without it. A file purge clears the logo or dark
+        logo of every kit that shows the file, one column at a time, and the history
+        capture locks those kits in scan order; when the file shows on two or more
+        kits it can deadlock with a change of default, and one of the two then fails
+        with a database error (on one kit it holds a single kit row, which closes no
+        cycle). And an empty table has no row to lock: of two first kits created at
+        once, the second fails on the one-default constraint with a database error,
+        which a person does not reach because provisioning loads the first kit.
+        """
+
+        list(row_lock_queryset(self.model).order_by("pk").values_list("pk", flat=True))
+
     def demote_defaults(self, kit: KitT) -> None:
-        """Authorize and clear every other default inside the saving kit's transaction.
+        """Authorize and clear every other default inside the saving kit's transaction, under :meth:`lock_default`.
 
         The saving actor must be able to write the kit it takes the default from;
         named system work always may.
         """
 
+        self.lock_default()
         previous = list(
             self.sudo(reason="brandkit.brand_kit.default_integrity")
-            .lock_if_supported()
             .filter(is_default=True)
             .exclude(pk=kit.pk)
         )
@@ -275,9 +304,28 @@ class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
         ).update(is_default=False)
 
 
-class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
+class BrandKitHistory(ModelHistory):
+    """A kit's record history: a revert restores the kit that regains the default before every other kit."""
+
+    def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
+        """Order a kit that was the default before the changeset ahead of the kits that were not.
+
+        Its save takes the default back, so restoring the kit that took it is no
+        untick, whichever kit the changeset wrote first. The revert still restores a
+        row the changeset deleted before the rows that point at it: when the previous
+        default points at one (a purged logo file), another kit can go first and is
+        refused as an untick.
+        """
+
+        *order, version = super().revert_order(first, last, previous)
+        return (*order, not (previous is not None and previous.is_default), version)
+
+
+class BrandKit(ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One brand: its name, colours, fonts, logos, mail footer and voice."""
 
+    history = BrandKitHistory(inherit=True)
+    resource_class = BrandKitResource
     sqid_prefix = "bkt_"
 
     name = models.CharField(max_length=128)
@@ -406,20 +454,46 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
         del cascaded
         return DEFAULT_DELETE_MESSAGE if self.is_default else None
 
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock every kit, then this one, so a delete judges the default under :meth:`BrandKitManager.lock_default`."""
+
+        type(self).objects.lock_default()
+        return super().lock_for_delete(queryset=queryset)
+
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
+        """Lock every kit, then this one (:meth:`BrandKitManager.lock_default`).
+
+        A writer that locks its kit before saving it, the console's or a changeset
+        revert's, cannot know before the lock whether the kit is the default by the
+        time it saves, so it always takes every kit first, in the order every change
+        of default takes.
+        """
+
+        type(self).objects.lock_default()
+        return super().lock_subject(members)
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Save the kit, keeping exactly one default.
 
         The first kit saved while no kit is the default takes the flag; a kit saved
         as the default takes it from the previous one
-        (:meth:`BrandKitManager.demote_defaults`).
+        (:meth:`BrandKitManager.demote_defaults`). A stored kit saved as not the
+        default is refused if, read under its row lock, it is the default, as
+        :meth:`clean` refuses it before the save: an edit cleaned before the kit
+        became the default never unticks it.
         """
 
         update_fields = kwargs.get("update_fields")
+        writes_default = update_fields is None or "is_default" in update_fields
         with transaction.atomic():
             if self._state.adding and not self.is_default:
                 self.is_default = not type(self).system_queryset().filter(is_default=True).exists()
-            if self.is_default and (update_fields is None or "is_default" in update_fields):
+            if self.is_default and writes_default:
                 type(self).objects.demote_defaults(self)
+            elif writes_default and not self._state.adding and (
+                row_lock_queryset(type(self)).filter(pk=self.pk).values_list("is_default", flat=True).first()
+            ):
+                raise ValidationError({"is_default": DEFAULT_UNTICK_MESSAGE})
             super().save(*args, **kwargs)
 
     def mail_palette(self) -> dict[str, dict[str, str]]:

@@ -718,6 +718,12 @@ importers:
       '@angee/theme-angee':
         specifier: workspace:*
         version: link:../../theme_angee/web
+      '@angee/theme-fyltr':
+        specifier: workspace:*
+        version: link:../../theme_fyltr/web
+      '@angee/theme-ledger':
+        specifier: workspace:*
+        version: link:../../theme_ledger/web
       '@angee/theme-stock':
         specifier: workspace:*
         version: link:../../theme_stock/web
@@ -1581,6 +1587,9 @@ importers:
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
+      use-debounce:
+        specifier: ^10.1.1
+        version: 10.1.1(react@19.3.1)
     devDependencies:
       '@angee/storybook':
         specifier: workspace:*
