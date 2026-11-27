@@ -17,5 +17,5 @@ For the pressed column itself a press is the table's own single-sort toggle, as 
 key placed ahead of the group's keys, and a tie-breaker still sorts in its first direction.
 A press on a grouping column's own
 header turns its groups, ascending and descending in turn, never removing its key, and
-the keys the rows follow go; with several grouping levels the other levels' keys stay. A list that
-groups nothing presses as before.
+keeps the keys the rows follow and, with several grouping levels, the other levels' keys (the note
+on groups following their axis). A list that groups nothing presses as before.

@@ -359,6 +359,12 @@ function recordsByGroup(mounted: Mounted): Record<string, string[]> {
   return records;
 }
 
+/** A server list's groups read: the order it asks each group's records in, key by key ("rank asc"). */
+function recordsRead(mounted: Mounted): string[] {
+  const variables = mounted.custom.mock.calls.map(([call]) => call.meta?.gqlVariables as GroupsVariables).filter((read) => read?.with_rows).at(-1);
+  return Object.entries(variables?.rows_order_by ?? {}).map(([field, direction]) => `${field} ${direction}`);
+}
+
 /** Press a header's sort button, then look once the list has settled and its groups are open. */
 async function press(mounted: Mounted, name: string): Promise<Look> {
   fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Sort ${name} `) }));
@@ -393,16 +399,36 @@ test("1. a server list whose order leads with the group key: a press on the grou
   const list = await mount({ kind: "server", declared: "status asc, rank asc", groupStack: byStatus, columns: STATUS_COLUMNS });
   expect(look(list)).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: "status asc, rank asc",
     headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", read: ["status asc nulls last"] });
-  // The grouping column's press is the table's single sort: the rank tie-breaker goes, and no key the records follow is left.
-  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc",
-    headers: { Status: "descending", Title: "none", Rank: "none" }, read: ["status desc nulls last"] });
-  expect(await press(list, "Status")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "status asc",
-    headers: { Status: "ascending", Title: "none", Rank: "none" }, read: ["status asc nulls last"] });
-  // A press on another column orders the records and keeps the group key, behind it.
-  expect(await press(list, "Rank")).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: "rank asc, status asc",
+  // The grouping column's press turns the groups and leaves the records' order alone: the rank key stays behind the
+  // turned status key, so Rank still says ascending and the records read asks for it. (It was the table's single sort,
+  // `status desc` alone: the rank key went, and no key the records followed was left.)
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc, rank asc",
+    headers: { Status: "descending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", read: ["status desc nulls last"] });
+  expect(recordsRead(list)).toEqual(["status desc", "rank asc"]);
+  expect(await press(list, "Status")).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: "status asc, rank asc",
     headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", read: ["status asc nulls last"] });
-  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc",
-    headers: { Status: "descending", Title: "none", Rank: "none" }, read: ["status desc nulls last"] });
+  expect(recordsRead(list)).toEqual(["status asc", "rank asc"]);
+  // A press on another column orders the records and keeps the group key, behind it: Rank is held, so it turns.
+  expect(await press(list, "Rank")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "rank desc, status asc",
+    headers: { Status: "ascending", Title: "none", Rank: "descending" }, ariaSort: "Rank descending", read: ["status asc nulls last"] });
+  // The turned group key leads again, the rank key behind it, as the table is handed them.
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Kilo", "Papa"], sorting: "status desc, rank desc",
+    headers: { Status: "descending", Title: "none", Rank: "descending" }, ariaSort: "Rank descending", read: ["status desc nulls last"] });
+  expect(recordsRead(list)).toEqual(["status desc", "rank desc"]);
+});
+
+/** The tasks with Kilo tied with Papa on rank, so their titles order them: Kilo first, where the provider answers Papa first. */
+const TIED: readonly Row[] = TASKS.map((row) => (row.id === "k" ? { ...row, rank: 6 } : row));
+test.each(["client", "server"] as const)("1. a %s list ordered by its group key, rank, then title: a press on the grouping column turns the groups, and their records keep rank, then title", async (kind) => {
+  const list = await mount({ kind, declared: "status asc, rank asc, title asc", groupStack: byStatus, columns: STATUS_COLUMNS, rows: TIED });
+  const read = (direction: string) => kind === "server" ? { read: [`status ${direction} nulls last`] } : {};
+  expect(look(list)).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: "status asc, rank asc, title asc",
+    headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", ...read("asc") });
+  // Rank keeps its aria-sort and title stays the tie-breaker, its header "not sorted".
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Kilo", "Papa"], sorting: "status desc, rank asc, title asc",
+    headers: { Status: "descending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", ...read("desc") });
+  expect(recordsByGroup(list)).toEqual({ pending: ["Kilo", "Papa"], open: ["Delta", "Alpha"], closed: ["Echo", "Charlie"], blocked: ["Lima", "Bravo"] });
+  if (kind === "server") expect(recordsRead(list)).toEqual(["status desc", "rank asc", "title asc"]);
 });
 
 test("1. a server list whose order holds the group key descending opens with its groups descending", async () => {
@@ -416,24 +442,45 @@ test("2. a server list whose order does not hold the group key: groups ascending
   expect(look(list)).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: "rank asc",
     headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", read: ["status asc nulls last"] });
   // It shows ascending already, so the first press writes the key descending: a press that changed nothing would be a dead control.
-  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc",
-    headers: { Status: "descending", Title: "none", Rank: "none" }, read: ["status desc nulls last"] });
-  expect(await press(list, "Status")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "status asc",
-    headers: { Status: "ascending", Title: "none", Rank: "none" }, read: ["status asc nulls last"] });
+  // It writes it ahead of the rank key, which stays: the records keep following rank (they followed none, `status desc` alone).
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc, rank asc",
+    headers: { Status: "descending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", read: ["status desc nulls last"] });
+  expect(await press(list, "Status")).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: "status asc, rank asc",
+    headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending", read: ["status asc nulls last"] });
   // Held from then on, never removed.
-  expect((await press(list, "Status")).sorting).toBe("status desc");
+  expect((await press(list, "Status")).sorting).toBe("status desc, rank asc");
+});
+
+test("2. a browser list ordered by another key, more tasks than the table library samples: the grouping column's press turns the groups, and back, its records keeping that key's order", async () => {
+  viewport = 10_000;
+  const rows = [...WITH_EMPTY, ...FILLERS];
+  const list = await mount({ kind: "client", declared: "rank desc", groupStack: byStatus, columns: STATUS_COLUMNS, rows });
+  // Each group's records by rank, highest first, a tie in the provider's order; the tasks with no status under "No value".
+  const byRank = Object.fromEntries([...ASC, null].map((status) => [status ?? EMPTY, rows.filter((row) => row.status === status)
+    .sort((left, right) => Number(right.rank) - Number(left.rank)).map((row) => String(row.title))]));
+  const ranked = { headers: { Status: "ascending", Title: "none", Rank: "descending" }, ariaSort: "Rank descending" };
+  expect(look(list)).toMatchObject({ groups: [...ASC, EMPTY], sorting: "rank desc", ...ranked });
+  expect(recordsByGroup(list)).toEqual(byRank);
+  // Rank still says descending, in its button and its aria-sort, and each group's records keep their rank order.
+  expect(await press(list, "Status")).toMatchObject({ groups: [...DESC, EMPTY], sorting: "status desc, rank desc",
+    ...ranked, headers: { ...ranked.headers, Status: "descending" } });
+  expect(recordsByGroup(list)).toEqual(byRank);
+  expect(await press(list, "Status")).toMatchObject({ groups: [...ASC, EMPTY], sorting: "status asc, rank desc", ...ranked });
+  expect(recordsByGroup(list)).toEqual(byRank);
 });
 
 test.each(["client", "rows"] as const)("3. a %s list grouped in the browser, its order leading with the group key: the groups as before, the grouping button shows their direction", async (kind) => {
   const list = await mount({ kind, declared: "status asc, rank asc", groupStack: byStatus, columns: STATUS_COLUMNS });
   expect(look(list)).toEqual({ groups: ASC, first: ["Lima", "Bravo"], sorting: kind === "rows" ? "(inherited)" : "status asc, rank asc",
     headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending" });
-  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc",
-    headers: { Status: "descending", Title: "none", Rank: "none" } });
+  // Each press on Status keeps the key the records follow behind the turned status key (it dropped it: `status desc`, then
+  // `status asc`, and the records kept the provider's order).
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc, rank asc",
+    headers: { Status: "descending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending" });
   expect(await press(list, "Title")).toEqual({ groups: DESC, first: ["Kilo", "Papa"], sorting: "title asc, status desc",
     headers: { Status: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
-  expect(await press(list, "Status")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "status asc",
-    headers: { Status: "ascending", Title: "none", Rank: "none" } });
+  expect(await press(list, "Status")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "status asc, title asc",
+    headers: { Status: "ascending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
 });
 
 test("4. a browser list whose order holds the group key behind another: its groups follow their axis as it opens, its order unwritten", async () => {
@@ -443,8 +490,10 @@ test("4. a browser list whose order holds the group key behind another: its grou
     headers: { Status: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending" });
   expect(await press(list, "Title")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "title asc, status asc",
     headers: { Status: "ascending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
-  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc",
-    headers: { Status: "descending", Title: "none", Rank: "none" } });
+  // The status key, held behind the title key, turns and leads, as the table is handed it, and the title key stays behind
+  // it: the records keep their titles' order (it was `status desc` alone, the records in the provider's order).
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Kilo", "Papa"], sorting: "status desc, title asc",
+    headers: { Status: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
 });
 
 test("4. a browser list whose order holds the group key descending behind another opens with its groups descending", async () => {
@@ -485,8 +534,10 @@ test.each(["client", "server"] as const)("6. a %s list a person groups through \
   // Title only breaks the rank ties: its first press sorts it ascending, alone with no group key to keep.
   expect(await press(list, "Title")).toEqual({ groups: ASC, first: ["Bravo", "Lima"], sorting: "title asc",
     headers: { Status: "ascending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending", ...read });
-  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Papa", "Kilo"], sorting: "status desc",
-    headers: { Status: "descending", Title: "none", Rank: "none" }, ...(kind === "server" ? { read: ["status desc nulls last"] } : {}) });
+  // The press on Status turns the groups and keeps the title key behind it (it set `status desc` alone).
+  expect(await press(list, "Status")).toEqual({ groups: DESC, first: ["Kilo", "Papa"], sorting: "status desc, title asc",
+    headers: { Status: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending",
+    ...(kind === "server" ? { read: ["status desc nulls last"] } : {}) });
 });
 
 const MONTHS = ["January 2026", "February 2026", "March 2026", "April 2026"];
@@ -539,9 +590,11 @@ test("7. a browser list grouped by day lists the days in date order, and a press
   // A day is one date, so the date column is the grouping column: its button shows the days' direction.
   expect(look(list)).toEqual({ groups: DAYS, first: ["Papa"], sorting: "rank asc", headers: { Due: "ascending", Title: "none", Rank: "ascending" },
     ariaSort: "Rank ascending" });
-  expect(await press(list, "Due")).toEqual({ groups: [...DAYS].reverse(), first: ["Kilo"], sorting: "due desc",
-    headers: { Due: "descending", Title: "none", Rank: "none" } });
-  expect(await press(list, "Due")).toEqual({ groups: DAYS, first: ["Papa"], sorting: "due asc", headers: { Due: "ascending", Title: "none", Rank: "none" } });
+  // Its press keeps the rank key the records follow behind the date's (it set `due desc` alone, and Rank went to "not sorted").
+  expect(await press(list, "Due")).toEqual({ groups: [...DAYS].reverse(), first: ["Kilo"], sorting: "due desc, rank asc",
+    headers: { Due: "descending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending" });
+  expect(await press(list, "Due")).toEqual({ groups: DAYS, first: ["Papa"], sorting: "due asc, rank asc",
+    headers: { Due: "ascending", Title: "none", Rank: "ascending" }, ariaSort: "Rank ascending" });
   expect(await press(list, "Title")).toEqual({ groups: DAYS, first: ["Papa"], sorting: "title asc, due asc",
     headers: { Due: "ascending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
 });
@@ -560,15 +613,39 @@ test.each([
   expect(look(list)).toEqual({ groups: levels(outer, inner), first, sorting: declared, headers, ariaSort });
 });
 
-test("8. on two levels grouped in the browser, a press on either grouping column turns its own level and keeps the other's key", async () => {
+test("8. on two levels grouped in the browser, a press on either grouping column turns its own level and keeps the other's key and the records'", async () => {
   const list = await mount({ kind: "client", declared: "status asc, title asc", groupStack: TWO_LEVELS, columns: KIND_COLUMNS });
-  // Kind's key is not held, so it shows ascending and its first press writes it descending.
-  expect(await press(list, "Kind")).toEqual({ groups: levels(ASC, ["task", "bug"]), first: ["Lima", "Bravo"], sorting: "kind desc, status asc",
-    headers: { Status: "ascending", Kind: "descending", Title: "none", Rank: "none" } });
-  expect(await press(list, "Status")).toEqual({ groups: levels(DESC, ["task", "bug"]), first: ["Papa", "Kilo"], sorting: "status desc, kind desc",
-    headers: { Status: "descending", Kind: "descending", Title: "none", Rank: "none" } });
-  expect(await press(list, "Title")).toEqual({ groups: levels(DESC, ["task", "bug"]), first: ["Papa", "Kilo"], sorting: "title asc, status desc, kind desc",
+  // Kind's key is not held, so it shows ascending and its first press writes it descending. Each press keeps the other
+  // level's key and the title key the records follow, in their order (it kept only the other level's: `kind desc, status
+  // asc`, then `status desc, kind desc`, and Title went to "not sorted").
+  expect(await press(list, "Kind")).toEqual({ groups: levels(ASC, ["task", "bug"]), first: ["Lima", "Bravo"], sorting: "kind desc, status asc, title asc",
+    headers: { Status: "ascending", Kind: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
+  expect(await press(list, "Status")).toEqual({ groups: levels(DESC, ["task", "bug"]), first: ["Papa", "Kilo"], sorting: "status desc, kind desc, title asc",
     headers: { Status: "descending", Kind: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
+  // Title is held, the key the records follow, so its press turns it; both levels' keys stay behind it.
+  expect(await press(list, "Title")).toEqual({ groups: levels(DESC, ["task", "bug"]), first: ["Papa", "Kilo"], sorting: "title desc, status desc, kind desc",
+    headers: { Status: "descending", Kind: "descending", Title: "descending", Rank: "none" }, ariaSort: "Title descending" });
+});
+
+test("8. on a level of months under a grouping column, that column's press keeps the date the months follow: the months stay as they were", async () => {
+  const list = await mount({ kind: "client", declared: "due desc, rank asc",
+    groupStack: [{ field: "status" }, { field: "due", granularity: "month" }], columns: ["status", "due", "title", "rank"] });
+  // Each outer group's months, as places in the calendar, in the order the list shows them.
+  const months = (seen: Look) => seen.groups.reduce<number[][]>((outer, group) => {
+    if (group.startsWith("· ")) outer.at(-1)!.push(MONTHS.indexOf(group.slice(2)));
+    else outer.push([]);
+    return outer;
+  }, []);
+  const newestFirst = (seen: Look) => months(seen).some((inner) => inner.length > 1)
+    && months(seen).every((inner) => inner.every((month, index) => index === 0 || month < inner[index - 1]!));
+  expect(newestFirst(look(list))).toBe(true);
+  // A month level shares no key of the order, so the date it follows is one of the keys a grouping column's press
+  // keeps (the date went with the records' keys: `status desc` alone, the months back to oldest first and Due "not
+  // sorted").
+  const turned = await press(list, "Status");
+  expect([turned.sorting, turned.headers.Status, turned.headers.Due, turned.ariaSort])
+    .toEqual(["status desc, due desc, rank asc", "descending", "descending", "Due descending"]);
+  expect(newestFirst(turned)).toBe(true);
 });
 
 /** Three tasks with no status, of both kinds; one is second, so first appearance never puts them last. */
@@ -634,9 +711,10 @@ test.each([
   const list = await mount({ kind: "client", declared, groupStack: [{ field: "owner" }], columns: OWNER_COLUMNS });
   expect(look(list)).toEqual({ groups: OWNERS, first: ["Bravo", "Echo"], sorting: declared, headers: { Owner: "ascending", Title: "ascending", Rank: "none" },
     ariaSort: "Title ascending" });
-  // The owner's name is a member of the grouped relation: its press turns the groups, and the identity key goes with it.
-  expect(await press(list, "Owner")).toEqual({ groups: [...OWNERS].reverse(), first: ["Papa", "Delta"], sorting: "owner.name desc",
-    headers: { Owner: "descending", Title: "none", Rank: "none" } });
+  // The owner's name is a member of the grouped relation: its press turns the groups, and the identity key, which the axis
+  // shares too, goes with it; the title key the records follow stays (it went too: `owner.name desc` alone).
+  expect(await press(list, "Owner")).toEqual({ groups: [...OWNERS].reverse(), first: ["Delta", "Papa"], sorting: "owner.name desc, title asc",
+    headers: { Owner: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending" });
   expect((await press(list, "Owner")).groups).toEqual(OWNERS);
 });
 
@@ -644,8 +722,10 @@ test("10. a server list grouped by a relation asks for its groups by name, then 
   const list = await mount({ kind: "server", declared: "owner.name desc, title asc", groupStack: [{ field: "owner" }], columns: OWNER_COLUMNS });
   expect(look(list)).toEqual({ groups: [...OWNERS].reverse(), first: ["Delta", "Papa"], sorting: "owner.name desc, title asc",
     headers: { Owner: "descending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending", read: ["owner__name desc nulls last", "owner_id desc nulls last"] });
-  expect(await press(list, "Owner")).toEqual({ groups: OWNERS, first: ["Bravo", "Echo"], sorting: "owner.name asc",
-    headers: { Owner: "ascending", Title: "none", Rank: "none" }, read: ["owner__name asc nulls last", "owner_id asc nulls last"] });
+  // The title key stays behind the turned name key (it went: `owner.name asc` alone).
+  expect(await press(list, "Owner")).toEqual({ groups: OWNERS, first: ["Bravo", "Echo"], sorting: "owner.name asc, title asc",
+    headers: { Owner: "ascending", Title: "ascending", Rank: "none" }, ariaSort: "Title ascending", read: ["owner__name asc nulls last", "owner_id asc nulls last"] });
+  expect(recordsRead(list)).toEqual(["owner.name asc", "title asc"]);
 });
 
 const PRIORITY_LABELS = ["Urgent", "Low", "Medium", "High"];
@@ -656,8 +736,9 @@ test.each(["client", "rows", "server"] as const)("10. a %s list grouped by a cho
   const labels = kind === "rows" ? ["p1", "p2", "p3", "p4"] : PRIORITY_LABELS;
   expect(look(list)).toEqual({ groups: labels, first: ["Delta", "Papa"], sorting: kind === "rows" ? "(inherited)" : "title asc",
     headers: { Priority: "ascending", Title: "ascending" }, ariaSort: "Title ascending", ...read("asc") });
-  expect(await press(list, "Priority")).toEqual({ groups: [...labels].reverse(), first: ["Bravo", "Lima"], sorting: "priority desc",
-    headers: { Priority: "descending", Title: "none" }, ...read("desc") });
+  // The title key stays behind the turned priority key (it went: `priority desc` alone).
+  expect(await press(list, "Priority")).toEqual({ groups: [...labels].reverse(), first: ["Bravo", "Lima"], sorting: "priority desc, title asc",
+    headers: { Priority: "descending", Title: "ascending" }, ariaSort: "Title ascending", ...read("desc") });
 });
 
 const PANE_COLUMNS = ["status", "rank", "title"];
@@ -767,10 +848,10 @@ test.each(["client", "server"] as const)("14. a grouped %s list puts aria-sort o
   const list = await mount({ kind, declared: "rank asc", groupStack: byStatus, columns: STATUS_COLUMNS });
   expect(look(list)).toMatchObject({ headers: { Status: "ascending", Rank: "ascending" }, ariaSort: "Rank ascending" });
   expect(headerOf("Sort Status (currently ascending)").getAttribute("aria-sort")).toBe("none");
-  // Its press turns its button's name while its aria-sort stays "none"; the records then follow no key, so no header says one.
+  // Its press turns its button's name while its aria-sort stays "none"; the records keep following rank, whose header keeps
+  // saying so (the rank key went, the records then followed no key, and no header said one).
   const pressed = await press(list, "Status");
-  expect(pressed).toMatchObject({ groups: DESC, headers: { Status: "descending", Rank: "none" } });
-  expect(pressed.ariaSort).toBeUndefined();
+  expect(pressed).toMatchObject({ groups: DESC, headers: { Status: "descending", Rank: "ascending" }, ariaSort: "Rank ascending" });
   expect(headerOf("Sort Status (currently descending)").getAttribute("aria-sort")).toBe("none");
   expect(await press(list, "Title")).toMatchObject({ sorting: "title asc, status desc", headers: { Status: "descending", Title: "ascending" }, ariaSort: "Title ascending" });
   expect(headerOf("Sort Status (currently descending)").getAttribute("aria-sort")).toBe("none");

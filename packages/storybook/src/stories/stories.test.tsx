@@ -253,20 +253,28 @@ test("Views/ListView / Grouped Behind Another Key lists its groups by status wha
   const shownChores = () => screen.queryAllByText(CHORES).slice(0, 3).map((cell) => cell.textContent);
   fireEvent.click(screen.getByRole("button", { name: /^doing/ }));
   await waitFor(() => expect(shownChores()).toEqual(["Chore 12", "Chore 40", "Chore 28"]));
-  // The grouping column's press turns the groups; the effort key goes, so the open group's chores keep the read's order,
-  // and no header's aria-sort says a direction.
+  // The grouping column's press turns the groups and leaves the records' order alone: the effort key stays behind the
+  // status key, so the open group's chores keep their effort order and Effort keeps its aria-sort. (The effort key went:
+  // the chores fell to the read's order, Chore 04, 08, 12, and no header's aria-sort said a direction.)
   fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
   await waitFor(() => expect(groups()).toEqual(["todo", "done", "doing", "No value"]));
-  expect([["Status", "Effort", "Title"].map(sort), ariaSorted()]).toEqual([["descending", "none", "none"], []]);
-  expect(shownChores()).toEqual(["Chore 04", "Chore 08", "Chore 12"]);
-  // Title's second press sorts it descending: the chores follow it, and the groups stay where they are. Each press
-  // is decided from the order the list last rendered, so the second waits for the first's header.
+  expect([["Status", "Effort", "Title"].map(sort), ariaSorted()]).toEqual([["descending", "descending", "none"], ["Effort descending"]]);
+  expect(shownChores()).toEqual(["Chore 12", "Chore 40", "Chore 28"]);
+  // Title's presses while the groups are turned: its second sorts it descending, the chores follow it, and the groups
+  // STAY turned, since a press on another column keeps the status key (were it dropped, the groups would fall back to
+  // ascending, which is also where they stand with no key held: so this is pressed while they are turned). Each
+  // press is decided from the order the list last rendered, so the second waits for the first's header.
   fireEvent.click(screen.getByRole("button", { name: /^Sort Title / }));
   await waitFor(() => expect(sort("Title")).toBe("ascending"));
   fireEvent.click(screen.getByRole("button", { name: /^Sort Title / }));
   await waitFor(() => expect(shownChores()).toEqual(["Chore 40", "Chore 36", "Chore 32"]));
   expect([groups(), ["Status", "Effort", "Title"].map(sort), ariaSorted()])
     .toEqual([["todo", "done", "doing", "No value"], ["descending", "none", "descending"], ["Title descending"]]);
+  // Status pressed again: the groups turn back, the chores still by their titles.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["doing", "done", "todo", "No value"]));
+  expect([["Status", "Effort", "Title"].map(sort), ariaSorted(), shownChores()])
+    .toEqual([["ascending", "none", "descending"], ["Title descending"], ["Chore 40", "Chore 36", "Chore 32"]]);
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
@@ -279,13 +287,14 @@ test("Views/ListView / Grouped On The Server asks for its groups in its grouping
   await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
   expect([["Status", "Rank", "Title"].map(sort), ariaSorted()]).toEqual([["ascending", "ascending", "none"], ["Rank ascending"]]);
   // Each press is decided from the order the list last rendered: each waits for the groups the one before turned. The
-  // grouping column's button shows its groups' direction; with the rank key gone, no header's aria-sort says one.
+  // grouping column's button shows its groups' direction; the rank key stays behind the status key, so Rank keeps its
+  // aria-sort (the rank key went, and no header's aria-sort said a direction).
   fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
   await waitFor(() => expect(groups()).toEqual(["open", "closed", "No value"]));
-  expect([sort("Status"), ariaSorted()]).toEqual(["descending", []]);
+  expect([sort("Status"), ariaSorted()]).toEqual(["descending", ["Rank ascending"]]);
   fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
   await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
-  expect([sort("Status"), ariaSorted()]).toEqual(["ascending", []]);
+  expect([sort("Status"), ariaSorted()]).toEqual(["ascending", ["Rank ascending"]]);
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });

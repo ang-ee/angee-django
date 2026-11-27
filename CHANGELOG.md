@@ -72,8 +72,9 @@ live in code docstrings.
   the inner groups under it are ordered as under any other. The grouping
   column's sort button and its arrow show which way the groups go, and pressing
   it turns them, on a server-grouped list too, where it changed nothing a
-  person could see; pressing another column sorts the records inside the
-  groups and leaves the groups where they are. `aria-sort` stays on one header,
+  person could see, and leaves the records inside them in their order;
+  pressing another column sorts the records inside the groups and leaves the
+  groups where they are. `aria-sort` stays on one header,
   the key the records follow, as before (`headerAriaSort`, beside `headerSort`
   in `list-body/cell-utils.tsx`): the grouping column's says "none". Before, a
   list grouped in the browser sorted its groups by its whole sort order (by the
@@ -99,7 +100,10 @@ live in code docstrings.
   select read it from the table's `meta.sorting`, beside `meta.groupAxes`.
   `pressedSorting` loses the level-join and keeps the held axis keys behind the
   pressed key instead of ahead of it (`title:asc,status:asc`); a grouping
-  column's press is two-state and never removed, and its button keeps the
+  column's press is two-state and never removed, leads with its key and keeps
+  every other key the order holds behind it, in their order, the records' and
+  another level's (`status:desc,rank:asc`), dropping only the other keys its
+  axis shares, and its button keeps the
   focus while the columns are built again for the turned groups (a header is a
   stable component). A date's months, quarters and weeks follow the date they
   bucket, while the date's own header keeps its sort and its three-state press,
@@ -242,8 +246,8 @@ live in code docstrings.
   of this section), a grouping chosen in the toolbar included. The URL and a
   reload keep the order. A grouping
   column's press turns its groups, ascending and descending in turn, never
-  removing its key, and drops the keys the rows follow; other grouping levels'
-  keys stay. `breaksTies` is no longer
+  removing its key, and keeps the keys the rows follow and other grouping
+  levels' keys. `breaksTies` is no longer
   exported from the module.
 
 - `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
@@ -377,7 +381,7 @@ live in code docstrings.
   grouped relation's members, which the new `GroupAxis.shares` in
   `@angee/metadata` answers; each list's table carries its group axes as
   `meta.groupAxes`. A grouping column's press turns its groups, in the browser
-  and on the server, and asks for their records in that column's order alone.
+  and on the server, and keeps the order their records follow.
   The list's order still holds every key: every read asks for each key and a
   list sorted in the browser keeps its tie-breakers. A tie-breaker press keeps
   the grouping key behind the pressed one and drops the rest, and the groups

@@ -189,7 +189,9 @@ export const SearchShortcuts: Story = {
  * sort button: Title sorts ascending with the status key kept behind it, which a press never drops,
  * Rank shows not sorted, and each group's rows follow their titles (Collect quotes moves above Draft
  * the brief) while the groups keep their status order. Press Status's: the groups turn, open before
- * closed.
+ * closed, and their rows keep their titles' order, which Title's header still shows: a press on the
+ * grouping column leaves the records' order alone. Pressed at load, it turns the groups the same and
+ * Rank keeps its ascending sort and its `aria-sort`, Title still breaking the rank ties.
  */
 export const GroupedWithTieBreakers: Story = {
   name: "Grouped With Tie-breakers",
@@ -222,8 +224,9 @@ export const PaneWithOrder: Story = {
  * their status, doing, done, todo, and the chores without one last, under "No value"; the Status
  * header shows ascending (the direction its groups go in) and Effort descending. Open a group: its
  * chores follow their effort. Press Status's sort button: the groups turn, todo, done, doing, the
- * group without a status still last. Press Title's: each group's chores follow their titles and the
- * groups stay where they are.
+ * group without a status still last, and Effort still shows descending: each group's chores keep
+ * their effort order. Press Title's: each group's chores follow their titles and the groups stay
+ * turned. Press Status's again: the groups turn back, the chores still by their titles.
  */
 export const GroupedBehindAnotherKey: Story = {
   name: "Grouped Behind Another Key",
@@ -240,7 +243,8 @@ export const GroupedBehindAnotherKey: Story = {
  * The tasks grouped by status on the server, two of them with no status, in the order their resource declares
  * (status, rank, then title). The groups read asks for the groups ascending: closed, open, then the tasks without a
  * status, under "No value"; the Status header shows ascending. Press Status's sort button: the read asks for them
- * descending, open before closed, the group without a status still last, and the header shows descending; press it
+ * descending, open before closed, the group without a status still last, and the header shows descending, while Rank
+ * still shows ascending: the read asks for each group's tasks by rank, then title, behind the status key. Press it
  * again to turn them back. The snapshot lists each group's tasks in its own order, whatever the records' order asks.
  */
 export const GroupedOnTheServer: Story = {

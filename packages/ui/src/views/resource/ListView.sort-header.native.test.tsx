@@ -289,11 +289,13 @@ test("a list grouped by the field its order leads with shows its groups' directi
   await waitFor(() => expect([list.groupRowsOrder(), shown("Status", "Rank"), ariaSort()])
     .toEqual([["rank desc", "status asc"], { Status: "ascending", Rank: "descending" }, "Rank descending"]));
 
-  // The grouping column's press turns its groups: status descending alone, which the groups read
-  // asks for, and the records' rank order goes, so no header says a direction in its aria-sort.
+  // The grouping column's press turns its groups, which the groups read asks for, and leaves the
+  // records' order alone: the status key, held behind the rank key, turns and leads, and the rank
+  // key stays behind it, so the records read still asks for rank and Rank keeps its aria-sort. (It
+  // set status descending alone: the records' rank order went, and no header said a direction.)
   press("Status");
   await waitFor(() => expect([list.groupOrder(), list.groupRowsOrder(), shown("Status", "Rank"), ariaSort()])
-    .toEqual([["status desc"], ["status desc"], { Status: "descending", Rank: "none" }, ""]));
+    .toEqual([["status desc"], ["status desc", "rank desc"], { Status: "descending", Rank: "descending" }, "Rank descending"]));
 });
 
 test("a list grouped by a field it shows no column for still shows the sort of the next key", async () => {
@@ -348,10 +350,12 @@ test("a press on the grouping column of rows grouped in the browser turns the gr
   expect(groups()).toEqual(["closed", "open"]);
 
   press("Status");
-  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }], ["open", "closed"]]);
-  // Its key orders the groups, not the records in them: its button shows the groups' direction, and its aria-sort none.
-  expect(shown("Status", "Rank")).toEqual({ Status: "descending", Rank: "none" });
-  expect([header("Status").getAttribute("aria-sort"), ariaSort()]).toEqual(["none", ""]);
+  // The rank key stays behind the turned status key (it went: `status desc` alone, and no header's aria-sort said a direction).
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }, { id: "rank", desc: false }], ["open", "closed"]]);
+  // Its key orders the groups, not the records in them: its button shows the groups' direction, and its aria-sort none;
+  // the records still follow rank, whose header says so.
+  expect(shown("Status", "Rank")).toEqual({ Status: "descending", Rank: "ascending" });
+  expect([header("Status").getAttribute("aria-sort"), ariaSort()]).toEqual(["none", "Rank ascending"]);
 });
 
 test("a press on a tie-breaker of rows grouped in the browser keeps the grouping key behind it, so the groups keep its order", () => {
@@ -369,12 +373,14 @@ test("a press on a tie-breaker of rows grouped in the browser keeps the grouping
 test("a grouping column's key turns in place at each press and is never removed: the groups turn back", () => {
   const list = renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { grouped: true });
   const groups = () => screen.getAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0]);
+  // The rank key stays behind it at every press (it went at the first: `status desc` alone).
+  const rank = { id: "rank", desc: false };
   press("Status");
-  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }], ["open", "closed"]]);
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }, rank], ["open", "closed"]]);
   press("Status");
-  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: false }], ["closed", "open"]]);
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: false }, rank], ["closed", "open"]]);
   press("Status");
-  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }], ["open", "closed"]]);
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }, rank], ["open", "closed"]]);
 });
 
 test("on rows grouped in the browser by two levels, a press on one level's column turns that level and keeps the other's key", () => {

@@ -34,12 +34,13 @@ other press is the table's own toggle, those keys kept behind it: on a header th
 and on a column the order does not hold; a grouping column's press turns its groups between
 ascending and descending. On a list grouped in the browser, a grouping column's key
 orders the groups, and its press turns them: `[status asc, rank asc]` grouped by
-status becomes `[status desc]`, and the open group comes before the closed one.
+status becomes `[status desc, rank asc]`, and the open group comes before the
+closed one, its records still by rank.
 On a server-grouped list the same press sets the same order, and the groups read
 asks for the groups in that direction, so they turn too (the note on groups
 following their axis); it
-asks for each group's records in `status desc` alone, so they no longer follow
-the rank tie-breaker, and the Rank header turns to "not sorted".
+asks for each group's records in `status desc, rank asc`, so they keep following
+rank, and the Rank header keeps its sort.
 
 A press on the key the rows follow, when it is the order's last, turns it, the
 grouping key kept behind it, and the URL and a saved view keep the whole order it leaves.

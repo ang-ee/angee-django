@@ -931,7 +931,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and the same keys (`ResourceQuery.toGroupRead`), its text in the database's
   collation where the browser compares it naturally. A press on a column whose key an axis
   shares turns that level's groups, ascending and descending, never removed, and
-  its sort button and arrow show their direction, while `aria-sort` stays on the
+  leaves the records' order alone: its key leads, and every other key the order
+  holds that its axis does not share stays behind it, the records' and another
+  level's (`pressedSorting`). Its
+  sort button and arrow show their direction, while `aria-sort` stays on the
   one header of the key the records follow (`headerAriaSort`); a press on any other column, and the pane's
   Order select, orders the records inside the groups and keeps the axis keys the
   order holds, and the date a bucket follows keeps its ordinary press, which

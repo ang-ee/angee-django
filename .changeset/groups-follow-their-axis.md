@@ -29,8 +29,13 @@ not hold it. Its header's `aria-sort` says "none", as an unsorted header's does:
 records follow, which keeps it as before. A press on any other column, and a choice in the pane's
 Order select, orders the records inside the groups and keeps the axis keys the order holds, now
 behind the pressed key (`title:asc,status:asc`, where it was `status:asc,title:asc`); a press on a
-grouping column drops the other keys its axis shares, and keeps its sort button, and the focus on
-it. A date's months, quarters and weeks follow the date they bucket: ordered by the date
+grouping column leaves the records' order alone: its key leads and every other key the order
+holds stays behind it, in their order, the records' and another level's, so the records inside
+the groups keep their order and the header of the key they follow keeps its `aria-sort`
+(`status:desc,rank:asc` from `status:asc,rank:asc` or from `rank:asc,status:asc`). It drops only
+the other keys its axis shares (a grouped relation's identity beside its name), and keeps its sort
+button, and the focus on it. A date's months, quarters and weeks follow the date they bucket:
+ordered by the date
 descending, the newest bucket comes first, its records newest first, and with the date's key
 cleared the buckets go ascending; the date's own header keeps its sort and its three-state press,
 since a bucket's records do not share their date. A list grouped by a field no read can sort by

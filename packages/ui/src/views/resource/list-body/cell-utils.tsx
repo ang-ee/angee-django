@@ -183,10 +183,13 @@ export function headerPresses<TRow extends Row>(column: TableColumn<TRow, unknow
  * that key to its next direction (`getNextSortingOrder`) or removes it; on any other column it
  * sets that column alone in its next direction, except that a column that only breaks ties sorts
  * in its first direction (`getFirstSortDir`), where the toggle would turn it. The pressed key
- * leads the order it sets; the other keys a group axis shares that the order holds stay behind
- * it, so a press on another column never drops them and never turns the groups. Given `desc`,
- * it is the order choosing a column no group shares in that direction sets (the pane toolbar's
- * Order select, `listOrderChoice`).
+ * leads the order it sets, a grouping column's wherever the order held it (the table state hands
+ * an axis's key ahead of the others whatever its place), and what a press keeps stays behind it
+ * in the order the list's order holds it: a press on a grouping column keeps every key its axis
+ * does not share, the records' keys and another level's, so turning the groups leaves the
+ * records' order alone; a press on another column keeps the keys a group axis shares, so it
+ * never drops them and never turns the groups. Given `desc`, it is the order choosing a column
+ * no group shares in that direction sets (the pane toolbar's Order select, `listOrderChoice`).
  */
 export function pressedSorting<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
@@ -194,7 +197,7 @@ export function pressedSorting<TRow extends Row>(
   desc?: boolean,
 ): SortingState {
   const axis = sharingAxis(table, column.id);
-  const kept = listSorting(table).filter(({ id }) => id !== column.id && sharingAxis(table, id) && !axis?.shares(id));
+  const kept = listSorting(table).filter(({ id }) => (axis ? !axis.shares(id) : sharingAxis(table, id)));
   if (axis) return [{ id: column.id, desc: !groupsDescending(axis, table) }, ...kept];
   if (desc !== undefined) return [{ id: column.id, desc }, ...kept];
   if (breaksTies(column, table)) return [{ id: column.id, desc: column.getFirstSortDir() === "desc" }, ...kept];
