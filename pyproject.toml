@@ -107,6 +107,8 @@ dev = [
     "hypothesis>=6.100",
     "html5lib>=1.1,<2",
     "import-linter>=2.1",
+    "grimp>=3.19",
+    "iniconfig>=2.3",
     "psycopg[binary,pool]>=3.2",
     "angee-django-stubs[compatible-mypy]==6.1.2.post3",
     "angee-mypy==2.1.0",

@@ -9,13 +9,14 @@ run starts without composing again::
     uv run --locked python -m angee.base.testing.host angee.uom [pytest arguments]
 
 The run uses SQLite unless ``DATABASE_URL`` names a PostgreSQL server, which then gets a
-test database of the addon's own. An addon-local pytest.ini owns test paths and
-optional plugins, and pytest loads no conftest above the addon's package.
+test database of the addon's own. An addon-local pytest.ini owns collection,
+and pytest loads no conftest above the addon's package.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import os
 import sqlite3
@@ -23,6 +24,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
@@ -32,7 +34,10 @@ SETTINGS_MODULE = "composed_test_settings"
 OUTPUT_MODULE = "composed_test_runtime"
 # The composer and Django read these; a host passes its own and nothing inherited.
 SCRUBBED_PREFIXES = ("ANGEE_", "YAMLCONF_")
-SCRUBBED_NAMES = frozenset({"DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "SENTRY_DSN"})
+SCRUBBED_NAMES = frozenset({
+    "DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL",
+    "CACHE_URL", "REDIS_URL", "CELERY_BROKER_URL", "SENTRY_DSN",
+})
 # What every test host sets: tests run with in-process channels and one reference currency.
 TEST_HOST_SETTINGS: Mapping[str, Any] = {
     "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
@@ -66,6 +71,21 @@ def sqlite_database(path: Path) -> dict[str, Any]:
     }
 
 
+def postgres_database(database_url: str, host_root: Path) -> dict[str, Any]:
+    """Configure a PostgreSQL test database with room for native worker suffixes."""
+    import environ
+
+    from angee.base.conf import disable_jit
+
+    database = environ.Env.db_url_config(database_url)
+    if database["ENGINE"] != "django.db.backends.postgresql":
+        raise ImproperlyConfigured("A test host takes a PostgreSQL DATABASE_URL or none.")
+    disable_jit(database)
+    identity = f"{host_root.resolve()}\0{database['NAME']}".encode()
+    database["TEST"] = {"NAME": f"test_angee_{hashlib.sha256(identity).hexdigest()[:24]}"}
+    return database
+
+
 def scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
     """Return ``environ`` without the settings a host must not inherit."""
 
@@ -91,14 +111,23 @@ def write(
     (host_root / f"{SETTINGS_MODULE}.py").write_text(
         "from angee.base.conf import configure\nconfigure(globals())\n", encoding="utf-8",
     )
-    (host_root / "settings.yaml").write_text(yaml.safe_dump({
+    settings_yaml = yaml.safe_dump({
         "SECRET_KEY": "isolated-composition-check",
         "COMPOSE_OUTPUT_DIR": str(output_dir),
         "COMPOSE_OUTPUT_MODULE": output_dir.name,
         "INSTALLED_APPS": list(installed_apps),
         "DATABASES": {"default": dict(database)},
         **TEST_HOST_SETTINGS,
-    }, sort_keys=True), encoding="utf-8")
+    }, sort_keys=True)
+    # Replace existing files with a private file. Settings may carry database credentials.
+    with NamedTemporaryFile(mode="w", dir=host_root, encoding="utf-8", delete=False) as output:
+        path = Path(output.name)
+        try:
+            output.write(settings_yaml)
+            output.close()
+            path.replace(host_root / "settings.yaml")
+        finally:
+            path.unlink(missing_ok=True)
 
 
 def compose(host_root: Path, environ: Mapping[str, str], *, if_stale: bool, timeout: int) -> None:
@@ -134,18 +163,10 @@ def run(
     if not config.is_file():
         raise ImproperlyConfigured(f"{addon} has no addon-local pytest.ini declaring its tests")
     host_root = (hosts_dir / addon).resolve()
-    if database_url := os.environ.get("DATABASE_URL"):
-        import environ as django_environ
-
-        from angee.base.conf import disable_jit
-
-        database = django_environ.Env.db_url_config(database_url)
-        if database["ENGINE"] != "django.db.backends.postgresql":
-            raise ImproperlyConfigured("A test host takes a PostgreSQL DATABASE_URL or none.")
-        disable_jit(database)
-        database["TEST"] = {"NAME": f"test_{addon.replace('.', '_')}"}
-    else:
-        database = sqlite_database(host_root / "test.sqlite3")
+    database_url = os.environ.get("DATABASE_URL")
+    database = postgres_database(database_url, host_root) if database_url else sqlite_database(
+        host_root / "test.sqlite3",
+    )
     write(host_root, [addon, *apps], database)
     environ = host_environ(host_root, os.environ)
     compose(host_root, environ, if_stale=True, timeout=timeout)
@@ -153,6 +174,7 @@ def run(
         # The host owns the import path: pytest-django must not add an enclosing project's.
         sys.executable, "-m", "pytest", "--ds", SETTINGS_MODULE, "-o", "django_find_project=false",
         "-c", str(config), "--confcutdir", str(package), "--nomigrations",
+        "-o", f"cache_dir={host_root / '.pytest_cache'}",
         "-p", "django", "-p", "angee.base.testing.fixtures", *pytest_args,
     ], cwd=package, env=environ, check=False, timeout=timeout).returncode
 

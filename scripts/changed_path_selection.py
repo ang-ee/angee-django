@@ -91,6 +91,10 @@ def shared_input(path: Path) -> bool:
     )
 
 
+def shared_input_reason(changed: Sequence[Path]) -> str:
+    return next((f"graph or runner input: {path}" for path in changed if shared_input(path)), "")
+
+
 def addon_graph(root: Path, apps: Sequence[str]) -> AppGraph:
     from django_compose.components import inspect_apps, installed_components
 
@@ -110,6 +114,11 @@ def addon_graph(root: Path, apps: Sequence[str]) -> AppGraph:
 
 def addon_at(path: Path, owners: dict[Path, str]) -> tuple[Path, str] | None:
     return next(((parent, owners[parent]) for parent in path.parents if parent in owners), None)
+
+
+def selectable(path: Path, apps: AppGraph) -> bool:
+    # An addon's frontend may be read by its Python contracts or by consumer tests.
+    return python_input(path) or (path.suffix != ".md" and addon_at(path, apps.owners) is not None)
 
 
 def module_name(path: Path, owners: dict[Path, str]) -> str:
@@ -132,8 +141,34 @@ def isolated_suites(root: Path, owners: dict[Path, str]) -> dict[Path, str]:
     return {directory: addon for directory, addon in owners.items() if (root / directory / "pytest.ini").is_file()}
 
 
+def conventional_test_dir(root: Path, directory: Path) -> Path | None:
+    """Recognize the one packaged layout whose test-only import edges we can prove."""
+    from iniconfig import IniConfig, ParseError
+
+    try:
+        config = IniConfig(str(root / directory / "pytest.ini"))
+    except (OSError, ParseError):
+        return None
+    tests = directory / "tests"
+    if config.get("pytest", "testpaths") == "tests" and (root / tests / "__init__.py").is_file():
+        return tests
+    return None
+
+
+def conftest_imports(path: Path, reference: re.Pattern[str]) -> set[str]:
+    source = path.read_text()
+    loaded = set(reference.findall(source))
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            loaded.update((node.module, *(f"{node.module}.{alias.name}" for alias in node.names)))
+        elif isinstance(node, ast.Import):
+            loaded.update(alias.name for alias in node.names)
+    return loaded
+
+
 def import_reach(
     root: Path, apps: AppGraph, changed: Sequence[Path], tests: Sequence[Path], affected: set[str],
+    *, python_inputs: bool, isolated: dict[Path, str],
 ) -> tuple[set[Path], set[str]] | None:
     """Use grimp for helper imports and the existing string/conftest edges for legacy suites."""
     try:
@@ -147,12 +182,8 @@ def import_reach(
         packages.add("tests")
     if not packages:
         return None
-    migration_templates = {
-        module_name(directory / "compose_migrations", owners)
-        for directory in owners if (root / directory / "compose_migrations").is_dir()
-    }
     try:
-        graph = grimp.build_graph(*sorted(packages | migration_templates), cache_dir=None)
+        graph = grimp.build_graph(*sorted(packages), cache_dir=None)
     except (ImportError, ValueError, grimp.exceptions.GrimpException):
         return None
     modules = graph.modules
@@ -174,20 +205,17 @@ def import_reach(
             reach.update(graph.find_downstream_modules(module, as_package=as_package))
             if as_package:
                 reach.update(graph.find_descendants(module))
-    if (root_conftest := root / "conftest.py").is_file():
-        source = root_conftest.read_text()
-        loaded = set(reference.findall(source))
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                loaded.update((node.module, *(f"{node.module}.{alias.name}" for alias in node.names)))
-            elif isinstance(node, ast.Import):
-                loaded.update(alias.name for alias in node.names)
-        if reach.intersection(loaded):
-            selected.update(tests)
-            return selected, reach
+    for directory, addon in isolated.items():
+        conftest = root / directory / "conftest.py"
+        if conftest.is_file() and reach.intersection(conftest_imports(conftest, reference)):
+            reach.add(f"{addon}.conftest")
+    root_conftest = root / "conftest.py"
+    if python_inputs and root_conftest.is_file() and reach.intersection(conftest_imports(root_conftest, reference)):
+        selected.update(tests)
+        return selected, reach
     for path in tests:
         module = module_name(path, owners)
-        if module in reach or any(
+        if module in reach or python_inputs and any(
             module_name(directory / "conftest.py", owners) in reach for directory in path.parents
         ):
             selected.add(path)
@@ -222,10 +250,9 @@ def select(
 ) -> tuple[Selection, Selection]:
     """Select shared-host pytest paths and standalone addon names using the same changed inputs."""
     isolated = isolated or {}
-    changes = [path for path in changed if python_input(path)]
+    changes = [path for path in changed if selectable(path, apps)]
     full_hosts = tuple(sorted(isolated.values()))
-    if not fallback:
-        fallback = next((f"graph or runner input: {path}" for path in changes if shared_input(path)), "")
+    fallback = fallback or shared_input_reason(changes)
     if fallback:
         return Selection("full", fallback), Selection("full", fallback, full_hosts)
     if not changes:
@@ -235,10 +262,11 @@ def select(
         ) else []
         return Selection.reached(paths), Selection.reached(())
 
+    test_dirs = {directory: conventional_test_dir(root, directory) for directory in isolated}
     owner_tests: set[str] = set()
     source_apps: set[str] = set()
     broad_shared = ""
-    broad_hosts = ""
+    broad_hosts = "custom isolated test layout" if None in test_dirs.values() else ""
     for path in changes:
         if (owner := addon_at(path, apps.owners)) is None:
             if path.parts[0] == "templates" and legacy:
@@ -249,25 +277,34 @@ def select(
             continue
         directory, addon = owner
         relative = path.relative_to(directory)
-        if directory in isolated and relative.parts[0] == "tests":
+        if (test_dir := test_dirs.get(directory)) and path.is_relative_to(test_dir):
             owner_tests.add(addon)
             if path.suffix != ".py":
                 broad_shared = f"test data input: {path}"
             continue
         if path not in tests:
             source_apps.add(addon)
-        if path.suffix != ".py" or path.name == "conftest.py" or relative.parts[0] == "testing":
+        if (
+            (path.suffix != ".py" and python_input(path))
+            or path.name == "conftest.py"
+            or relative.parts[0] == "testing"
+        ):
             broad_shared = f"shared-host input: {path}"
         # Test plugins are often loaded by argv or conftest, independent of native addon edges.
         if relative.parts[0] in {"testing", "testing.py"}:
             broad_hosts = f"test support input: {path}"
 
     affected = reverse_addons(source_apps, apps.dependencies)
-    imports = import_reach(root, apps, changes, tests, affected) if not broad_shared or full_hosts else None
+    python_inputs = any(map(python_input, changes))
+    imports = import_reach(
+        root, apps, changes, tests, affected, python_inputs=python_inputs, isolated=isolated,
+    ) if not broad_shared or full_hosts else None
     reached, importers = imports or (set(), set())
     if imports is None and not broad_shared:
         broad_shared = "Python import graph could not account for a changed input"
-    if legacy and source_apps.intersection({"angee.base", "angee.server", "angee.graphql"}):
+    if legacy and python_inputs and source_apps.intersection(
+        {"angee.base", "angee.server", "angee.graphql"}
+    ):
         broad_shared = "shared framework owner changed"
     if source_apps or not legacy:
         reached.update(shared_tests)
@@ -277,8 +314,8 @@ def select(
     shared = Selection("full", broad_shared) if broad_shared else Selection.reached(sorted(selected))
 
     # Test-helper imports can cross suite boundaries independently of native app requirements.
-    owner_tests.update(addon for addon in full_hosts if any(name.startswith(f"{addon}.tests.") for name in importers))
-    if imports is None and len(full_hosts) > 1:
+    owner_tests.update(addon for addon in full_hosts if any(name.startswith(f"{addon}.") for name in importers))
+    if imports is None and full_hosts:
         broad_hosts = "isolated test-support imports unavailable"
     if any(path.parts[0] == "tests" and path not in tests for path in changes):
         broad_hosts = "legacy test support or profile changed"
@@ -306,9 +343,14 @@ class Collection:
         self.shared_paths = {str(item.path) for item in session.items if item.get_closest_marker("shared_inputs")}
 
 
-def collected(root: Path, args: Sequence[str]) -> tuple[dict[Path, str], list[Path]]:
-    command = [sys.executable, str(Path(__file__).resolve()), "_collect", *args]
-    result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+def collected(
+    root: Path, args: Sequence[str], *, setup_django: bool = False,
+) -> tuple[dict[Path, str], list[Path]]:
+    command = [
+        sys.executable, str(Path(__file__).resolve()), "_collect", "django" if setup_django else "pytest", *args,
+    ]
+    environ = {**os.environ, "PYTHONPATH": os.pathsep.join(map(os.path.abspath, sys.path))}
+    result = subprocess.run(command, cwd=root, env=environ, capture_output=True, text=True, check=False)
     if result.returncode:
         sys.stderr.write(result.stderr)
         raise SystemExit(result.returncode)
@@ -323,28 +365,39 @@ def run_selected(
     pytest_args: Sequence[str], *, root: Path, base: str | None, head: str | None, apps: Sequence[str] = (),
 ) -> int:
     """Run the caller's native pytest invocation with a visible changed-path selection."""
+    from django.apps import apps as registry
+
     callers = Path.cwd()
     root = root.resolve()
-    changes, fallback = changed_paths(root, base, head)
-    graph, fallback = installed_graph(root, apps, fallback)
-    tests, shared_tests = collected(root, pytest_args)
-    selection, _ = select(
-        root, changes, tuple(tests), graph, fallback=fallback, shared_tests=shared_tests,
-    )
-    if selection.mode == "full":
-        selection = Selection("full", selection.reason, tuple(sorted(path.as_posix() for path in tests)))
-    print(json.dumps(asdict(selection)), flush=True)
-    if selection.mode == "empty":
-        return 0
-    included = set(selection.paths)
-    options = [
-        arg for path, node in tests.items() if path.as_posix() not in included
-        for arg in ("--deselect", f"{node}::")
-    ]
+    import_path = list(sys.path)
     os.chdir(root)
+    sys.path.insert(0, str(root))
     try:
+        changes, fallback = changed_paths(root, base, head)
+        fallback = fallback or shared_input_reason(changes)
+        if registry.ready and "DJANGO_SETTINGS_MODULE" not in os.environ:
+            fallback = fallback or "caller Django settings are local to its interpreter"
+        if not fallback:
+            graph, fallback = installed_graph(root, apps, fallback)
+        if fallback:
+            print(json.dumps(asdict(Selection("full", fallback))), flush=True)
+            return pytest.main(list(pytest_args))
+
+        tests, shared_tests = collected(root, pytest_args, setup_django=registry.ready)
+        selection, _ = select(root, changes, tuple(tests), graph, shared_tests=shared_tests)
+        if selection.mode == "full":
+            selection = Selection("full", selection.reason, tuple(sorted(path.as_posix() for path in tests)))
+        print(json.dumps(asdict(selection)), flush=True)
+        if selection.mode == "empty":
+            return 0
+        included = set(selection.paths)
+        options = [
+            arg for path, node in tests.items() if path.as_posix() not in included
+            for arg in ("--deselect", f"{node}::")
+        ]
         status = pytest.main([*pytest_args, *options])
     finally:
+        sys.path[:] = import_path
         os.chdir(callers)
     # A successfully collected nonempty selection may have no items in a particular shard.
     return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and "--splits" in pytest_args else status
@@ -373,7 +426,9 @@ def framework_plan(base: str | None, head: str | None) -> dict[str, Selection]:
             directory.parent.relative_to(ROOT): f"angee.{directory.parent.name}"
             for directory in (ROOT / "src/angee").glob("*/pytest.ini")
         }
-    needs_collection = not fallback and any(map(python_input, changes)) and not any(map(shared_input, changes))
+    needs_collection = not (fallback or shared_input_reason(changes)) and any(
+        selectable(path, graph) for path in changes
+    )
     tests, shared_tests = collected(ROOT, ()) if needs_collection else ({}, [])
     shared, hosts = select(
         ROOT, changes, tuple(tests), graph, fallback=fallback,
@@ -388,7 +443,11 @@ def main(argv: Sequence[str]) -> int:
     if argv[:1] == ["_collect"]:
         probe = Collection()
         with redirect_stdout(sys.stderr):
-            status = pytest.main(["--collect-only", *argv[1:]], plugins=[probe])
+            if argv[1] == "django":
+                import django
+
+                django.setup()
+            status = pytest.main(["--collect-only", *argv[2:]], plugins=[probe])
         if status == pytest.ExitCode.OK:
             print(json.dumps({"files": probe.files, "shared_paths": sorted(probe.shared_paths)}))
         return status

@@ -430,6 +430,7 @@ def test_state_field_status_display_is_presentation_only() -> None:
     assert "status_display" not in field.deconstruct()[3]
 
 
+@pytest.mark.shared_inputs
 def test_active_model_state_fields_pass_checks() -> None:
     """Concrete composed fields satisfy the optional-state declaration rule."""
 

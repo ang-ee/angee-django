@@ -45,6 +45,7 @@ def test_every_angee_model_carries_the_rebac_mixin() -> None:
     assert issubclass(AngeeModel, RebacMixin)
 
 
+@pytest.mark.shared_inputs
 def test_concrete_angee_models_keep_the_manager_queryset_canon() -> None:
     """Concrete Angee models expose the inherited public-id and aggregate scopes."""
 

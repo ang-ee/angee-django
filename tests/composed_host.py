@@ -19,8 +19,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest import TestSuite, TextTestResult
 
-import environ
-
 if TYPE_CHECKING:
     import pytest
 
@@ -144,18 +142,6 @@ def boot(
     source_root = source_root.resolve()
     runtime_dir = runtime_dir.resolve()
     extra_addon_dirs = [path.resolve() for path in extra_addon_dirs]
-    database: dict[str, Any] = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
-    if test_postgresql:
-        database_url = os.environ.get("DATABASE_URL", "")
-        database = environ.Env.db_url_config(database_url)
-        if database["ENGINE"] != "django.db.backends.postgresql":
-            raise ValueError("--test-postgresql requires a PostgreSQL DATABASE_URL.")
-        # DiscoverRunner creates this secondary database. A composed-host test
-        # can run beside another one on a different xdist worker, so give each
-        # worker its own name just as pytest-django does for the primary database.
-        worker = os.environ.get("PYTEST_XDIST_WORKER")
-        suffix = f"_{worker}" if worker else ""
-        database["TEST"] = {"NAME": f"test_composed_{database['NAME']}{suffix}"}
     # Every framework package is installed in this interpreter. Extra test packages
     # carry their own real dist-info on the explicitly supplied source roots.
     host_root = runtime_dir.parent
@@ -168,6 +154,10 @@ def boot(
 
     from angee.base.testing import host
 
+    database: dict[str, Any] = (
+        host.postgres_database(os.environ.get("DATABASE_URL", ""), host_root)
+        if test_postgresql else {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+    )
     index = installed_components("angee.addons")
     installed_apps = list(root_apps) if root_apps is not None else sorted(
         name for name in index.providers if include_examples or name.startswith("angee.")

@@ -1,6 +1,7 @@
 """Contracts for the reusable Django test composition."""
 
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from rebac.roles import grant
 from angee.agents.testing import models as agents_models
 from angee.base.testing import fixtures as testing_fixtures
 from angee.base.testing.fixtures import SESSION_BASELINE, database_rows, relationship_storage
+from angee.base.testing.host import SETTINGS_MODULE, host_environ, postgres_database, write
 from angee.decisions.testing import models as decisions_models
 from angee.integrate.testing import integration as integration_models
 from angee.integrate.testing import models as integrate_models
@@ -207,3 +209,41 @@ def test_relationship_storage_of_the_active_storage_copies_nothing(db: None, mon
     with relationship_storage(configured):
         assert app_settings.REBAC_LOCAL_BACKEND_STORAGE == configured
     assert copies == [] and _rows(other) == before
+
+
+def test_composed_test_host_uses_its_own_service_settings(tmp_path: Path) -> None:
+    environment = {
+        "CACHE_URL": "deployment-cache",
+        "REDIS_URL": "deployment-redis",
+        "CELERY_BROKER_URL": "deployment-broker",
+        "DATABASE_URL": "deployment-database",
+        "SENTRY_DSN": "deployment-monitoring",
+        "ANGEE_PROJECT_DIR": "/deployment",
+        "YAMLCONF_CONFFILE": "/deployment/settings.yaml",
+        "DJANGO_SETTINGS_MODULE": "deployment",
+        "PYTHONPATH": "/test-imports",
+        "PATH": "/tools",
+    }
+    assert host_environ(tmp_path, environment) == {
+        "PYTHONPATH": os.pathsep.join((str(tmp_path), "/test-imports")),
+        "PATH": "/tools",
+        "DJANGO_SETTINGS_MODULE": SETTINGS_MODULE,
+    }
+
+
+def test_postgres_test_names_distinguish_host_and_source_database(tmp_path: Path) -> None:
+    first = "postgresql://postgres@127.0.0.1/source_a"
+    second = "postgresql://postgres@127.0.0.1/source_b"
+    host = tmp_path / "host"
+    name = postgres_database(first, host)["TEST"]["NAME"]
+    assert name == postgres_database(first, host)["TEST"]["NAME"]
+    assert name != postgres_database(second, host)["TEST"]["NAME"]
+    assert name != postgres_database(first, tmp_path / "other-host")["TEST"]["NAME"]
+    assert len(name + "_gw12345") <= 63
+
+
+def test_test_host_replaces_world_readable_settings_with_private_file(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.touch(mode=0o644)
+    write(tmp_path, (), {"ENGINE": "django.db.backends.postgresql", "PASSWORD": "synthetic"})
+    assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
