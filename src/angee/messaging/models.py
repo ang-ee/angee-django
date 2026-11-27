@@ -2261,8 +2261,9 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
     """The address the caller handed for this recipient, as its recipient rule cleaned it
     (``MessageManager.clean_recipient``) and as the transport carries it: a spelling of the handle's address
-    or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``), so mail to a merged
-    handle's address goes to that address while the row is on the survivor. Empty for a recipient no
+    or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``): the bound for every writer,
+    of which system mail alone records a merged handle's address, so it goes there while the row is on the
+    survivor (``MessageManager._land_addressees``). Empty for a recipient no
     caller handed as an address (one a reply inherits from its parent, one known only as a handle, an
     ingested one), which is mailed at the handle's own ``value``. It leaves with the row: with its handle,
     its message and a channel's purge."""

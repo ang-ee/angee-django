@@ -1321,8 +1321,9 @@ class Handle(
     def validate_merge(self, merged: Sequence[Any]) -> None:
         """A contact alias keeps its platform and the directory identity lock order; a person merges an alias.
 
-        Every later message to a merged handle's address goes to the kept one. So a
-        person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
+        A merge redirects the mail people later address to a merged handle's address to
+        the kept one, and never system mail, which goes exactly to the address its
+        caller gave. So a person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
         binds the kept handle to its actor) admits only another spelling or alias of
         the kept address, the same person-matching key, unless that actor is a
         contact administrator: an effective member of ``parties/role:contact_admin``,

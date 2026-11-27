@@ -337,9 +337,13 @@ live in code docstrings.
   whose raw envelope stays in the message's metadata. A recorded address is
   always, as written, a spelling of its handle's address or of a handle merged
   into it (`Handle.is_spelling_of(value, merged=True)`, which reads the merged
-  handles once, only for an address that is not the handle's own): mail to a
-  merged handle's address, a contact administrator's merge of two addresses or
-  an alias folded, lands on the kept handle and is mailed at that address.
+  handles once, only for an address that is not the handle's own). Who writes
+  decides what a merge does: a person's compose to a merged handle's address
+  (a contact administrator's merge of two addresses, an alias folded) records
+  nothing and follows the merge to the kept handle's value, as before; system
+  mail (`compose_as_system`, so `send_mail`) records it on the kept handle's row
+  and is mailed exactly there, so a merge never redirects an account's or a
+  workflow's mail.
   `Recipient.save` and `full_clean` refuse any other, or one with surrounding
   space, with a `ValidationError` on `address` (`not_its_handle`) before
   writing, and one written past them (a queryset `update`) is ignored, with a

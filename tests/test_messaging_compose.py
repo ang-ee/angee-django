@@ -1309,7 +1309,7 @@ def test_a_writers_call_records_only_the_addresses_its_caller_handed(desk: Any) 
         Handle.objects.upsert(platform="email", value="Handed@Example.test")
         rows = Message.objects._land_addressees(
             [_Addressee("cc", "inherited@example.test"), _Addressee("cc", "handed@example.test", given=True)],
-            created_by_id=None,
+            actor=desk.owner, created_by_id=None,
         )
         Message.objects._write_recipients(message, rows, created_by_id=None)
     assert _rows_of(message) == {
@@ -1330,7 +1330,8 @@ def test_an_address_handed_and_inherited_in_one_role_is_one_row_recording_the_ha
     with system_context(reason="tests.messaging.compose.given"):
         Handle.objects.upsert(platform="email", value="Client@Example.test")
         rows = Message.objects._land_addressees(
-            [inherited, handed] if order == "inherited-first" else [handed, inherited], created_by_id=None,
+            [inherited, handed] if order == "inherited-first" else [handed, inherited], actor=desk.owner,
+            created_by_id=None,
         )
         Message.objects._write_recipients(message, rows, created_by_id=None)
     assert _rows_of(message) == {
@@ -1365,11 +1366,11 @@ def _rows_and_addresses(message: Any) -> list[tuple[Any, str]]:
      ("client.example@gmail.com", "clientexample@gmail.com", "fold")],
     ids=["two-addresses-merged", "an-alias-folded"],
 )
-def test_mail_to_a_merged_handles_address_lands_on_the_kept_handle_and_is_delivered_to_that_address(
+def test_a_persons_mail_to_a_merged_handles_address_follows_the_merge_to_the_kept_handle(
     desk: Any, merged_address: str, kept_address: str, merge: str,
 ) -> None:
-    """The row is the kept handle's, as the merge says; the address the caller gave is a spelling of a handle merged
-    into it, so it is recorded and the mail goes there."""
+    """A merge redirects the mail a person addresses: the row is the kept handle's and records nothing, so the mail
+    goes to the kept handle's address. Another spelling of the kept handle's own address is still mailed as typed."""
 
     with system_context(reason="tests.messaging.compose.merge"):
         merged = Handle.objects.upsert(platform="email", value=merged_address)
@@ -1379,42 +1380,20 @@ def test_mail_to_a_merged_handles_address_lands_on_the_kept_handle_and_is_delive
             Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
     else:
         _merge_as_contact_administrator(kept, merged)
-    message = Message.objects.compose(channel=desk, to=[merged_address], text="Hi.", actor=desk.owner, queued=True)
+    followed = Message.objects.compose(channel=desk, to=[merged_address], text="Hi.", actor=desk.owner, queued=True)
+    typed = Message.objects.compose(channel=desk, to=[kept_address.upper()], text="Hi.", actor=desk.owner,
+                                    queued=True)
     with system_context(reason="tests.messaging.compose.merge"):
         assert Handle._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
-    assert _rows_and_addresses(message) == [(kept.pk, merged_address)]
-    assert _delivered(message)["To"] == merged_address
+    assert _rows_and_addresses(followed) == [(kept.pk, "")]
+    assert _delivered(followed)["To"] == kept_address
+    assert _rows_and_addresses(typed) == [(kept.pk, kept_address.upper())]
+    assert _delivered(typed)["To"] == kept_address.upper()
 
 
-def test_an_address_two_merges_deep_is_one_read_of_the_kept_handles_merges_and_is_delivered_as_given(
-    desk: Any,
-) -> None:
-    """A fold re-points what was merged into the folded handle at the survivor, so the kept handle's merges are one
-    read at any depth; a compose there reads nothing for it, its writer holding the handle the address named."""
-
-    with system_context(reason="tests.messaging.compose.merge"):
-        first, middle, kept = (
-            Handle.objects.upsert(platform="email", value=value)
-            for value in ("first@example.test", "middle@example.test", "kept@example.test")
-        )
-        Handle._base_manager.get(pk=middle.pk).fold([Handle._base_manager.get(pk=first.pk)])
-        survivor = Handle._base_manager.get(pk=kept.pk)
-        survivor.fold([Handle._base_manager.get(pk=middle.pk)])
-        assert Handle._base_manager.get(pk=first.pk).merged_into_id == kept.pk
-        with CaptureQueriesContext(connection) as lineage:
-            assert survivor.is_spelling_of("FIRST@example.test", merged=True)
-        assert len(lineage) == 1
-        assert not survivor.is_spelling_of("other@example.test", merged=True)
-    message = Message.objects.compose(
-        channel=desk, to=["FIRST@example.test"], text="Hi.", actor=desk.owner, queued=True,
-    )
-    assert _rows_and_addresses(message) == [(kept.pk, "FIRST@example.test")]
-    assert _delivered(message)["To"] == "FIRST@example.test"
-
-
-def test_a_compose_to_a_merged_handles_address_reads_only_its_redirect_more(desk: Any) -> None:
-    """The writer holds the handle the address named, so the row's check reads nothing for the merge: what a compose
-    to a merged handle's address costs beyond one to the kept handle's own is the redirect's own two reads."""
+def test_a_persons_compose_to_a_merged_handles_address_reads_only_its_redirect_more(desk: Any) -> None:
+    """A person's compose to a merged handle's address records nothing, so its row's check reads nothing: what it
+    costs beyond one to the kept handle's own is the redirect's own two reads, as before the address was recorded."""
 
     with system_context(reason="tests.messaging.compose.merge"):
         merged, kept = (
@@ -1432,11 +1411,11 @@ def test_a_compose_to_a_merged_handles_address_reads_only_its_redirect_more(desk
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_message_written_while_two_addresses_were_merged_is_mailed_at_the_kept_handle_after_the_revert(
+def test_a_persons_message_written_while_two_addresses_were_merged_still_goes_to_the_kept_handle_after_the_revert(
     desk: Any, caplog: Any,
 ) -> None:
-    """After the merge is reverted the merged address is another handle's again, which this row does not name: the
-    message, which names the kept handle, goes to the kept handle's address, with the warning naming the row."""
+    """The person's mail followed the merge when it was written, to the kept handle, which its row names and records
+    no address for; reverting the merge leaves that message as it was written, with no warning."""
 
     with system_context(reason="tests.messaging.compose.merge"):
         merged = Handle.objects.upsert(platform="email", value="client@example.test")
@@ -1444,7 +1423,7 @@ def test_a_message_written_while_two_addresses_were_merged_is_mailed_at_the_kept
     _merge_as_contact_administrator(kept, merged)
     message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner,
                                       queued=True)
-    assert _rows_and_addresses(message) == [(kept.pk, "client@example.test")]
+    assert _rows_and_addresses(message) == [(kept.pk, "")]
     reverter = create_platform_admin("compose-merge-reverter")
     with system_context(reason="tests.messaging.compose.merge"):
         boundary = Handle.history.filter(id=merged.pk).order_by("-history_id").first().changeset
@@ -1452,12 +1431,9 @@ def test_a_message_written_while_two_addresses_were_merged_is_mailed_at_the_kept
         boundary.with_actor(reverter).revert()
     with system_context(reason="tests.messaging.compose.merge"):
         assert Handle._base_manager.get(pk=merged.pk).merged_into_id is None
-        (row,) = Recipient._base_manager.filter(message=message)
     caplog.set_level(logging.WARNING, logger="angee.messaging.models")
     assert _delivered(message)["To"] == "mine@example.net"
-    assert [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"] == [
-        f"Recipient {row.pk} holds an address its handle does not name; it is mailed at the handle's own.",
-    ]
+    assert [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"] == []
 
 
 def test_a_spelling_the_transport_cannot_carry_is_not_recorded_and_the_mail_goes_to_the_handles_address(

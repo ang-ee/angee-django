@@ -79,8 +79,15 @@ answered as its handle stores it (a reply is handed no address of its own:
 To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one
 records none. A recorded address is always, as written, a spelling of its
 handle's address or of a handle merged into it (`Handle.is_spelling_of(...,
-merged=True)`, checked when the row is saved): mail to a merged handle's
-address lands on the kept handle and goes to that address. An address the
+merged=True)`, checked when the row is saved). Who writes decides what a
+merge does (`MessageManager._land_addressees`): a person's compose to an
+address a contact administrator merged into another records nothing and
+follows the merge to the kept handle's value, which is what a merge is for and
+why only a contact administrator may merge two addresses; system mail
+(`compose_as_system`, so `send_mail`) records the address on the kept
+handle's row and goes exactly there, so a merge never redirects an account's
+or a workflow's mail. A person's compose in another spelling of the kept
+handle's own address is mailed as typed. An address the
 transport cannot carry as typed (`carries_address`) records nothing and is
 mailed at the handle's value. One written past that check is ignored with a
 warning, the mail going to the handle's own. The one place a recorded address

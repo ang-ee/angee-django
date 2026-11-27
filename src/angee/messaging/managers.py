@@ -3606,7 +3606,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     )
                 # A person's recipients keep that person as their creator; system work's have none.
                 with actor_context(_OUTGOING_ACTOR) if actor is None else nullcontext():
-                    rows = self._land_addressees(recipients, created_by_id=created_by_id)
+                    rows = self._land_addressees(recipients, actor=actor, created_by_id=created_by_id)
                 self._write_recipients(message, rows, created_by_id=created_by_id)
                 self.advance_thread(message)
                 if outgoing.queued:
@@ -3617,7 +3617,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
     @staticmethod
     def _land_addressees(
-        recipients: Sequence[_Addressee], *, created_by_id: Any,
+        recipients: Sequence[_Addressee], *, actor: Any, created_by_id: Any,
     ) -> list[tuple[Any, str, str, Any]]:
         """Return each recipient's ``(handle, role, address, addressed handle)`` in the order given, in one read.
 
@@ -3631,9 +3631,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         which is answered as its handle stores it, and one known only as a handle.
         ``handle`` is where the address lands, the survivor of any merge; ``addressed
         handle`` is the handle owning the address before that redirect
-        (``HandleManager.find_identity_owners``), so an address a merged handle owns
-        is recorded on its survivor's row as given. Both are instances, so the row's
+        (``HandleManager.find_identity_owners``). Both are instances, so the row's
         write and its check read nothing more.
+
+        Who writes decides what a merge does, here and nowhere else. A person's
+        compose (an ``actor``: ``compose`` refuses to write without one) records a
+        given address only when it spells the handle it landed on: mail a person
+        addresses to an address a contact administrator merged into another follows
+        the merge to the kept handle's value, which is what a merge is for, and why
+        only a contact administrator may merge two addresses. System work (no
+        ``actor``: ``compose_as_system``, the one writer without one, so Django's
+        ``send_mail``) records it when it spells the handle the lookup found, merged
+        away or not, on the kept handle's row: system mail goes exactly where its
+        caller said, so a merge never redirects an account's or a workflow's mail.
 
         Known handles resolve through the handle owner's batch lookup
         (``HandleManager.find_identity_owners``, each owner resolved to its survivor
@@ -3666,8 +3676,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 rows.append((addressee.handle_id, addressee.role, "", None))
                 continue
             identity = (email, addressee.address)
-            recorded = addressee.given and carries_address(addressee.address)
-            rows.append((found[identity], addressee.role, addressee.address if recorded else "", owners.get(identity)))
+            handle, owner = found[identity], owners.get(identity)
+            spelled = handle.is_spelling_of(addressee.address) or (
+                actor is None and owner is not None and owner.is_spelling_of(addressee.address)
+            )
+            recorded = addressee.given and spelled and carries_address(addressee.address)
+            rows.append((handle, addressee.role, addressee.address if recorded else "", owner))
         return rows
 
     def cancel_delivery(self, message: Any) -> None:

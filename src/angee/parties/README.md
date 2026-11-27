@@ -500,8 +500,9 @@ same platform. Handle owns missing
 value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
-Every later message to a merged handle's address goes to the kept one, so a
-person's merge (`merge_records`) admits only another spelling or alias of the
+A merge redirects the mail people later address to a merged handle's address
+to the kept one, and never system mail, which goes exactly to the address its
+caller gave; so a person's merge (`merge_records`) admits only another spelling or alias of the
 kept address, the same platform and person-matching key as the rule computes it
 from each value (never the stored column, which the key repair may not have
 reached; a number the phone rule reads only as its digits, `Handle.is_fallback_key`,

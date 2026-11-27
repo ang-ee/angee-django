@@ -26,6 +26,7 @@ from django.db import DatabaseError, connection, transaction
 from django.db.models.signals import post_save
 from django.template.defaultfilters import pprint
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from django.utils.log import AdminEmailHandler, configure_logging
 from django.views.debug import ExceptionReporter
@@ -436,26 +437,89 @@ def test_a_recipient_row_refuses_an_address_its_handle_does_not_name(system_mail
         assert Recipient._base_manager.get(pk=row.pk).address == "READER@example.test"
 
 
+def _system_mail(system_mailer: Any, entry: str, address: str) -> Any:
+    """One system mail to ``address``, through Django's ``send_mail`` or ``compose_as_system``."""
+
+    if entry == "send-mail":
+        before = {message.pk for message in _recorded(system_mailer)}
+        assert send_mail("Your link", "Body.", None, [address]) == 1
+        (message,) = [message for message in _recorded(system_mailer) if message.pk not in before]
+        return message
+    return Message.objects.compose_as_system(
+        reason="tests.messaging.system_mail.merged", to=[address], subject="Your link", text="Body.",
+    )
+
+
 @pytest.mark.parametrize("entry", ["send-mail", "compose-as-system"])
+@pytest.mark.parametrize(
+    ("merged_address", "kept_address", "merge"),
+    [("Account@Example.test", "kept@example.net", "contact-administrator"),
+     ("client.example@gmail.com", "clientexample@gmail.com", "fold")],
+    ids=["two-addresses-merged", "an-alias-folded"],
+)
 def test_a_system_mail_to_a_merged_handles_address_is_delivered_to_that_address_on_the_kept_handle(
-    system_mailer: Any, entry: str,
+    system_mailer: Any, entry: str, merged_address: str, kept_address: str, merge: str,
 ) -> None:
-    """A contact administrator merged the account's address into another; the link still goes to the address the
-    caller gave, recorded on the kept handle's row."""
+    """A merge never redirects system mail: the account's address is recorded on the kept handle's row as given and
+    the mail goes there, whoever merged it into another."""
 
     with system_context(reason="tests.messaging.system_mail.merged"):
-        merged = Handle.objects.upsert(platform="email", value="Account@Example.test")
-        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
-    _merge_as_contact_administrator(kept, merged)
-    if entry == "send-mail":
-        assert send_mail("Your link", "Body.", None, ["account@example.test"]) == 1
-        (message,) = _recorded(system_mailer)
+        merged = Handle.objects.upsert(platform="email", value=merged_address)
+        kept = Handle.objects.upsert(platform="email", value=kept_address)
+    if merge == "fold":
+        with system_context(reason="tests.messaging.system_mail.merged"):
+            Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
     else:
-        message = Message.objects.compose_as_system(
-            reason="tests.messaging.system_mail.merged", to=["account@example.test"], subject="Your link", text="Body.",
+        _merge_as_contact_administrator(kept, merged)
+    given = merged_address.lower()
+    message = _system_mail(system_mailer, entry, given)
+    assert _given(message) == [(kept.pk, given)]
+    assert _deliver(message).to == [given]
+
+
+def test_a_system_mail_to_an_address_two_merges_deep_is_delivered_to_it_and_the_merges_are_one_read(
+    system_mailer: Any,
+) -> None:
+    """A fold re-points what was merged into the folded handle at the survivor, so the kept handle's merges are one
+    read at any depth; the system mail is recorded on the kept handle and delivered as given."""
+
+    with system_context(reason="tests.messaging.system_mail.merged"):
+        first, middle, kept = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("first@example.test", "middle@example.test", "kept@example.test")
         )
-    assert _given(message) == [(kept.pk, "account@example.test")]
-    assert _deliver(message).to == ["account@example.test"]
+        Handle._base_manager.get(pk=middle.pk).fold([Handle._base_manager.get(pk=first.pk)])
+        survivor = Handle._base_manager.get(pk=kept.pk)
+        survivor.fold([Handle._base_manager.get(pk=middle.pk)])
+        assert Handle._base_manager.get(pk=first.pk).merged_into_id == kept.pk
+        with CaptureQueriesContext(connection) as merges:
+            assert survivor.is_spelling_of("FIRST@example.test", merged=True)
+        assert len(merges) == 1
+        assert not survivor.is_spelling_of("other@example.test", merged=True)
+    message = _system_mail(system_mailer, "send-mail", "FIRST@example.test")
+    assert _given(message) == [(kept.pk, "FIRST@example.test")]
+    assert _deliver(message).to == ["FIRST@example.test"]
+
+
+def test_a_system_mail_to_a_merged_handles_address_reads_only_its_redirect_more(system_mailer: Any) -> None:
+    """The writer holds the handle the address named, so the row's check reads nothing for the merge: what a system
+    mail to a merged handle's address costs beyond one to the kept handle's own is the redirect's own two reads."""
+
+    with system_context(reason="tests.messaging.system_mail.merged"):
+        merged, kept = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("client@example.test", "mine@example.net")
+        )
+        Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+    counts: dict[str, int] = {}
+    for _round in range(3):
+        for address in ("mine@example.net", "client@example.test"):
+            with CaptureQueriesContext(connection) as queries:
+                Message.objects.compose_as_system(
+                    reason="tests.messaging.system_mail.merged", to=[address], subject="Hi", text="Hi.",
+                )
+            counts[address] = min(counts.get(address, len(queries)), len(queries))
+    assert counts["client@example.test"] - counts["mine@example.net"] == 2, counts
 
 
 def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_recorded_sender(
