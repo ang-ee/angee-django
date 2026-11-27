@@ -1,6 +1,7 @@
 """Row-owned implementation default materialization and config validation."""
 from __future__ import annotations
 
+import contextlib
 import copy
 from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Self
@@ -15,6 +16,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
 from angee.base.models.identity import public_id_of
 from angee.base.permissions import require_rebac_queryset
+from angee.base.querysets import row_lock_queryset
 
 if TYPE_CHECKING:
     from django.db.models.fetch_modes import FetchMode
@@ -146,30 +148,36 @@ class ImplDefaultsMixin(models.Model):
 
         A repair (a create-only selector moving off a stored key its choices no longer name) reshapes
         the config it owns (:meth:`_carry_repaired_config`) and writes the new key only while the row
-        still holds the old one, in the save's own transaction: of two repairs at once one wins and
-        the other is refused as create-only, and the save's permission gate still decides the write.
+        still holds the old one: of two repairs at once one wins and the other is refused as
+        create-only, and the save's permission gate still decides the write. A row holding or leaving
+        such a key (:meth:`_holds_unregistered_impl_key`) is checked and written in one transaction of its
+        own (a savepoint inside a caller's), within which it reads its stored key and config under the
+        row's lock (:meth:`_refuse_changed_config_under`): a save racing a repair waits for it, then is
+        refused as stale rather than writing the old implementation's config over the new one. Any other
+        save opens no transaction, so it costs no statement more.
         """
 
         adding = self._state.adding
         if adding:
             self.prepare_impl_defaults()
         update_fields = kwargs.get("update_fields")
-        repairs = self.validate_impl_keys(update_fields=update_fields)
-        for repaired, _held in repairs:
-            self._carry_repaired_config(repaired, update_fields=update_fields)
-        self.validate_impl_configs(update_fields=update_fields)
-        if not repairs:
+        guard = (
+            transaction.atomic(using=self._state.db or None)
+            if not adding and self._holds_unregistered_impl_key() else contextlib.nullcontext()
+        )
+        with guard:
+            repairs = self.validate_impl_keys(update_fields=update_fields)
+            for repaired, _held in repairs:
+                self._carry_repaired_config(repaired, update_fields=update_fields)
+            self.validate_impl_configs(update_fields=update_fields)
+            for repaired, held in repairs:
+                with system_context(reason="base.impl.repair"):
+                    moved = type(self)._base_manager.using(self._state.db).filter(
+                        pk=self.pk, **{repaired.attname: held},
+                    ).update(**{repaired.attname: getattr(self, repaired.attname)})
+                if not moved:
+                    raise ValidationError({repaired.name: "Implementation selection is create-only."})
             super().save(*args, **kwargs)
-        else:
-            with transaction.atomic(using=self._state.db or None):
-                for repaired, held in repairs:
-                    with system_context(reason="base.impl.repair"):
-                        moved = type(self)._base_manager.using(self._state.db).filter(
-                            pk=self.pk, **{repaired.attname: held},
-                        ).update(**{repaired.attname: getattr(self, repaired.attname)})
-                    if not moved:
-                        raise ValidationError({repaired.name: "Implementation selection is create-only."})
-                super().save(*args, **kwargs)
         loaded = dict(self._loaded_impl_keys)
         updated = None if update_fields is None else set(update_fields)
         for field in self._meta.get_fields():
@@ -411,24 +419,49 @@ class ImplDefaultsMixin(models.Model):
         """
 
         field = self._meta.get_field(field_name)
-        if not isinstance(field, ImplClassField):
-            raise ImproperlyConfigured(f"{type(self)._meta.label}.{field_name} is not an ImplClassField.")
-        config_field = self._config_field()
-        stored = self._stored_values(field.attname, config_field.attname)
+        if not isinstance(field, ImplClassField) or not field.create_only:
+            label = field.verbose_name if isinstance(field, models.Field) else field_name
+            raise ValidationError({field_name: f"{label} is not create-only, so it has no repair."})
+        try:
+            config_field: models.JSONField | None = self._config_field()
+        except FieldDoesNotExist:
+            config_field = None
+        attnames = (field.attname,) if config_field is None else (field.attname, config_field.attname)
+        stored = self._stored_values(*attnames)
         if stored is None or field.has_key(stored[0]):
             raise ValidationError({field.name: "Implementation selection is create-only."})
         repairs: dict[str, dict[str, Any]] = {}
         for key in field.registered_keys():
+            if config_field is None:
+                repairs[key] = {}
+                continue
             impl = field.resolve_class(key)
             readable = isinstance(impl, type) and issubclass(impl, ImplBase)
             repairs[key] = {config_field.name: impl.carried_config(stored[1]) if readable else stored[1]}
         return repairs
 
-    def _stored_values(self, *attnames: str) -> tuple[Any, ...] | None:
-        """The stored row's values of ``attnames``, read under the system context; ``None`` without a row."""
+    def _holds_unregistered_impl_key(self) -> bool:
+        """Whether a selector this row has loaded holds, or was loaded holding, a key its choices no longer name."""
 
+        for field in self._meta.concrete_fields:
+            if not isinstance(field, ImplClassField) or field.attname not in self.__dict__:
+                continue
+            for key in (self.__dict__[field.attname], self._loaded_impl_keys.get(field.attname)):
+                if key not in field.empty_values and not field.has_key(key):
+                    return True
+        return False
+
+    def _stored_values(self, *attnames: str, lock: bool = False) -> tuple[Any, ...] | None:
+        """The stored row's values of ``attnames``, read under the system context; ``None`` without a row.
+
+        ``lock`` reads them under the row's lock (:func:`angee.base.querysets.row_lock_queryset`), held until
+        the caller's transaction ends; SQLite takes no row lock, where the repair's conditional write still
+        decides a race.
+        """
+
+        rows = row_lock_queryset(type(self)) if lock else type(self)._base_manager
         with system_context(reason="base.impl.stored_row"):
-            return type(self)._base_manager.using(self._state.db).filter(pk=self.pk).values_list(*attnames).first()
+            return rows.using(self._state.db).filter(pk=self.pk).values_list(*attnames).first()
 
     def _refuse_changed_config_under(self, field: ImplClassField[Any]) -> None:
         """Refuse a config other than the stored one while ``field`` keeps a key no implementation reads.
@@ -442,7 +475,7 @@ class ImplDefaultsMixin(models.Model):
             config_field = self._config_field()
         except FieldDoesNotExist:
             return
-        stored = self._stored_values(field.attname, config_field.attname)
+        stored = self._stored_values(field.attname, config_field.attname, lock=True)
         if stored is None or config_field.value_from_object(self) == stored[1]:
             return
         if stored[0] != getattr(self, field.attname):

@@ -8,7 +8,7 @@ from typing import Any, Self, cast
 
 import strawberry
 from django.apps import apps
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_snake_case
@@ -16,7 +16,7 @@ from strawberry.utils.str_converters import to_snake_case
 from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplChoice as BaseImplChoice
 from angee.base.implementations import impl_choices as registry_impl_choices
-from angee.base.models.implementations import readable_impl_defaults
+from angee.base.models.implementations import ImplDefaultsMixin, readable_impl_defaults
 from angee.graphql.mixins import ImplementationChoicesMixin
 
 
@@ -73,6 +73,8 @@ def record_impl_choices(info: strawberry.Info, model: str, field: str, record: s
     django_model = _model_for_label(model)
     field_name = _field_name(field)
     row = authorized_action_target(info, django_model, record, "write")
+    if not isinstance(row, ImplDefaultsMixin):
+        raise ValidationError({field_name: f"{django_model._meta.label}.{field_name} has no repair."})
     repairs = row.repair_impl_defaults(field_name)
     return [
         ImplChoice(**{**asdict(choice), "defaults": JSON(repairs[choice.key])})

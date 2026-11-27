@@ -1891,6 +1891,35 @@ def test_a_repair_read_admits_exactly_whoever_may_write_the_record(
     assert by_stranger.errors is not None and "not found" in by_stranger.errors[0].message
 
 
+@pytest.mark.parametrize(("label", "selector", "words"), [
+    ("storage.Backend", "backend_class", "storage.Backend.backend_class has no repair."),
+    ("integrate.OAuthClient", "provider_type", "provider type is not create-only, so it has no repair."),
+])
+def test_a_repair_read_of_a_selector_with_no_repair_is_a_plain_refusal(
+    db: None, label: str, selector: str, words: str,
+) -> None:
+    """A model without repairs, or a selector that is not create-only, refuses in the write's family, never INTERNAL."""
+
+    from django.apps import apps
+
+    del db
+    admin = _platform_admin(f"no-repair-{selector}")
+    model = apps.get_model(label)
+    with system_context(reason="test.repair.none"):
+        if label == "storage.Backend":
+            row = model.objects.create(slug="no-repair", label="No repair", backend_class="local")
+        else:
+            row = model.objects.create(slug="no-repair", display_name="No repair", client_id="no-repair")
+    result = execute_schema(GraphQLSchemas.from_discovery().build("console"), """
+        query($model: String!, $field: String!, $record: ID) {
+          impl_choices(model: $model, field: $field, record: $record) { key }
+        }
+    """, {"model": label, "field": selector, "record": _public_id(row)}, user=admin)
+
+    assert result.errors is not None and result.errors[0].extensions["code"] != "INTERNAL"
+    assert result.errors[0].extensions["validationErrors"] == {selector: [words]}
+
+
 def test_the_read_offers_a_bridge_s_repair_exactly_when_the_update_allows_it(db: None) -> None:
     """The contract a form reads: the key reads null exactly while its record read and its update are allowed."""
 

@@ -131,24 +131,33 @@ def test_a_repair_and_a_stale_rename_at_once_both_land() -> None:
 
 
 
-def test_a_stale_rename_racing_a_repair_that_reshaped_the_config_writes_its_loaded_config_back() -> None:
-    """Pinned limit: the stale save checks its config before the repair commits, then writes the whole row it loaded."""
+def test_a_stale_rename_racing_a_repair_that_sent_its_config_waits_for_it_and_is_refused_as_stale() -> None:
+    """The stale save reads its stored key and config under the row's lock: it waits for the repair, sees the new
+    key, and is refused as stale, so the repair's key, config and name stay, never the old class's config."""
 
-    repairer, stale = _retired_bridge("stale-config-race", config={"local_root": "/srv/team"})
+    repairer, stale = _retired_bridge("stale-config-race", config={"local_root": "/srv/team", "retired_flag": True})
 
-    def rename() -> None:
+    def rename() -> str:
         stale.display_name = "Renamed while repaired"
-        stale.save()
+        try:
+            stale.save()
+        except ValidationError as error:
+            return error.messages[0]
+        return "saved"
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic(), system_context(reason="test.impl.concurrency.reshape"):
             repairer.backend_class = "local"
+            repairer.config = {"local_root": "/srv/sent"}
             repairer.save()
             renamed = pool.submit(_in_thread(rename))
             time.sleep(1)
             assert not renamed.done()
-        renamed.result(timeout=30)
+        outcome = renamed.result(timeout=30)
 
+    assert outcome == "This record changed after it was loaded. Load it again, then make the change again."
     with system_context(reason="test.impl.concurrency.check"):
-        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config").get(pk=repairer.pk)
-    assert stored == ("local", "Renamed while repaired", {"local_root": "/srv/team"})
+        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config__local_root").get(
+            pk=repairer.pk,
+        )
+    assert stored == ("local", repairer.display_name, "/srv/sent")
