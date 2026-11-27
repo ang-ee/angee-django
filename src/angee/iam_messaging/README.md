@@ -40,7 +40,9 @@ as the new link's mail is recorded, and a refused issue leaves the previous
 link working. A link expires after `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL`
 seconds (three days by default). Like Django's password-reset tokens, it is
 bound to the account's email, password and last sign-in: a new address, a
-password set or changed, or any sign-in retires it. Saving the account inactive
+password set or changed, or any sign-in retires it; a mail queued before an
+administrator changes the account's email still goes to the address it was
+issued for, with a link that no longer signs in. Saving the account inactive
 (`set_active` or an administrative update) retires it for good, so reactivation
 revives none. It never signs in a protected account. A link outlives its
 issuer's role: revoking the administrator who issued it leaves it working, so an
@@ -92,11 +94,12 @@ transaction commits; Django's default mailer is not on its path. The account
 stores its address lower case; the handle owner lands it on the existing handle
 of that address in any letter case, and the mail goes to the account's own
 spelling, which the recipient row records as the send gave it. A merge never
-redirects it: an address a contact administrator merged into another is recorded
-on the kept handle and mailed exactly as given, and a mail whose recorded address
-its handle no longer names is refused whole, failed with its reason on the system
-channel, and reaches no mailbox (messaging's System mail); the link it carried
-is issued but undelivered until an administrator sends another.
+redirects it: an address merged into another handle is recorded on the kept
+handle and mailed exactly as given, and a mail whose recorded address its
+handle's merges no longer name (a merge reverted between the issue and the
+delivery, say) is refused whole, failed with its reason on the system channel,
+and reaches no mailbox (messaging's System mail); the link it carried is issued
+but undelivered until an administrator sends another.
 
 A link is offered only where it can be built and its mail sent, read from
 settings alone (`SignInLink.deliverable()`): the deployment's public origin

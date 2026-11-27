@@ -40,6 +40,7 @@ from rebac.schema import parse_zed
 
 import angee.iam_messaging
 from angee.base.build import merged_schemas
+from angee.base.models.identity import public_id_of
 from angee.base.origins import PublicOriginUnavailable
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
@@ -1100,8 +1101,8 @@ def test_two_accounts_whose_addresses_differ_only_in_case_share_one_handle_and_k
 def _merged_away(username: str) -> tuple[Any, Any, Any, Any]:
     """Merge the handle of the address an account ``username`` will have into another's, as a contact administrator
     merges a client's two addresses before the client has an account, then create the account; return it, both
-    handles and the merge's changeset. Once an account holds an address, no contact administrator may give it to
-    another party, so the merge comes first."""
+    handles and the merge's changeset. Once an account holds an address, no contact administrator may give it to a
+    client's party, so this merge comes first."""
 
     with system_context(reason="tests.iam_messaging.sign_in_link.merge"):
         merged = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value=f"{username}@example.com")
@@ -1126,11 +1127,13 @@ def test_an_account_whose_address_was_merged_into_another_is_mailed_at_its_own_a
 
 
 @pytest.mark.django_db(transaction=True)
-def test_the_merge_of_an_accounts_address_is_not_reverted_once_the_account_holds_it_and_its_link_is_delivered(
+def test_a_contact_administrators_merge_made_before_the_account_is_not_reverted_once_the_account_holds_its_address(
     deliverable, iam_admin, sent,
 ):
-    """Reverting the merge would give the account's address back to the contact's party, which parties refuses while
-    an account holds it; the merge stands, and the issued link's mail is delivered to the account's address."""
+    """A contact administrator merged the address into a client's handle before the account existed. Reverting that
+    merge would give the account's address back to the client's party, which parties refuses while an account holds
+    it, so a platform administrator's revert is refused: the merge stands, and the issued link's mail is delivered
+    to the account's address."""
 
     target, merged, kept, merge = _merged_away("guest-unreverted")
     token = sent(target, iam_admin)
@@ -1144,34 +1147,69 @@ def test_the_merge_of_an_accounts_address_is_not_reverted_once_the_account_holds
     assert _redeem(token) == target
 
 
-def test_a_link_whose_recorded_address_its_handle_no_longer_names_goes_to_no_mailbox_and_a_new_one_is_sent(
+@pytest.mark.django_db(transaction=True)
+def test_a_link_whose_address_merge_is_reverted_before_delivery_goes_to_no_mailbox_and_a_new_one_is_sent(
     deliverable, iam_admin, sent,
 ):
-    """System mail fails closed: a recipient row whose address its handle no longer names, reached here by a row
-    written past its check (the merge it was written under cannot be reverted while an account holds the address),
-    is refused whole with its stored reason, and nothing reaches any mailbox. The administrator who issued it was
-    answered "queued"; the failure shows on the system channel's message, failed with that reason, and the link is
-    issued and undelivered. A newly issued link is delivered to the account's own address and retires it."""
+    """A platform administrator merges an account's own address into another handle; a link is issued, recorded on
+    the kept handle with the account's address; the merge is reverted before the delivery. System mail fails closed:
+    the recorded address is one the kept handle's merges no longer name, so the message is refused whole, failed with
+    its stored reason, and reaches no mailbox. The administrator who issued it was answered "queued"; the failure
+    shows on the system channel's message, and the link is issued, current and undelivered. A newly issued link is
+    recorded on the account's own handle, live again, delivered to the account's address, and retires it."""
 
-    target = _person("guest-unnamed")
+    target = _person("guest-reverted")
+    with system_context(reason="tests.iam_messaging.sign_in_link.merge"):
+        own = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value=target.email)
+        Person.objects.for_user(target)
+        other = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value="other-guest-reverted@example.org")
+    with actor_context(iam_admin):
+        Handle._base_manager.get(pk=other.pk).with_actor(iam_admin).merge(records=[public_id_of(own)])
+    with system_context(reason="tests.iam_messaging.sign_in_link.merge"):
+        merge = Handle.history.filter(id=own.pk).order_by("-history_id").first().changeset
     undelivered = sent(target, iam_admin)
     [message] = _mails(target)
-    with system_context(reason="tests.iam_messaging.sign_in_link.unnamed"):
-        Recipient._base_manager.filter(message=message).update(address="intruder@elsewhere.test")
+    assert _given(message) == [(other.pk, target.email)]
+    with actor_context(iam_admin):
+        merge.with_actor(iam_admin).revert()
+    with system_context(reason=READ):
+        assert Handle._base_manager.get(pk=own.pk).merged_into_id is None
     sent_before = len(mail.outbox)
     assert not _deliver(message)["delivered"]
     assert len(mail.outbox) == sent_before
     with system_context(reason=READ):
         stored = Message._base_manager.get(pk=message.pk)
+        [link] = SignInLink._base_manager.filter(user=target)
     assert (stored.status, stored.local_fact("delivery_error")) == ("failed", UNNAMED)
     assert target.email not in UNNAMED
+    assert link.used_at is None and link.expires_at > timezone.now()  # issued and current, never delivered
     again = sent(target, iam_admin)
     newer = _mails(target)[-1]
-    assert _given(newer)[0][1] == target.email
+    assert _given(newer) == [(own.pk, target.email)]
     assert _deliver(newer)["delivered"]
     assert mail.outbox[-1].to == [target.email]
     assert _redeem(undelivered) is None
     assert _redeem(again) == target
+
+
+def test_a_queued_link_whose_account_email_an_administrator_changes_goes_to_the_address_it_was_issued_for(
+    deliverable, iam_admin, sent,
+):
+    """The mail is recorded with the address at the issue, so an email change by an administrator before the
+    delivery leaves it going there; its link no longer signs in, since a link is bound to the account's email (as
+    ``test_redemption_rechecks_the_account`` pins)."""
+
+    target = _person("guest-moving")
+    issued_for = target.email
+    token = sent(target, iam_admin)
+    [message] = _mails(target)
+    with actor_context(iam_admin):
+        account = User._base_manager.get(pk=target.pk).with_actor(iam_admin)
+        account.email = "guest-moved@example.org"
+        account.save(update_fields=["email"])
+    assert _deliver(message)["delivered"]
+    assert mail.outbox[-1].to == [issued_for]
+    assert _redeem(token) is None
 
 
 # ---------- what is refused, before anything is written ----------

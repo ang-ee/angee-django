@@ -161,7 +161,8 @@ live in code docstrings.
   one messaging refuses that Django admits (a quoted local part with an escaped space),
   which used to be offered and refused at the send in messaging's words. The mail
   goes to the account's own spelling of its address, which the recipient row
-  records, whatever spelling or merge its handle has.
+  records, whatever spelling or merge its handle has, or is not sent at all
+  when a merge it was written under is reverted before its delivery.
   `SignInLinkManager.issue` and `redeem` and the backend's `authenticate` hide
   their locals from an error report (bare `sensitive_variables`); the mutations
   carry no mark, since the schema logs their unexpected errors with no
