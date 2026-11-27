@@ -54,7 +54,8 @@ EXPECTED_VERBS = {
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": (
-        "admit disable drain enable enable_preview lock_grants reconcile_grants record_occurrences revoke_grant"
+        "admit disable drain enable enable_preview lock_grants lock_stored reconcile_grants record_occurrences "
+        "revoke_grant"
     ),
     "workflows.Trigger.queryset": "bulk_create update",
     "workflows.TriggerEvent.manager": "prune record_change record_changes record_occurrences skip_pending_occurrences",
