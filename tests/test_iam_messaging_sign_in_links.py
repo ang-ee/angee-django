@@ -30,6 +30,7 @@ from django.core.mail.backends.base import BaseEmailBackend
 from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.db.models.signals import post_init, pre_save
 from django.http import HttpResponse
+from django.template.base import Template
 from django.test import RequestFactory
 from django.test.utils import override_settings
 from django.utils import timezone
@@ -1192,6 +1193,32 @@ def test_a_template_the_render_refuses_is_answered_in_the_actions_words_and_logg
         row.delete()
     with override_settings(ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN=60):  # the refused issue started no cooldown
         assert sent(target, iam_admin)
+
+
+def test_an_engine_failure_quoting_the_link_leaves_no_log_record_holding_it(
+    deliverable, iam_admin, monkeypatch, caplog,
+):
+    """A render's unexpected failure whose own text quotes the link is answered as ``link_not_rendered``, and no
+    record of any logger holds the token or the link: the template addon logs such a failure by its type."""
+
+    target = _person("guest-engine")
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
+
+    def failing(self: Any, context: Any) -> str:
+        raise RuntimeError(f"The engine failed near {context.get('link')}.")
+
+    monkeypatch.setattr(Template, "render", failing)
+    with caplog.at_level(logging.DEBUG):
+        answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
+    assert result_data(answered)["issue_user_sign_in_link"] == {
+        "ok": False, "message": SIGN_IN_LINK_NOT_RENDERED_MESSAGE,
+    }
+    formatter = logging.Formatter()
+    held = sorted({
+        record.name for record in caplog.records for text in (SECRET, SIGN_IN_LINK_PATH)
+        if text in record.getMessage() or (record.exc_info and text in formatter.formatException(record.exc_info))
+    })
+    assert held == []
 
 
 def _broken(state: str, channel: Any) -> None:
