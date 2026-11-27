@@ -139,7 +139,7 @@ export {
   SURFACE_RENDERS_FAILURE,
   applyFormErrors,
   formErrorsFromForm,
-  useRefusalBannerFocus,
+  useRefusalFocus,
   type FormSubmitConflictCode,
   type FormSubmitResult,
   useDottedPathFieldErrors,

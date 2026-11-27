@@ -7,5 +7,6 @@ export type { BuildColumnsOptions } from "./list-body/columns";
 export { LeadingSelectionCell, RecordRow, SelectionToggle } from "./list-body/rows";
 export { VirtualPaddingRow, useVirtualWindow } from "./list-body/virtualization";
 export { groupedRowLabel, tableGroupAxes, bucketValueLabels, groupLabel } from "./list-body/grouping";
-export { cellContent, tableColumnLabel, readPath, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, measureValue, formatMeasure, alignOf, isQueryOnlyColumn, withQueryOnlyColumnsHidden, groupFieldLabel, enumValueLabel } from "./list-body/cell-utils";
+export { cellContent, tableColumnLabel, readPath, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, measureValue, formatMeasure, alignOf, isQueryOnlyColumn, withQueryOnlyColumnsHidden, groupFieldLabel, enumValueLabel, listOrderChoice } from "./list-body/cell-utils";
+export type { ListOrderChoice } from "./list-body/cell-utils";
 export { ListLoadingFooter, ListSkeletonRows, ListEmpty } from "./list-body/loading";

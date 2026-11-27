@@ -8,6 +8,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   Filter,
@@ -42,6 +43,7 @@ import {
 import { ListView } from "./ListView";
 import { CollectionTreeView } from "../tree/CollectionTreeView";
 import { ToastProvider } from "../../feedback";
+import { PaneToolbarHost } from "../../layouts/PaneToolbar";
 
 type ActivityRow = { id: string; title: string; parent?: string; expandable?: boolean };
 type Variables = { request: CollectionPageRequest | CollectionGroupRequest };
@@ -498,4 +500,26 @@ test("a payload a source's select refuses is that read's error, reported once pe
   await act(async () => { result.current.strict.get("page-2")!.refetch(); });
   await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
   await waitFor(() => expect(refused()).toHaveLength(2));
+});
+
+test("a tree in a pane offers the Order select over its own order, and a choice sets it as a header press does", async () => {
+  const custom = vi.fn(async () => ({ data: { page: { rows: [{ id: "root", title: "Root" }], total: 1 } } }));
+  let view: ResourceViewContextValue | undefined;
+  function Capture() { view = useResourceView(); return null; }
+  render(<Provider resources={[testDataResource("catalog.Reference")]} refineResources={[]} providerNames={[]}
+    dataProvider={{ custom, getList: vi.fn() }}>
+    <OperationDocumentsProvider documents={{}}><ToastProvider><PaneToolbarHost>
+      <ResourceViewProvider scope="local" initialState={{ pageSize: 25, sorting: [{ id: "title", desc: true }] }}>
+        <Capture />
+        <CollectionTreeView resource="authored.Activity" source={source} rowKey="id" parent="parent" label="title" hasChildren="expandable"
+          columns={[{ field: "title", header: "Title" }]} textFilterField="title" customFilterFields={[]} filterOptions={[]} pane={{ selector: "Activity" }} />
+      </ResourceViewProvider>
+    </PaneToolbarHost></ToastProvider></OperationDocumentsProvider>
+  </Provider>);
+  await screen.findByText("Root");
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const order = within(await screen.findByRole("group", { name: "Order" }));
+  expect(order.getByRole("menuitemradio", { name: "Title, descending" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(order.getByRole("menuitemradio", { name: "Title, ascending" }));
+  await waitFor(() => expect(view?.state.sorting).toEqual([{ id: "title", desc: false }]));
 });

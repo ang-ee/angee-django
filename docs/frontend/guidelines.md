@@ -1374,14 +1374,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
   the line naming the refused fields, so one focused place says everything;
-  with field reasons only, the first shown field takes focus where it can: the
-  form library focuses it as the answer lands, so a field disabled or replaced
-  while the submit runs (a native input of a schema-driven or definition
-  `ActionFormDialog`, held in a fieldset it disables; a checkbox or switch
-  still takes it) cannot take it, and the banner, which names the field but
-  does not repeat its reason, takes focus instead. A surface gives its
-  banner's focus through `useRefusalBannerFocus`,
-  never an effect of its own. Save stays focusable while a save runs.
+  with field reasons only, the first shown field takes focus.
+  `useRefusalFocus` alone carries that out: it waits until the surface reports
+  its controls ready (a dialog locks its fields while it submits), then asks
+  the form library's deferred `setFocus` for the field, and gives the
+  banner, which names the field but does not repeat its reason, focus only
+  when the field's control takes none. A surface hands it its form and whether
+  its controls are ready, and never moves a refusal's focus by an effect of
+  its own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.

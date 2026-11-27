@@ -4275,7 +4275,8 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await screen.findByText("Label is taken.");
     await screen.findByText("Code is taken.");
-    expect(document.activeElement).toBe(label);
+    // Focus follows the answer's render, through the form's own `setFocus`.
+    await waitFor(() => expect(document.activeElement).toBe(label));
   });
 
   test("a save the server refuses for a shown field and for a form-level reason moves focus to its banner, which also names the field", async () => {
