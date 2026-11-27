@@ -37,6 +37,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import create_platform_admin as _platform_admin
+from tests.test_messaging_compose import MAILERS
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -3387,7 +3388,7 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, se
     answering this channel's message lands in a thread of its own channel.
     """
 
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     channel = make_integration(
         "purge-recipients", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
     )
