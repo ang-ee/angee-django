@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { enUiMessages as UI } from "@angee/ui/i18n/en";
-import { createUiTestProviders } from "@angee/ui/testing";
+import { createUiTestProviders, recordFocusCalls, type RecordedFocusCall } from "@angee/ui/testing";
 
 import { ComposerStory } from "./Compose.stories";
 import {
@@ -22,7 +22,8 @@ vi.mock("@tanstack/react-virtual", () => ({
 }));
 
 const { createClient, clearClients } = createUiTestProviders();
-afterEach(() => { cleanup(); clearClients(); });
+let recorder: ReturnType<typeof recordFocusCalls> | undefined;
+afterEach(() => { recorder?.restore(); recorder = undefined; cleanup(); clearClients(); });
 
 /** One of the fragment's own words, as its bundle has it. */
 function word(key: string, values: Record<string, string | number> = {}): string {
@@ -127,7 +128,7 @@ async function chooseChannel(dialog: HTMLElement, label: string): Promise<void> 
   await waitFor(() => expect(within(dialog).getByRole("combobox", { name: CHANNEL_PICKER }).textContent).toContain(label));
 }
 
-/** The dialog's banner: the refusal's reasons, which takes focus. */
+/** The dialog's banner once it holds focus, as it does for a failure no field holds. */
 async function banner(dialog: HTMLElement): Promise<HTMLElement> {
   let focused: HTMLElement | null = null;
   await waitFor(() => {
@@ -149,6 +150,17 @@ function namesField(label: string): string {
   return ui("form.fixHighlightedFieldsNamed").replace("{fields}", label);
 }
 
+/**
+ * A refusal of one field brings the person to that field's control, once the control takes focus
+ * (`recordFocusCalls`: each call's target could take it), and never to the banner.
+ */
+async function expectFocusOn(control: () => HTMLElement, calls: readonly RecordedFocusCall[]): Promise<void> {
+  await waitFor(() => expect(document.activeElement).toBe(control()));
+  expect(document.activeElement?.getAttribute("aria-invalid")).toBe("true");
+  expect(calls.filter((call) => call.target.getAttribute("role") === "alert")).toEqual([]);
+  expect(calls.filter((call) => !call.takesFocus).map((call) => call.target.outerHTML.slice(0, 80))).toEqual([]);
+}
+
 test("Dana chooses among the channels the server lists as sendable, and Billing is refused at send under Channel", async () => {
   const { calls, sends } = mount({ surface: "new-message", seat: "dana" });
   const dialog = await openNewMessage();
@@ -161,14 +173,16 @@ test("Dana chooses among the channels the server lists as sendable, and Billing 
   await chooseChannel(dialog, "Billing desk");
   // The picker offers what `sendable` lists: never Archive, which Dana reads and may not send on.
   expect(calls.some((call) => call.field === "channels" && JSON.stringify(call.args.where ?? null).includes("sendable"))).toBe(true);
+  recorder = recordFocusCalls();
   await send(dialog);
   const refusal = recordedSend("dana", "Your invoice.").answer;
   if (!("data" in refusal)) throw new Error("The recorded Billing send was answered with an error.");
   const [reason = ""] = reasonsUnder(refusal, "channel");
   expect(reason).toBeTruthy();
-  // The banner names the field; its reason shows once, under it.
-  expect(bannerLines(await banner(dialog))).toEqual([namesField(word("compose.channel"))]);
-  expect(within(dialog).getAllByText(reason)).toHaveLength(1);
+  // Its reason shows once, under the field; the banner names the field; focus lands on the field.
+  expect(await within(dialog).findAllByText(reason)).toHaveLength(1);
+  expect(bannerLines(within(dialog).getByRole("alert"))).toEqual([namesField(word("compose.channel"))]);
+  await expectFocusOn(() => within(dialog).getByRole("combobox", { name: CHANNEL_PICKER }), recorder.calls);
   expect(sends()).toHaveLength(1);
 });
 
@@ -181,13 +195,15 @@ test.each([
   const dialog = await openNewMessage();
   address(dialog, word("compose.to"), ...to);
   fill(dialog, { text });
+  recorder = recordFocusCalls();
   await send(dialog);
   const answer = RECORDED.sends.find((entry) => entry.seat === "ana" && entry.variables.text === text
     && JSON.stringify(entry.variables.to) === JSON.stringify(to))?.answer;
   const [reason = ""] = reasonsUnder(answer, "to");
-  // The banner names the field; its reason shows once, under it.
-  expect(bannerLines(await banner(dialog))).toEqual([namesField(word("compose.to"))]);
-  expect(within(dialog).getAllByText(reason)).toHaveLength(1);
+  // Its reason shows once, under the field; the banner names the field; focus lands on the field.
+  expect(await within(dialog).findAllByText(reason)).toHaveLength(1);
+  expect(bannerLines(within(dialog).getByRole("alert"))).toEqual([namesField(word("compose.to"))]);
+  await expectFocusOn(() => within(dialog).getByRole("textbox", { name: word("compose.to") }), recorder.calls);
   expect((within(dialog).getByRole("textbox", { name: word("compose.message") }) as HTMLTextAreaElement).value).toBe(text);
 });
 
