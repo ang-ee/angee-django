@@ -393,8 +393,8 @@ a sender is read; the message's source keeps its `From` header. See
 [the message model](../src/angee/messaging/models.py).
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
-addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+addresses, the message's `Recipient` rows, one per mailbox of a handle and
+envelope role (`to`, `cc`, `bcc`), each recording the address a compose was given for it
 (`Recipient.address`, empty for one no caller handed as an address), which the message
 is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See

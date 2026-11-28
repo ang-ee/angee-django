@@ -50,7 +50,7 @@ SIGN_IN_LINK_QUEUED_MESSAGE = "Sign-in link queued for the account's email."
 """The action's answer: the link is recorded and its mail queued; delivery is the system channel's to show."""
 
 SIGN_IN_LINK_NO_ADDRESS_MESSAGE = "This account has no valid email address to send a sign-in link to."
-"""Refusal of an account whose address system mail cannot be sent to (messaging's ``clean_system_recipient``)."""
+"""Refusal of an account whose address system mail cannot be sent to (messaging's ``clean_sendable_recipient``)."""
 
 SIGN_IN_LINK_COOLDOWN_MESSAGE = "A sign-in link was queued for this account moments ago; wait to send another."
 """Refusal of a link within ``ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`` seconds of the account's last one."""
@@ -124,7 +124,7 @@ class UserSignInLinks(Composable, extends="iam.User"):
         Permission and eligibility are checked on the locked row, as for every
         account action (``User.lock_for_account_action``), and the account's
         ``email`` must be an address system mail can be sent to, as messaging's
-        ``Message.objects.clean_system_recipient`` decides; the account's own
+        ``Message.objects.clean_sendable_recipient`` decides; the account's own
         refusal (:data:`SIGN_IN_LINK_NO_ADDRESS_MESSAGE`) names no address. Then
         :meth:`SignInLinkManager.issue` records the link and its mail together,
         in this transaction, or refuses with nothing written. The action never
@@ -136,7 +136,7 @@ class UserSignInLinks(Composable, extends="iam.User"):
             user = account.lock_for_account_action(ISSUE_SIGN_IN_LINK, expected_revision=None)
             messages = cast(Any, apps.get_model("messaging", "Message")).objects
             try:
-                address = messages.clean_system_recipient(user.email)[1]
+                address = messages.clean_sendable_recipient(user.email)[1]
             except ValidationError:
                 raise ValidationError(SIGN_IN_LINK_NO_ADDRESS_MESSAGE) from None
             links = cast(Any, apps.get_model("iam_messaging", "SignInLink")).objects
@@ -172,7 +172,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         """Mail ``user`` a fresh link at ``address`` and store it; return the link. The token exists only in the mail.
 
         The caller holds ``user``'s row lock, has admitted the issue and gives
-        the account's address as messaging's ``clean_system_recipient`` returns
+        the account's address as messaging's ``clean_sendable_recipient`` returns
         it. In order, each refusal before anything is written: a link
         within ``ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`` seconds of the
         account's previous one; no row for :data:`SIGN_IN_LINK_TEMPLATE`

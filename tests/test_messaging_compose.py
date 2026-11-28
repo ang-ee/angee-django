@@ -760,15 +760,15 @@ def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: st
 
 @pytest.mark.parametrize("queued", [True, False], ids=["queued", "a-draft"])
 @pytest.mark.parametrize("entry", ["jörg@example.test", "kate@ex\uff3fample.test"])
-def test_a_persons_compose_refuses_what_the_transport_cannot_carry_as_clean_system_recipient_does(
+def test_a_persons_compose_refuses_what_the_transport_cannot_carry_as_clean_sendable_recipient_does(
     desk: Any, entry: str, queued: bool,
 ) -> None:
     """``clean_recipient`` reads the entry; compose, queued or held as a draft, refuses it under its role with the
-    code and words of the whole recipient rule (``clean_system_recipient``), before anything is written."""
+    code and words of the whole recipient rule (``clean_sendable_recipient``), before anything is written."""
 
     assert Message.objects.clean_recipient(entry) == ("", entry)
     with pytest.raises(ValidationError) as asked:
-        Message.objects.clean_system_recipient(entry)
+        Message.objects.clean_sendable_recipient(entry)
     with system_context(reason="tests.messaging.compose.clean_recipient"):
         handles, rows = Handle._base_manager.count(), _rows()
     with _refused(key="to", code="cannot_carry") as refused:
@@ -1459,6 +1459,29 @@ def test_a_persons_mail_to_a_merged_handles_address_follows_the_merge_to_the_kep
     assert _delivered(followed)["To"] == kept_address
     assert _rows_and_addresses(typed) == [(kept.pk, kept_address.upper())]
     assert _delivered(typed)["To"] == kept_address.upper()
+
+
+@pytest.mark.parametrize(
+    ("typed", "recorded"),
+    [(("account@example.test", "kept@example.net"), "kept@example.net"),
+     (("account@example.test", "other@example.org"), "")],
+    ids=["a-merged-address-and-the-kept-one", "two-merged-addresses"],
+)
+def test_a_persons_mail_to_two_addresses_merged_into_one_handle_is_one_row_and_one_mail_to_the_kept_address(
+    desk: Any, typed: tuple[str, str], recorded: str,
+) -> None:
+    """A merge redirects the mail a person addresses: an address merged into the kept handle records nothing, so two
+    typed addresses on one handle are one row, recording the kept handle's own address when it was typed, and one
+    mail to the kept address."""
+
+    with system_context(reason="tests.messaging.compose.merge"):
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+        merged = [Handle.objects.upsert(platform="email", value=value) for value in typed if value != kept.value]
+    for handle in merged:
+        _merge_as_contact_administrator(kept, handle)
+    message = Message.objects.compose(channel=desk, to=list(typed), text="Hi.", actor=desk.owner, queued=True)
+    assert _rows_and_addresses(message) == [(kept.pk, recorded)]
+    assert _delivered(message)["To"] == "kept@example.net"
 
 
 def test_a_persons_compose_to_a_merged_handles_address_reads_only_its_redirect_more(desk: Any) -> None:

@@ -507,7 +507,7 @@ def _mail_one(
     """Mail ``user`` the template ``key`` once for ``identity`` in ``ledger``, in a transaction of its own.
 
     The one send path both ledgers share. An address system mail would refuse
-    (``Message.objects.clean_system_recipient``, asked before the reads and the
+    (``Message.objects.clean_sendable_recipient``, asked before the reads and the
     render) is skipped as ``refused``, as is a refusal of the send keyed ``to``,
     which wrote nothing. ``values`` is read inside the transaction; ``None`` means
     nothing is left to mail (``skipped``); it is read in the language of ``user``'s
@@ -529,7 +529,7 @@ def _mail_one(
 
     messages = apps.get_model("messaging", "Message").objects
     try:
-        _name, address = messages.clean_system_recipient(user.email or "")
+        _name, address = messages.clean_sendable_recipient(user.email or "")
     except ValidationError as refusal:
         return _refused(user, key, refusal_codes(refusal))
     templates = apps.get_model("messaging_templates", "MessageTemplate").objects

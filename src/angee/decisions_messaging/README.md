@@ -152,7 +152,7 @@ read.
 ## When a mail cannot be sent
 
 - **A person's address is refused** (none, or one system mail refuses:
-  `Message.objects.clean_system_recipient` before the send, or the send keyed `to`):
+  `Message.objects.clean_sendable_recipient` before the send, or the send keyed `to`):
   that person is skipped and counted in the task's log, and the others still go.
 - **One mail's values cannot be sent.** Each send's refusal names its sources
   (`refusal_sources`); one of the `values` alone (a choice longer than a value may

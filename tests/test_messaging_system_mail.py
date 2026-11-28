@@ -438,16 +438,16 @@ def test_a_recipient_row_refuses_an_address_its_handle_does_not_name(system_mail
         assert Recipient._base_manager.get(pk=row.pk).address == "READER@example.test"
 
 
-def _system_mail(system_mailer: Any, entry: str, address: str) -> Any:
-    """One system mail to ``address``, through Django's ``send_mail`` or ``compose_as_system``."""
+def _system_mail(system_mailer: Any, entry: str, *addresses: str) -> Any:
+    """One system mail to ``addresses``, through Django's ``send_mail`` or ``compose_as_system``."""
 
     if entry == "send-mail":
         before = {message.pk for message in _recorded(system_mailer)}
-        assert send_mail("Your link", "Body.", None, [address]) == 1
+        assert send_mail("Your link", "Body.", None, list(addresses)) == 1
         (message,) = [message for message in _recorded(system_mailer) if message.pk not in before]
         return message
     return Message.objects.compose_as_system(
-        reason="tests.messaging.system_mail.merged", to=[address], subject="Your link", text="Body.",
+        reason="tests.messaging.system_mail.merged", to=list(addresses), subject="Your link", text="Body.",
     )
 
 
@@ -527,8 +527,8 @@ def test_a_system_mail_to_a_merged_handles_address_reads_only_its_redirect_more(
 def test_a_system_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_on_the_wire(
     system_mailer: Any, domain: str,
 ) -> None:
-    """The system recipient rule refuses what the transport cannot carry before anything is recorded; a space it
-    strips from the entry's end leaves the cleaned address, which is what is recorded and sent."""
+    """The recipient rule (``clean_sendable_recipient``) refuses what the transport cannot carry before anything is
+    recorded; a space it strips from the entry's end leaves the cleaned address, which is what is recorded and sent."""
 
     entry, rows = f"kate@{domain}", _rows()
     try:
@@ -694,6 +694,66 @@ def test_a_system_mail_written_on_a_twice_merged_handle_is_refused_after_the_out
     message = _system_mail(system_mailer, "compose-as-system", "account@example.test")
     assert _given(message) == [(outer.pk, "account@example.test")]
     _revert_merge(kept)
+    _not_sent(message)
+
+
+def _merged_into_kept() -> tuple[Any, Any]:
+    """``account@example.test`` merged into ``kept@example.net`` by a contact administrator; return both handles."""
+
+    with system_context(reason="tests.messaging.system_mail.two_mailboxes"):
+        account = Handle.objects.upsert(platform="email", value="account@example.test")
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+    _merge_as_contact_administrator(kept, account)
+    return account, kept
+
+
+@pytest.mark.parametrize("entry", ["send-mail", "compose-as-system"])
+@pytest.mark.parametrize("spelled", [False, True], ids=["two-addresses", "and-a-spelling-of-the-first"])
+def test_a_system_mail_to_two_addresses_merged_into_one_handle_is_a_row_and_a_mailbox_for_each(
+    system_mailer: Any, entry: str, spelled: bool,
+) -> None:
+    """A recipient row is one mailbox of one handle in one role: two addresses merged into one handle are two rows on
+    the kept handle, each recording its own address, and the mail goes to both, once each. Another spelling of one
+    of them is that address's row (``Handle.spelling_key_of``)."""
+
+    _account, kept = _merged_into_kept()
+    addresses = ("account@example.test", "kept@example.net", *(("ACCOUNT@example.test",) if spelled else ()))
+    message = _system_mail(system_mailer, entry, *addresses)
+    assert _given(message) == [(kept.pk, "account@example.test"), (kept.pk, "kept@example.net")]
+    sent = _deliver(message)
+    assert sent.to == ["account@example.test", "kept@example.net"]
+    assert sent.message()["To"] == "account@example.test, kept@example.net"
+
+
+def test_a_system_mail_to_two_merged_addresses_in_to_and_cc_is_a_row_in_each_role(system_mailer: Any) -> None:
+    """One address in each role is a row in each, as it was before a row named its mailbox."""
+
+    _account, kept = _merged_into_kept()
+    message = Message.objects.compose_as_system(
+        reason="tests.messaging.system_mail.two_mailboxes", to=["account@example.test"], cc=["kept@example.net"],
+        subject="Your link", text="Body.",
+    )
+    with system_context(reason="tests.messaging.system_mail.two_mailboxes"):
+        rows = list(Recipient._base_manager.filter(message=message).order_by("pk").values_list(
+            "handle_id", "role", "address",
+        ))
+    assert rows == [(kept.pk, "to", "account@example.test"), (kept.pk, "cc", "kept@example.net")]
+    sent = _deliver(message)
+    assert (sent.to, sent.cc) == (["account@example.test"], ["kept@example.net"])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_system_mail_to_two_merged_addresses_is_sent_to_neither_once_one_merge_is_reverted(
+    system_mailer: Any,
+) -> None:
+    """Delivery is all or nothing: once the merge is reverted, the kept handle no longer names the merged address its
+    row records, so the whole message is refused with that reason, and the kept handle's own address, whose row
+    still names it, is not mailed either."""
+
+    account, kept = _merged_into_kept()
+    message = _system_mail(system_mailer, "compose-as-system", "account@example.test", "kept@example.net")
+    assert _given(message) == [(kept.pk, "account@example.test"), (kept.pk, "kept@example.net")]
+    _revert_merge(account)
     _not_sent(message)
 
 
@@ -1438,9 +1498,9 @@ def test_a_rebound_system_backend_gives_callers_and_the_writer_one_answer(system
 @override_settings(MAILERS={"transport": LOCMEM}, DEFAULT_FROM_EMAIL=SENDER)
 def test_whether_system_mail_is_configured_and_can_reach_an_address_is_answered_with_no_database() -> None:
     assert Channel.objects.system_mail_configured()
-    assert Message.objects.clean_system_recipient("Reader <reader@example.test>") == ("Reader", "reader@example.test")
+    assert Message.objects.clean_sendable_recipient("Reader <reader@example.test>") == ("Reader", "reader@example.test")
     with pytest.raises(ValidationError) as refused:
-        Message.objects.clean_system_recipient("jörg@example.test")
+        Message.objects.clean_sendable_recipient("jörg@example.test")
     assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
 
 
@@ -1467,7 +1527,7 @@ def test_system_mail_refuses_exactly_the_recipients_its_recipient_rule_refuses(
     """Django's email validator refuses the first odd address and admits the second; system mail's rule decides."""
 
     expected = [] if refusal is None else [("cc", refusal)]
-    assert _refusals(lambda: Message.objects.clean_system_recipient(entry, key="cc")) == expected
+    assert _refusals(lambda: Message.objects.clean_sendable_recipient(entry, key="cc")) == expected
     assert _refusals(lambda: Message.objects.compose_as_system(
         reason="tests.system_mail", to=["reader@example.test"], cc=[entry], text="Hello.",
     )) == expected
