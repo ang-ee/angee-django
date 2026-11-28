@@ -117,7 +117,7 @@ fragment TranscriptMessageFields on MessageType {
   id channel { id display_name }
   feed_order_key direction preview
   parent { ...MessageReplyFields }
-  message_type sent_at created_at
+  message_type status is_locally_written scheduled_at delivery_attempts sent_at created_at
   sender { ...MessageSenderFields }
   parts { ...MessagePartFields }
   reaction_groups { ...ReactionGroupFields }

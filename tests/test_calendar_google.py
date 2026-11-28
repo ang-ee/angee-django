@@ -700,6 +700,15 @@ def test_the_organizer_carries_its_listed_answer_or_accepts() -> None:
     assert listed[1:] == (bob,)
 
 
+def test_the_organizer_is_found_in_its_list_in_any_spelling_of_its_address() -> None:
+    """The organizer's listed entry is the one ``attendee_key`` makes one attendee with it, not only another case."""
+
+    listed = ParsedAttendee("Alice@Bücher.example", AttendeeRole.REQUIRED, AttendeeResponse.TENTATIVE, "Alice")
+    assert organizer_first([listed], "alice@xn--bcher-kva.example") == (
+        ParsedAttendee("alice@xn--bcher-kva.example", AttendeeRole.ORGANIZER, AttendeeResponse.TENTATIVE, "Alice"),
+    )
+
+
 def test_a_page_with_more_records_than_the_bound_pages_locally(connected: Connected) -> None:
     with system_context(reason="tests.google"):
         CalendarSource.objects.filter(pk=connected.sources["work-token"].pk).update(config={"sync_page_bound": 1})

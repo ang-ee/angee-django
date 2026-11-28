@@ -265,6 +265,8 @@ export const RecordMessageFields = graphql(`
 
 // One projection for the transcript's window reads and authoritative retained-ID
 // revalidation. Messaging owns the total order and opaque fixed-window cursors.
+// A row written here and going out shows its delivery: status, when it is due to go
+// out or be retried, and the attempts made (`is_locally_written` with `direction`).
 export const TranscriptMessageFields = graphql(`
   fragment TranscriptMessageFields on MessageType {
     id
@@ -274,6 +276,10 @@ export const TranscriptMessageFields = graphql(`
     preview
     parent { ...MessageReplyFields }
     message_type
+    status
+    is_locally_written
+    scheduled_at
+    delivery_attempts
     sent_at
     created_at
     sender {
@@ -323,6 +329,69 @@ export const ThreadTranscriptRevalidateDocument = graphql(`
         ...TranscriptMessageFields
       }
       absent_ids
+    }
+  }
+`);
+
+/**
+ * The channels the viewer may send a new email on (the server's `sendable` filter), at
+ * most two: enough to tell none (no New message), exactly one (the dialog's channel,
+ * fixed) and a choice. With the bound `compose_message` takes, the dialog's To hint.
+ */
+export const MessagingSendableChannels = graphql(`
+  query MessagingSendableChannels {
+    channels(where: { sendable: { _eq: true } }, order_by: [{ display_name: asc }], limit: 2) {
+      id
+      display_name
+    }
+    message_recipient_limit
+  }
+`);
+
+/** Which of a transcript's channels the viewer may send on: the email rows on them offer Reply. */
+export const MessagingSendableChannelIds = graphql(`
+  query MessagingSendableChannelIds($ids: [String!]!) {
+    channels(where: { sendable: { _eq: true }, id: { _in: $ids } }) {
+      id
+    }
+  }
+`);
+
+/**
+ * One outgoing message through `compose_message`: a new email on `channel`, or an answer
+ * to `parent`. Each refusal of an argument is keyed by its name as the schema spells it;
+ * a keyed replay returns the original, whatever its delivery became.
+ */
+export const MessagingComposeMessage = graphql(`
+  mutation MessagingComposeMessage(
+    $text: String!
+    $idempotency_key: String!
+    $queued: Boolean!
+    $parent: ID
+    $channel: ID
+    $to: [String!]
+    $cc: [String!]
+    $bcc: [String!]
+    $subject: String! = ""
+    $scheduled_at: DateTime
+  ) {
+    compose_message(
+      text: $text
+      idempotency_key: $idempotency_key
+      queued: $queued
+      parent: $parent
+      channel: $channel
+      to: $to
+      cc: $cc
+      bcc: $bcc
+      subject: $subject
+      scheduled_at: $scheduled_at
+    ) {
+      ok
+      message
+      code
+      validation_errors
+      id
     }
   }
 `);

@@ -539,6 +539,7 @@ def test_a_collision_no_field_set_describes_refuses_the_merge() -> None:
     assert _tagged_parties(mobil) != []
 
 
+@pytest.mark.shared_inputs
 def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """Edges and plain pointing rows (a message's reactions) declare their identity alike."""
 

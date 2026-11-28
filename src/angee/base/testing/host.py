@@ -1,0 +1,197 @@
+"""Compose an addon's test host from its declared root apps and run native pytest.
+
+The compiler resolves the addon and any explicit ``--app`` roots, then emits their
+concrete models. Tests read those models from the app registry. The host lives
+under ``.test-hosts/<addon>/`` and is composed
+with ``--if-stale``, so a host whose composition inputs have not changed since its last
+run starts without composing again::
+
+    uv run --locked python -m angee.base.testing.host angee.uom [pytest arguments]
+
+The run uses SQLite unless ``DATABASE_URL`` names a PostgreSQL server, which then gets a
+test database of the addon's own. An addon-local pytest.ini owns collection,
+and pytest loads no conftest above the addon's package.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import os
+import sqlite3
+import subprocess
+import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Any
+
+from django.core.exceptions import ImproperlyConfigured
+
+SETTINGS_MODULE = "composed_test_settings"
+# Named for the host alone: a project's own ``runtime`` package elsewhere on the path must not shadow it.
+OUTPUT_MODULE = "composed_test_runtime"
+# The composer and Django read these; a host passes its own and nothing inherited.
+SCRUBBED_PREFIXES = ("ANGEE_", "YAMLCONF_")
+SCRUBBED_NAMES = frozenset({
+    "DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL",
+    "CACHE_URL", "REDIS_URL", "CELERY_BROKER_URL", "SENTRY_DSN",
+})
+# What every test host sets: tests run with in-process channels and one reference currency.
+TEST_HOST_SETTINGS: Mapping[str, Any] = {
+    "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
+    "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": True,
+}
+
+
+def sqlite_database(path: Path) -> dict[str, Any]:
+    """Return a file-backed SQLite test database, refusing a release the suite cannot run on.
+
+    A file, not ``:memory:``, gives each thread its own connection, so a worker thread's
+    write waits on the busy timeout instead of failing on a shared connection's table
+    lock; WAL keeps concurrent reads non-blocking. SQLite 3.53 is required: older
+    releases reject an ``ORDER BY`` naming an outer query's column, and 3.54 refuses
+    django-zed-rebac's permission reads (docs/checks.md#sqlite-version).
+    """
+
+    if not (3, 53) <= sqlite3.sqlite_version_info < (3, 54):
+        raise ImproperlyConfigured(
+            f"SQLite {sqlite3.sqlite_version} cannot run the SQLite suite, which needs SQLite 3.53: "
+            "older releases reject an ORDER BY naming an outer query's column, and 3.54 refuses "
+            "django-zed-rebac's permission reads (VIEWs and/or subqueries nested too deep). "
+            "Run it on the uv-managed CPython that .python-version names: uv run --managed-python."
+        )
+    name = str(path)
+    return {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": name,
+        "OPTIONS": {"timeout": 30, "init_command": "PRAGMA journal_mode=WAL;"},
+        "TEST": {"NAME": name},
+    }
+
+
+def postgres_database(database_url: str, host_root: Path) -> dict[str, Any]:
+    """Configure a PostgreSQL test database with room for native worker suffixes."""
+    import environ
+
+    from angee.base.conf import disable_jit
+
+    database = environ.Env.db_url_config(database_url)
+    if database["ENGINE"] != "django.db.backends.postgresql":
+        raise ImproperlyConfigured("A test host takes a PostgreSQL DATABASE_URL or none.")
+    disable_jit(database)
+    identity = f"{host_root.resolve()}\0{database['NAME']}".encode()
+    database["TEST"] = {"NAME": f"test_angee_{hashlib.sha256(identity).hexdigest()[:24]}"}
+    return database
+
+
+def scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
+    """Return ``environ`` without the settings a host must not inherit."""
+
+    return {
+        name: value for name, value in environ.items()
+        if not name.startswith(SCRUBBED_PREFIXES) and name not in SCRUBBED_NAMES
+    }
+
+
+def write(
+    host_root: Path, installed_apps: Sequence[str], database: Mapping[str, Any], *, output_dir: Path | None = None,
+) -> None:
+    """Write a host's settings: ``angee.base.conf.configure`` over a ``settings.yaml``.
+
+    The composer emits into ``output_dir``, a package the host root imports
+    (``<host_root>/composed_test_runtime`` by default).
+    """
+
+    import yaml
+
+    output_dir = output_dir or host_root / OUTPUT_MODULE
+    host_root.mkdir(parents=True, exist_ok=True)
+    (host_root / f"{SETTINGS_MODULE}.py").write_text(
+        "from angee.base.conf import configure\nconfigure(globals())\n", encoding="utf-8",
+    )
+    settings_yaml = yaml.safe_dump({
+        "SECRET_KEY": "isolated-composition-check",
+        "COMPOSE_OUTPUT_DIR": str(output_dir),
+        "COMPOSE_OUTPUT_MODULE": output_dir.name,
+        "INSTALLED_APPS": list(installed_apps),
+        "DATABASES": {"default": dict(database)},
+        **TEST_HOST_SETTINGS,
+    }, sort_keys=True)
+    # Replace existing files with a private file. Settings may carry database credentials.
+    with NamedTemporaryFile(mode="w", dir=host_root, encoding="utf-8", delete=False) as output:
+        path = Path(output.name)
+        try:
+            output.write(settings_yaml)
+            output.close()
+            path.replace(host_root / "settings.yaml")
+        finally:
+            path.unlink(missing_ok=True)
+
+
+def compose(host_root: Path, environ: Mapping[str, str], *, if_stale: bool, timeout: int) -> None:
+    """Run the composer for a written host, in a process of its own."""
+
+    result = subprocess.run(
+        [sys.executable, "-m", "django_compose", "compose", *(["--if-stale"] if if_stale else [])],
+        cwd=host_root, env=dict(environ), capture_output=True, text=True, check=False, timeout=timeout,
+    )
+    if result.returncode:
+        raise RuntimeError(f"Native compose failed:\n{result.stdout}\n{result.stderr}")
+
+
+def host_environ(host_root: Path, environ: Mapping[str, str]) -> dict[str, str]:
+    """Return the environment a host's composer and test process run in."""
+
+    host = scrubbed(environ)
+    host["PYTHONPATH"] = os.pathsep.join(filter(None, (str(host_root), environ.get("PYTHONPATH"))))
+    host["DJANGO_SETTINGS_MODULE"] = SETTINGS_MODULE
+    return host
+
+
+def run(
+    addon: str, pytest_args: Sequence[str], *, hosts_dir: Path, apps: Sequence[str] = (), timeout: int = 1500,
+) -> int:
+    """Compose the addon and explicit extra roots, then run pytest in the addon directory."""
+
+    spec = importlib.util.find_spec(addon)
+    if spec is None or not spec.submodule_search_locations:
+        raise ImproperlyConfigured(f"{addon} is not an importable package")
+    package = Path(next(iter(spec.submodule_search_locations)))
+    config = package / "pytest.ini"
+    if not config.is_file():
+        raise ImproperlyConfigured(f"{addon} has no addon-local pytest.ini declaring its tests")
+    host_root = (hosts_dir / addon).resolve()
+    database_url = os.environ.get("DATABASE_URL")
+    database = postgres_database(database_url, host_root) if database_url else sqlite_database(
+        host_root / "test.sqlite3",
+    )
+    write(host_root, [addon, *apps], database)
+    environ = host_environ(host_root, os.environ)
+    compose(host_root, environ, if_stale=True, timeout=timeout)
+    return subprocess.run([
+        # The host owns the import path: pytest-django must not add an enclosing project's.
+        sys.executable, "-m", "pytest", "--ds", SETTINGS_MODULE, "-o", "django_find_project=false",
+        "-c", str(config), "--confcutdir", str(package), "--nomigrations",
+        "-o", f"cache_dir={host_root / '.pytest_cache'}",
+        "-p", "django", "-p", "angee.base.testing.fixtures", *pytest_args,
+    ], cwd=package, env=environ, check=False, timeout=timeout).returncode
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run one addon's tests on its composed host."""
+
+    # Every argument it does not define goes to pytest, so it matches none by prefix.
+    parser = argparse.ArgumentParser(
+        prog="python -m angee.base.testing.host", description=__doc__.splitlines()[0], allow_abbrev=False,
+    )
+    parser.add_argument("addon", help="the addon's app name, such as angee.uom")
+    parser.add_argument("--app", action="append", default=[], help="explicit extra app root (repeatable)")
+    parser.add_argument("--hosts-dir", type=Path, default=Path(".test-hosts"), help="where hosts are written")
+    options, pytest_args = parser.parse_known_args(argv)
+    return run(options.addon, pytest_args, hosts_dir=options.hosts_dir, apps=options.app)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

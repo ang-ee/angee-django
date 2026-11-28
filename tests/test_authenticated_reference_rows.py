@@ -12,10 +12,6 @@ from angee.messaging_templates.testing.models import MessageTemplate
 from angee.portfolio.testing.models import Initiative, InitiativeProject, Product, Release, Update
 from angee.projects.testing.models import Project
 from angee.tags.testing.models import Tag
-from angee.uom.testing.models import (
-    Uom,
-    UomCategory,
-)
 from tests.conftest import create_user
 
 
@@ -23,8 +19,6 @@ from tests.conftest import create_user
 def reference_rows(db):
     with system_context(reason="test.reference.setup"):
         tag = Tag.objects.create(name="Reference")
-        category = UomCategory.objects.create(name="Count")
-        unit = Uom.objects.create(category=category, name="Each", ratio=1, rounding=1, is_reference=True)
         product = Product.objects.create(name="Reference")
         initiative = Initiative.objects.create(name="Reference")
         project = Project.objects.create(title="Reference")
@@ -41,7 +35,7 @@ def reference_rows(db):
             source="<p>Reference</p>", text_source="Reference", is_baseline=True,
         )
     # A tag assignment is not reference data: its record authorizes it (tests/test_tags.py).
-    return [tag, category, unit, product, initiative, placement, update, release, kit, layout]
+    return [tag, product, initiative, placement, update, release, kit, layout]
 
 
 def test_signed_in_reads_include_every_reference_and_the_dependent_arrow(reference_rows):

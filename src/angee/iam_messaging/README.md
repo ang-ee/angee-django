@@ -65,7 +65,12 @@ setting and its rule (`angee.base.origins.public_origin`): only an `https`
 origin (`http` only under `DEBUG`) with a valid host and port and no wildcard,
 user info or path builds links, and `angee.E051` reports any other set value.
 Links are also built only when `DEFAULT_FROM_EMAIL` is a valid address and
-`MAILERS["default"]` exists. Otherwise no link is offered and the action refuses.
+`MAILERS["default"]` exists; otherwise no link is offered and the action refuses.
+Where messaging is installed, a default mailer always exists (messaging's system
+mailer, which records mail), so this no longer says the mail can leave: a host
+with no transport mailer offers a link whose send raises and stamps nothing. And
+"accepted" then means recorded: a link whose delivery later fails is still
+stamped as sent and replaces the link that worked.
 The token rides the fragment, which no browser request, access log or referrer
 carries, and Angee's browser error reporting strips fragments from what it
 records. This addon's public `/sign-in-link` route renders IAM's login page with

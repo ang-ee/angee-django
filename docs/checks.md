@@ -49,14 +49,17 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py` |
-| PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
+| Addon host: an addon's own tests on the host the composer generates from its dependency closure; pytest arguments follow | `uv run --locked python -m angee.base.testing.host angee.<addon>` |
+| Framework test plan for an exact checkout comparison | `uv run --locked python scripts/changed_path_selection.py framework --base <base-sha> --head <checkout-sha>` |
+| Full framework test plan, including every declared addon host | `uv run --locked python scripts/changed_path_selection.py framework` |
+| Consumer selection, from its source slot and installed test environment | `python <framework-slot>/scripts/changed_path_selection.py pytest --base <base-sha> --head <checkout-sha> -- -q` |
 | PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Message template CPU-time bounds, skipped otherwise since they depend on the machine and its load: run whenever `src/angee/messaging_templates/` changes and at integration, serially, and report the times with the load | `ANGEE_TIMED_TESTS=1 env -u DATABASE_URL uv run --locked python -m pytest -q -s -n 0 tests/test_messaging_templates_render.py tests/test_messaging_templates_console.py` |
 | Message template mutations: drop or widen each rule that keeps a value text, and see that the value properties fail on generated examples alone where the mutation is a real break; run when those rules or their generator change, in a slot whose addon holds no uncommitted change (it restores the files) | `env -u DATABASE_URL uv run --locked python scripts/messaging_templates_mutations.py` |
 | Message templates console story fixture (`src/angee/messaging_templates/web/src/fixtures.recorded.json`), recorded from the test host: the test fails when the server's rows, words or schema drift from it; re-record it with the variable whenever they change, and review its diff. The recording and its check are SQLite's: a PostgreSQL host offers the `similar` and `notSimilar` filters on string fields, so the test skips there | `ANGEE_RECORD_FIXTURES=1 env -u DATABASE_URL uv run --locked python -m pytest -q tests/test_messaging_templates_console_fixture.py` |
+| Messaging composer story fixture (`src/angee/messaging/web/src/compose.fixtures.recorded.json`), recorded from the test host through the page's own documents: the test fails when the server's answers, words or schema drift from it; re-record it with the variable whenever they or a document of the page change, and review its diff; the recording and its check are SQLite's, and the module skips on PostgreSQL | `ANGEE_RECORD_FIXTURES=1 env -u DATABASE_URL uv run --locked python -m pytest -q tests/test_messaging_compose_console_fixture.py` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
@@ -126,7 +129,8 @@ knowledge, [pgvector test-database readiness](../tests/test_postgresql_extension
 the test settings' [JIT-off sessions](../tests/test_postgresql_jit.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
 parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks and
-[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) races,
+[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) and
+[organization domain-key repair](../tests/test_parties_organization_domains_concurrency.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),
@@ -173,8 +177,10 @@ lane's executed coverage.
 
 ### SQLite Version
 
-SQLite runs need SQLite 3.53, and the [test settings](../tests/settings.py) refuse any
-other release. Earlier releases (3.51.2 and older were checked) reject a subquery whose
+SQLite runs need SQLite 3.53, and the test hosts'
+[SQLite policy](../src/angee/base/testing/host.py), which the shared host's
+[test settings](../tests/settings.py) and every addon host use, refuses any other
+release. Earlier releases (3.51.2 and older were checked) reject a subquery whose
 `ORDER BY` names an outer query's column and report `no such column`; messaging's
 redirect-aware follower reads depend on that. SQLite 3.54.0 and 3.54.1 count each common
 table expression against the nesting limit, and django-zed-rebac's permission reads, one
@@ -236,9 +242,41 @@ connections or pytest's worker-local
 installed app registry is restored for every host loading the base fixtures (see
 [Source-addon Test Models](#source-addon-test-models)).
 
+### Isolated Addon Test Hosts
+
+For a new framework addon, use the addon template's default composed mode.
+It writes tests under the addon and a native `pytest.ini` in the addon
+directory. That file declares the suite to CI and tells pytest where to collect.
+The smallest configuration is `[pytest]` with `testpaths = tests` on the next
+line. Keep suite-local fixtures in `tests/conftest.py`. Tests obtain emitted
+models through Django's app registry and request the usual `db` fixture.
+
+Run `uv run --locked python -m angee.base.testing.host angee.<addon>` from the
+framework slot. The compiler resolves the addon's native requirements, emits
+concrete models, and hands the host to pytest. An explicit repeatable `--app`
+includes a companion test app for a local run. The default CI invocation uses
+the declared addon's native closure. The host loads pytest-django and the base
+fixture plugin in that order. Register optional fixture plugins with
+`pytest_plugins` in the addon's root `conftest.py`, such as
+`angee.provenance.testing.fixtures` when the suite needs attribution. The
+conftest loads after the runner's plugins so fixture overrides compose in order.
+It passes `django_find_project=false` so pytest-django uses this host's import
+path even when the addon checkout sits below an unrelated stack's `manage.py`.
+The addon's pytest configuration and conftests own collection. The runner
+keeps pytest's generated cache with the host artifacts.
+Selective test-only reach assumes the standard packaged `tests/` layout.
+Custom native test roots still run, with a full fallback across isolated
+hosts when their shared imports cannot be accounted for.
+Disposable PostgreSQL test database names include the resolved host directory
+and source database, with space for pytest-django's worker suffixes.
+
+Installing a new framework addon still changes the workspace manifests and
+typically the lockfile. The first PR therefore selects the full shared suite.
+Subsequent test-only edits can select just the declared addon host.
+
 ### Source-addon Test Models
 
-Share source-addon compositions through their owning test apps:
+The legacy bare host shares concrete test models through their owning test apps.
 [`angee.resources.testing`](../src/angee/resources/testing/__init__.py),
 [`angee.workflows.testing`](../src/angee/workflows/testing/__init__.py), and
 [`angee.integrate.testing`](../src/angee/integrate/testing/__init__.py). Their
@@ -549,13 +587,12 @@ database, and these commands do not create one.
 
 [CI](../.github/workflows/ci.yml) calls
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
-pushes to `main`. A pull request's merge gate is the static tier, the SQLite tests
-its changed paths reach, the PostgreSQL contracts they reach with the examples
-profile's planner gate, the packages and the composed stack with its smoke. A
-pull request's run tests its merge commit, the tree `main` gets, so a push to
-`main` runs the static tier and what a pull request runs in part: the whole SQLite
-suite, which also catches what a pull request's selection missed, and the whole
-PostgreSQL lane. The packages and the composed stack hold while `main` has not moved
+pushes to `main`. A pull request's merge gate includes the static tier, the SQLite
+tests, PostgreSQL contracts and addon hosts its changed paths reach, the
+packages, and the composed stack with its smoke. A pull request tests its
+merge commit, the tree `main` gets. A push to `main` runs the static tier,
+the whole SQLite suite, every addon host, and the whole PostgreSQL lane.
+The packages and the composed stack hold while `main` has not moved
 since the pull request's run started; merge only then, or run it again. Both events
 also run CI's `guards` job: gitleaks over the whole history, and no tracked
 `.work/` path. A new push to a pull request cancels the run it supersedes, and a new
@@ -568,9 +605,12 @@ GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork alwa
 runs on GitHub-hosted runners. This repository leaves it unset: GitHub-hosted
 runners cost a public repository nothing, and self-hosted runners shared between
 repositories queue a pull request's jobs behind each other's. The organization's free
-plan runs at most 20 GitHub-hosted jobs at once, and a pull request's run is currently
-19 jobs, so a second run started meanwhile waits for runners. A private consumer, whose
-GitHub-hosted minutes are billed, sets it to its self-hosted runners.
+plan allows 20 GitHub-hosted jobs concurrently. The framework workflow can
+expand to 20 jobs for a full-fallback pull request, with at most 17 eligible to
+run at once. The selector precedes the test shards and the two aggregate checks
+wait for their jobs. The shared SQLite, PostgreSQL, and addon-host jobs skip
+empty selections. A narrower PostgreSQL selection can use fewer groups. A
+private consumer can set `CI_RUNS_ON` to its self-hosted runners.
 The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
@@ -586,24 +626,27 @@ The current tiers are:
   enabled and `DATABASE_URL` unset. The composed-host tests run here, one node per
   composed profile: each composes and boots once and reports every test it ran as
   a subtest, and the heaviest (the examples profile, about 560 stored seconds)
-  sets the floor of its shard. On a pull request the shards run only the test
-  files [`changed_path_selection.py`](../scripts/changed_path_selection.py) picks
-  from the merge commit's diff against its base: changed test files and the test
-  files that import a changed module through the import graph `lint-imports`
-  checks; a change under `templates/` selects the template contract tests that
-  render or read them. A change to an input every test reads without importing it
-  (dependencies, the Python pin, conftests and the shared test plugins, settings and
-  autoconfig, `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
-  suite. So does a Python change to a shared owner every addon composes onto
-  (`angee.base`, `angee.server`, `angee.graphql`), to a module every test loads
-  (what the repository's conftest imports, the shared test graph in
-  `tests/conftest.py` among it, and the framework plugins it names), and to a
-  Python file outside the import graph, such as a removed module; the compose
-  migration templates are in the graph. Docs and web code select no Python test,
-  and the shards do not start.
-  The `select` job computes the selection once for both lanes. What the app
-  registry, signals or composition connect without an import surfaces only in a
-  run that selects the whole suite.
+  sets the floor of its shard. The `select` job uses the exact pull request
+  base and checked merge commit to plan SQLite paths, PostgreSQL coverage and
+  addon hosts. [Changed-path selection](../scripts/changed_path_selection.py)
+  combines the installed compiler app graph with test helper imports, literal
+  Django app lookups and pytest's own collection. A source change reaches its
+  addon's tests and reverse consumers. Installing a prerequisite does not
+  select the prerequisite's own suite. Templates retain their existing Python
+  readers. A pytest `shared_inputs` mark declares that a test reads across the
+  composed host or repository, as the all-installed examples profile does.
+  Register the mark in pytest configuration or the root conftest. Consumer
+  contract readers can also use it for frontend and test-support changes.
+
+  The selector reports `full`, `selected` or `empty` with a reason. Missing
+  comparison or graph information, deletions and moves, runner or dependency
+  declarations, and lockfiles select the full applicable suite. Changes to
+  shared inputs such as settings, test plugins, permission declarations,
+  GraphQL documents and fixture data can broaden the legacy shared host.
+  Addon frontend inputs reach their owning Python contracts, reverse consumers
+  and declared shared readers.
+  Changes limited to prose, schema-independent frontend packages or tests in
+  an isolated addon can leave both shared SQLite and PostgreSQL empty.
 - **PostgreSQL:** on `main`, in six groups of its own beside the
   SQLite shards, assigned by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
@@ -618,22 +661,32 @@ The current tiers are:
   in `template1` before any test database is created. Its server runs with
   `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. A pull request runs the same
-  job over the selection's entries its changed paths reach and
-  [`test_composed_examples.py`](../tests/test_composed_examples.py), in as many
-  groups as their stored time needs
-  ([`postgres_selection.py`](../scripts/postgres_selection.py)), so a PostgreSQL-only
-  contract the change can break fails before merge and the member planner-memory
-  gate catches a permission change's planning cost. A PostgreSQL-only test runs in
+  job over the selection's entries its changed paths reach, in as many groups
+  as their stored time needs ([`postgres_selection.py`](../scripts/postgres_selection.py)).
+  Changes to installed addon inputs, permissions, and the profile's named test
+  modules reach the planner profile in [`test_composed_examples.py`](../tests/test_composed_examples.py).
+  The test harness writes its composed host directly,
+  so project templates reach the tests that render them. An empty PostgreSQL
+  selection skips the job. A PostgreSQL-only test runs in
   CI only once the selection lists it. The `uv` job passes only when the static
-  tier, the selection, every SQLite shard that started and every PostgreSQL group
-  pass, so callers keep one check name.
+  tier, the selection, every SQLite shard that started, every PostgreSQL group and
+  the addon hosts pass, so callers keep one check name.
+- **Addon hosts** (the `addon hosts` job) run selected [isolated addon
+  suites](#isolated-addon-test-hosts) on SQLite. One job runs the selected suites
+  and is skipped when the selector returns no addon paths. Main runs all
+  declared addon hosts. CI caches generated artifacts by lockfile and source
+  hashes, and the compiler verifies a restored host with `compose --if-stale`.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
   and addon fragments (framework packages stay with the packages job; fragments
   test one package at a time), smoke the composed models, and run the bridges repository's
   pytest suite with its
-  native source-test settings and collection policy. Bridge tests use the
+  native SQLite source-test settings and collection policy. A bridge pull request
+  selects from the bridge checkout diff. A framework-triggered bridge run runs
+  the whole bridge suite. The consumer PostgreSQL steps select test files after
+  installing and composing their declared host. They keep the same app roster,
+  test roots, pytest plugins and bounded shards on selected runs. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
   as the consumer lane does. The tools export omits workspace members already
   supplied by the composed host. Bridge packages declare dependencies in their own

@@ -19,8 +19,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest import TestSuite, TextTestResult
 
-import environ
-
 if TYPE_CHECKING:
     import pytest
 
@@ -144,62 +142,34 @@ def boot(
     source_root = source_root.resolve()
     runtime_dir = runtime_dir.resolve()
     extra_addon_dirs = [path.resolve() for path in extra_addon_dirs]
-    database: dict[str, Any] = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
-    if test_postgresql:
-        database_url = os.environ.get("DATABASE_URL", "")
-        database = environ.Env.db_url_config(database_url)
-        if database["ENGINE"] != "django.db.backends.postgresql":
-            raise ValueError("--test-postgresql requires a PostgreSQL DATABASE_URL.")
-        # DiscoverRunner creates this secondary database. A composed-host test
-        # can run beside another one on a different xdist worker, so give each
-        # worker its own name just as pytest-django does for the primary database.
-        worker = os.environ.get("PYTEST_XDIST_WORKER")
-        suffix = f"_{worker}" if worker else ""
-        database["TEST"] = {"NAME": f"test_composed_{database['NAME']}{suffix}"}
     # Every framework package is installed in this interpreter. Extra test packages
     # carry their own real dist-info on the explicitly supplied source roots.
     host_root = runtime_dir.parent
     host_root.mkdir(parents=True, exist_ok=True)
     python_paths = [str(host_root), str(source_root), *(str(path) for path in extra_addon_dirs)]
     sys.path[:0] = python_paths
-    for name in tuple(os.environ):
-        if name.startswith(("ANGEE_", "YAMLCONF_")) or name in {
-            "DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "SENTRY_DSN",
-        }:
-            os.environ.pop(name)
 
     import django
-    import yaml
     from django_compose.components import installed_components
 
+    from angee.base.testing import host
+
+    database: dict[str, Any] = (
+        host.postgres_database(os.environ.get("DATABASE_URL", ""), host_root)
+        if test_postgresql else {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+    )
     index = installed_components("angee.addons")
     installed_apps = list(root_apps) if root_apps is not None else sorted(
         name for name in index.providers if include_examples or name.startswith("angee.")
     )
-    settings_module = "composed_test_settings"
-    (host_root / f"{settings_module}.py").write_text(
-        "from angee.base.conf import configure\nconfigure(globals())\n", encoding="utf-8",
-    )
-    (host_root / "settings.yaml").write_text(yaml.safe_dump({
-        "SECRET_KEY": "isolated-composition-check",
-        "COMPOSE_OUTPUT_DIR": str(runtime_dir),
-        "COMPOSE_OUTPUT_MODULE": runtime_dir.name,
-        "INSTALLED_APPS": installed_apps,
-        "DATABASES": {"default": database},
-        "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
-        "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": True,
-    }, sort_keys=True), encoding="utf-8")
-    if os.environ.get("PYTHONPATH"):
-        python_paths.append(os.environ["PYTHONPATH"])
-    os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
-    os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
-    result = subprocess.run(
-        [sys.executable, "-m", "django_compose", "compose"], cwd=host_root,
-        env=dict(os.environ), capture_output=True, text=True, check=False,
-        timeout=COMPOSED_TEST_TIMEOUT,
-    )
-    if result.returncode:
-        raise RuntimeError(f"Native compose failed:\n{result.stdout}\n{result.stderr}")
+    host.write(host_root, installed_apps, database, output_dir=runtime_dir)
+    # This process sets Django up on the host it composes, so it takes the host's environment.
+    host_env = host.host_environ(host_root, {
+        **os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (*python_paths[1:], os.environ.get("PYTHONPATH")))),
+    })
+    os.environ.clear()
+    os.environ.update(host_env)
+    host.compose(host_root, host_env, if_stale=False, timeout=COMPOSED_TEST_TIMEOUT)
     django.setup()
     if root_apps is None:
         importlib.import_module("tests.statement_models")

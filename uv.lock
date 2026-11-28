@@ -26,6 +26,7 @@ members = [
     "angee-checklists",
     "angee-dashboards",
     "angee-decisions",
+    "angee-decisions-messaging",
     "angee-extraction",
     "angee-graphql",
     "angee-iam",
@@ -156,6 +157,7 @@ dependencies = [
     { name = "angee-checklists" },
     { name = "angee-dashboards" },
     { name = "angee-decisions" },
+    { name = "angee-decisions-messaging" },
     { name = "angee-extraction" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
@@ -242,9 +244,11 @@ dev = [
     { name = "example-notes" },
     { name = "example-theme" },
     { name = "faker" },
+    { name = "grimp" },
     { name = "html5lib" },
     { name = "hypothesis" },
     { name = "import-linter" },
+    { name = "iniconfig" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pytest" },
     { name = "pytest-django" },
@@ -274,6 +278,7 @@ requires-dist = [
     { name = "angee-checklists", editable = "src/angee/checklists" },
     { name = "angee-dashboards", editable = "src/angee/dashboards" },
     { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-decisions-messaging", editable = "src/angee/decisions_messaging" },
     { name = "angee-extraction", editable = "src/angee/extraction" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
@@ -357,9 +362,11 @@ dev = [
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
+    { name = "grimp", specifier = ">=3.19" },
     { name = "html5lib", specifier = ">=1.1,<2" },
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "import-linter", specifier = ">=2.1" },
+    { name = "iniconfig", specifier = ">=2.3" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=9" },
     { name = "pytest-django", specifier = ">=4.8" },
@@ -766,6 +773,33 @@ requires-dist = [
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-decisions-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/decisions_messaging" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-brandkit" },
+    { name = "angee-decisions" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-messaging" },
+    { name = "angee-messaging-templates" },
+    { name = "angee-parties" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-brandkit", editable = "src/angee/brandkit" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-messaging-templates", editable = "src/angee/messaging_templates" },
+    { name = "angee-parties", editable = "src/angee/parties" },
 ]
 
 [[package]]
@@ -1277,6 +1311,7 @@ dependencies = [
     { name = "angee-brandkit" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
+    { name = "angee-messaging" },
     { name = "angee-parties" },
     { name = "angee-provenance" },
     { name = "angee-resources" },
@@ -1290,6 +1325,7 @@ requires-dist = [
     { name = "angee-brandkit", editable = "src/angee/brandkit" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-resources", editable = "src/angee/resources" },
@@ -2177,6 +2213,7 @@ dependencies = [
     { name = "angee-timeline" },
     { name = "angee-web" },
     { name = "django-compose" },
+    { name = "django-cte" },
 ]
 
 [package.metadata]
@@ -2192,6 +2229,7 @@ requires-dist = [
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
+    { name = "django-cte", specifier = ">=5,<6" },
 ]
 
 [[package]]

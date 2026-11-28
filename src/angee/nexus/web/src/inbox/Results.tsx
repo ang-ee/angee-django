@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { senderDisplayName } from "@angee/parties";
-import { isStatusUpdate, MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
+import { isStatusUpdate, MessagePaneRow, NewMessageAction, useMessageChannelLabel } from "@angee/messaging";
 import {
   AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select,
   optionLabel, useEnumOptions, useResourceView,
@@ -34,8 +34,12 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
         ? selection.label
         : t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}
         meta={updates.only ? t("inbox.updatesHint") : selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
-        actions={selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}
-          title={t("inbox.clearSelection")} onClick={() => navigation.select()}><Glyph name="x" /></Button> : undefined} />
+        actions={<>
+          {selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}
+            title={t("inbox.clearSelection")} onClick={() => navigation.select()}><Glyph name="x" /></Button> : null}
+          {/* A new email opens in the reader once it is written. */}
+          <NewMessageAction onSent={(id) => navigation.read(id)} />
+        </>} />
       <ListView presentation="workspace" selectable={false} resource="nexus.InboxResults" source={source}
         columns={columns} availableViews={["list"]} textFilterField="text" maxGroupDepth={1}
         defaultExpandedGroups="all" {...controls} search={{ box: true }}

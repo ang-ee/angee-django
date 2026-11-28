@@ -139,20 +139,16 @@ jobs:
           tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
           tests/test_runtime_image.py
 
-  # One selection per run, which the SQLite shards and the PostgreSQL groups read.
-  # A pull request's shards run the test files its changed paths reach
-  # (scripts/changed_path_selection.py), and do not start when those reach no
-  # Python test; its PostgreSQL groups run the planner gate and the PostgreSQL
-  # selection's entries those paths reach (scripts/postgres_selection.py), in as
-  # many groups as their stored time needs. Every other event runs the whole suite
-  # and the whole PostgreSQL selection in six groups.
+  # One selection for the framework's SQLite shards, PostgreSQL groups and addon hosts.
   select:
     if: ${{ inputs.uv-enabled }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     outputs:
-      sqlite: ${{ steps.select.outputs.sqlite }}
+      sqlite-mode: ${{ steps.select.outputs.sqlite-mode }}
       sqlite-tests: ${{ steps.select.outputs.sqlite-tests }}
+      addon-hosts: ${{ steps.select.outputs.addon-hosts }}
+      addon-host-count: ${{ steps.select.outputs.addon-host-count }}
       postgres-tests: ${{ steps.select.outputs.postgres-tests }}
       postgres-groups: ${{ steps.select.outputs.postgres-groups }}
     steps:
@@ -163,33 +159,29 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      # bash runs with errexit and pipefail, so a failed diff or selection fails the job.
       - id: select
         shell: bash
         env:
-          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
-            # A moved file as its old path too: a removed module selects the whole suite.
-            reached=$(git diff --name-only --no-renames HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
-            postgres=(scripts/postgres_selection.py)
-          else
-            reached=
-            postgres=(scripts/postgres_selection.py --all)
+          if [ -n "$BASE" ] && ! git cat-file -e "$BASE^{commit}"; then
+            git fetch --depth=1 origin "$BASE" || echo "::warning::Comparison base unavailable; running full tests"
           fi
-          if [ "$EVENT" = pull_request ] && [ -z "$reached" ]; then
-            sqlite=false
-            echo "SQLite: not run, as the changed paths reach no Python test"
-          else
-            sqlite=true
-            echo "SQLite: ${reached:-the whole suite}"
-          fi
-          postgres_tests=$(printf '%s\n' "$reached" | uv run --locked python "${postgres[@]}")
-          postgres_groups=$(printf '%s\n' "$reached" | uv run --locked python "${postgres[@]}" --groups)
+          plan=$(uv run --locked python scripts/changed_path_selection.py framework --base "$BASE" --head "$HEAD_SHA")
+          echo "$plan"
+          sqlite_mode=$(jq -er '.shared.mode' <<< "$plan")
+          reached=$(jq -er '.shared.paths[]?' <<< "$plan" || test "$sqlite_mode" = empty)
+          postgres=(scripts/postgres_selection.py)
+          if [ "$sqlite_mode" = full ]; then postgres+=(--all); fi
+          postgres_tests=$(uv run --locked python "${postgres[@]}" <<< "$reached")
+          postgres_groups=$(uv run --locked python "${postgres[@]}" --groups <<< "$reached")
           echo "PostgreSQL groups $postgres_groups: $postgres_tests"
           {
-            echo "sqlite=$sqlite"
-            echo "sqlite-tests=$(printf '%s' "$reached" | tr '\n' ' ')"
+            echo "sqlite-mode=$sqlite_mode"
+            echo "sqlite-tests=$(jq -ce '.shared.paths' <<< "$plan")"
+            echo "addon-hosts=$(jq -ce '.hosts.paths' <<< "$plan")"
+            echo "addon-host-count=$(jq -er '.hosts.paths | length' <<< "$plan")"
             echo "postgres-tests=$(printf '%s' "$postgres_tests" | tr '\n' ' ')"
             echo "postgres-groups=$postgres_groups"
           } >> "$GITHUB_OUTPUT"
@@ -201,7 +193,7 @@ jobs:
   uv-shard:
     name: uv ${{ matrix.group }}/6
     needs: select
-    if: ${{ inputs.uv-enabled && needs.select.outputs.sqlite == 'true' }}
+    if: ${{ inputs.uv-enabled && needs.select.outputs.sqlite-mode != 'empty' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
@@ -215,13 +207,14 @@ jobs:
           python-version: ${{ inputs.python-version }}
       - shell: bash
         env:
-          # Empty: the whole suite.
           TESTS: ${{ needs.select.outputs.sqlite-tests }}
+          MODE: ${{ needs.select.outputs.sqlite-mode }}
         run: |
+          mapfile -t tests < <(jq -r '.[]' <<< "$TESTS")
           # A small selection can leave a shard nothing to run: pytest's exit code 5.
-          uv run pytest -q -n auto --dist loadfile --durations=25 \
-            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} $TESTS \
-            || { [ $? -eq 5 ] && [ -n "$TESTS" ]; }
+          uv run --locked pytest -q -n auto --dist loadfile --durations=25 \
+            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} "${tests[@]}" \
+            || { [ $? -eq 5 ] && [ "$MODE" = selected ]; }
 
   # The PostgreSQL selection is balanced over its own timing map
   # (.test_durations_postgres, least_duration): every worker flushes the
@@ -231,7 +224,7 @@ jobs:
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/${{ strategy.job-total }}
     needs: select
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled && needs.select.outputs.postgres-groups != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
@@ -286,9 +279,8 @@ jobs:
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         # The selection is .github/postgres-selection.txt; a pull request runs the
-        # entries its changed paths reach and the examples profile, whose member
-        # planner-memory gate budgets what every permission change adds to the
-        # console's reads.
+        # entries its changed paths reach. The examples profile's planner-memory
+        # gate follows its declared inputs, including changes to permissions.
         env:
           TESTS: ${{ needs.select.outputs.postgres-tests }}
         run: |
@@ -318,23 +310,61 @@ jobs:
             postgresql-contracts.xml
           retention-days: 14
 
-  # One verdict under the check name pull requests and callers already know:
-  # a failed, cancelled or timed-out shard fails it.
+  # One bounded job for every selected addon host.
+  addon-hosts:
+    name: addon hosts
+    needs: select
+    if: ${{ inputs.uv-enabled && needs.select.outputs.addon-host-count != '0' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      # The newest hosts composed against this lockfile; compose --if-stale recomposes a
+      # host whose composition inputs, the composer's own snapshot of its apps' sources
+      # and settings, changed since, so a stale host never runs.
+      - uses: actions/cache@v4
+        with:
+          path: .test-hosts/*/composed_test_runtime
+          key: test-hosts-${{ hashFiles('uv.lock') }}-${{ hashFiles('src/**/*.py', 'src/**/*.zed', 'src/**/pyproject.toml', '!src/**/tests/**') }}
+          restore-keys: test-hosts-${{ hashFiles('uv.lock') }}-
+      - shell: bash
+        env:
+          ADDON_HOSTS: ${{ needs.select.outputs.addon-hosts }}
+        run: |
+          mapfile -t addons < <(jq -r '.[]' <<< "$ADDON_HOSTS")
+          status=0
+          for addon in "${addons[@]}"; do
+            echo "::group::$addon"
+            uv run --locked python -m angee.base.testing.host "$addon" -q --durations=10 || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  # Preserve the required check name and accept only intentional skips.
   uv:
     if: ${{ always() && inputs.uv-enabled }}
-    needs: [python-quality, select, uv-shard, uv-postgres]
+    needs: [python-quality, select, uv-shard, uv-postgres, addon-hosts]
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - run: |
-          echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
+          echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }} hosts=${{ needs.addon-hosts.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.select.result }}" = success
           # The shards are skipped where select turned them off: the changed paths reach
           # no Python test.
           test "${{ needs.uv-shard.result }}" = success || {
-            test "${{ needs.select.outputs.sqlite }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
-          test "${{ needs.uv-postgres.result }}" = success
+            test "${{ needs.select.outputs.sqlite-mode }}" = empty && test "${{ needs.uv-shard.result }}" = skipped
+          } || exit 1
+          test "${{ needs.uv-postgres.result }}" = success || {
+            test "${{ needs.select.outputs.postgres-groups }}" = '[]' && test "${{ needs.uv-postgres.result }}" = skipped
+          } || exit 1
+          test "${{ needs.addon-hosts.result }}" = success || {
+            test "${{ needs.select.outputs.addon-host-count }}" = 0 && test "${{ needs.addon-hosts.result }}" = skipped
+          } || exit 1
 
   pnpm:
     if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
@@ -442,6 +472,30 @@ jobs:
               subprocess.run(["git", "-C", str(target), "fetch", "--depth=1", "origin", ref], check=True)
               subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
           PY
+      - name: Fetch the caller's pull-request base for test selection
+        if: ${{ github.event_name == 'pull_request' && (inputs.consumer-path != '' || (inputs.addons-profile == 'full' && github.repository == 'ang-ee/angee-messaging-bridges')) }}
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          CONSUMER_PATH: ${{ inputs.consumer-path }}
+          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          slot=$CONSUMER_PATH
+          if [ -n "$slot" ]; then
+            source=$(jq -r --arg slot "$slot" '.[] | select(.path == $slot) | .repository' <<< "$CONSUMER_SOURCES")
+            if [ "$source" != "$CALLER_REPOSITORY" ]; then exit 0; fi
+          else
+            slot=angee-messaging-bridges
+          fi
+          target="stack/workspaces/src/$slot"
+          if ! git -C "$target" cat-file -e "$BASE^{commit}"; then
+            git -C "$target" fetch --depth=1 origin "$BASE" || echo "::warning::Comparison base unavailable; running full tests"
+          fi
+          {
+            echo "TEST_BASE=$BASE"
+            echo "TEST_HEAD=$HEAD_SHA"
+          } >> "$GITHUB_ENV"
       # Into the job's own directory: no root, and nothing outlives the job on a reused
       # self-hosted runner.
       - name: Install the angee CLI (the public install path)
@@ -662,6 +716,7 @@ jobs:
           DJANGO_SETTINGS_MODULE: settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
           CONSUMER_TESTS: ${{ inputs.consumer-tests }}
+          CONSUMER_ROOTS: ${{ inputs.consumer-roots }}
           CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}
           CONSUMER_SPLITS: ${{ strategy.job-total }}
           CONSUMER_GROUP: ${{ matrix.group }}
@@ -673,7 +728,6 @@ jobs:
           from pathlib import Path
 
           import django
-          import pytest
 
           slot = (Path("workspaces/src") / os.environ["CONSUMER_PATH"]).resolve()
           paths = json.loads(os.environ["CONSUMER_TESTS"])
@@ -683,12 +737,14 @@ jobs:
               str(host), os.environ.get("PYTHONPATH"),
           )))
           os.chdir(slot)
-          sys.path[:0] = [str(slot), str(host)]
+          sys.path[:0] = [str(slot), str(host), str(host / "workspaces/src/angee/scripts")]
+          from changed_path_selection import run_selected
+
           # Populate the authored host before collecting consumer fixture plugins.
           # Native installed distributions already own addon importability.
           django.setup()
           plugins = json.loads(os.environ["CONSUMER_PYTEST_PLUGINS"])
-          raise SystemExit(pytest.main([
+          raise SystemExit(run_selected([
               "-c", "/dev/null", "--rootdir", str(slot), "--confcutdir", str(slot),
               "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
               # Register pytest-django before the shared django_db_setup override.
@@ -701,7 +757,8 @@ jobs:
               "--splitting-algorithm", "least_duration", "--durations=25",
               "-o", "faulthandler_timeout=300",
               *(str(slot / path) for path in paths),
-          ]))
+          ], root=slot, base=os.environ.get("TEST_BASE"), head=os.environ.get("TEST_HEAD"),
+              apps=json.loads(os.environ["CONSUMER_ROOTS"])))
           PY
       - name: Install the stack JS workspace and generate typed documents
         if: ${{ matrix.group == 1 }}
@@ -731,10 +788,11 @@ jobs:
       - name: Pytest the bridge source contracts
         if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
         working-directory: stack
-        run: >-
-          uv run --no-sync --project "$GITHUB_WORKSPACE/stack"
-          --directory "$GITHUB_WORKSPACE/stack/workspaces/src/angee-messaging-bridges"
-          python -m pytest -q ${{ inputs.pytest-extra-args }}
+        run: |
+          uv run --no-sync --project "$GITHUB_WORKSPACE/stack" \
+            --directory "$GITHUB_WORKSPACE/stack/workspaces/src/angee-messaging-bridges" \
+            python "$GITHUB_WORKSPACE/stack/workspaces/src/angee/scripts/changed_path_selection.py" pytest \
+            --base "${TEST_BASE:-}" --head "${TEST_HEAD:-}" -- -q ${{ inputs.pytest-extra-args }}
 
   # Preserve the public check name and fail it for any unsuccessful matrix result.
   stack:

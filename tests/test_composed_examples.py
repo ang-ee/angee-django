@@ -6,6 +6,8 @@ import pytest
 
 from tests.composed_host import run_composed_tests
 
+pytestmark = pytest.mark.shared_inputs
+
 
 def test_composed_examples(tmp_path: Path, subtests: pytest.Subtests) -> None:
     run_composed_tests(

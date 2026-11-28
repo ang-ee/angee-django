@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
 from django.apps import apps
 from django_compose.model_composition import ModelComposition
 
 from angee.money.models import Currency
 from angee.parties.models import Party
-from angee.uom.models import Uom, UomCategory
 
 
 def test_record_picker_model_names() -> None:
@@ -21,16 +21,9 @@ def test_record_picker_model_names() -> None:
         "party",
         "parties",
     )
-    assert (str(Uom._meta.verbose_name), str(Uom._meta.verbose_name_plural)) == (
-        "unit of measure",
-        "units of measure",
-    )
-    assert (str(UomCategory._meta.verbose_name), str(UomCategory._meta.verbose_name_plural)) == (
-        "unit of measure category",
-        "unit of measure categories",
-    )
 
 
+@pytest.mark.shared_inputs
 def test_framework_runtime_models_do_not_use_naive_irregular_plurals() -> None:
     """Every composed framework model with an irregular ending declares a real plural."""
 

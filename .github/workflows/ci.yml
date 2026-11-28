@@ -9,7 +9,8 @@ on:
 # main's run still in progress, whose tree the new one contains; each pull request and main
 # have a group of their own. A pull request's run tests its merge commit (`framework-ref` is
 # `github.sha`), which is the tree main gets, so a push to main repeats only what a pull
-# request runs in part: the quality lane, the whole SQLite suite and the PostgreSQL selection.
+# request runs in part: the quality lane, the whole SQLite suite, every addon host and the
+# full PostgreSQL selection.
 # The packages and the composed stack hold while main has not moved since the pull request's
 # run started; merge only then, or run the pull request again.
 concurrency:

@@ -393,9 +393,35 @@ a sender is read; the message's source keeps its `From` header. See
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
 addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+(`Recipient.address`, empty for one no caller handed as an address), which the message
+is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
+
+**Transport mailer** — the one mailer that sends, `MAILERS["transport"]`:
+messaging delivers every email through it, and without it delivery is not
+configured. Not Django's default mailer, which is the **System mailer**. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mail** — mail the framework writes as named system work, each email
+Django sends among it: one queued message written on the **System channel** by
+`MessageManager.compose_as_system`, its causing actor recorded in the changeset,
+and delivered through the **Transport mailer**. Nobody sends it as a person on a
+channel they send from. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mailer** — Django's default mailer wherever messaging is installed,
+`SystemMailer`: it records each email Django sends as **System mail** and sends
+nothing itself. A consumer's own mail sent straight through the **Transport
+mailer** by name is a deliberate exception, outside messaging. See [messaging's contracts](../src/angee/messaging/README.md).
+
+**System channel** — messaging's install row `messaging.system_channel` (backend
+`system`), where **System mail** is written. Administrators alone read it, no
+verb shares its threads or grants on its messages, and it is system-only: nobody
+chooses it to send from or to watch. A person finds it in a
+list of channels under the label "System mail", which the row is given once, when
+it is created. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **Compose (a message)** — write one outgoing message through
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
@@ -405,7 +431,10 @@ The console composes through the `compose_message` mutation, offers a new email
 on the channels its `sendable` filter keeps (`reply` on a channel
 `ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
 `MessageManager.recipient_limit`, as `message_recipient_limit`. A message
-messaging wrote, rather than synced, is `Message.is_locally_written`.
+messaging wrote, rather than synced, is `Message.is_locally_written`. Its pages
+write through `useComposeMessage`: **New message**, a new email
+(`NewMessageAction`), and **Reply**, an answer from the box a transcript docks
+under its conversation where its host opts in (`ThreadTranscript`'s `reply`).
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
@@ -520,7 +549,9 @@ evidence gates.
 
 **Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
 for an email address, the address lower-cased (not case-folded) with its domain
-in the one spelling the email backend sends it in (IDNA 2003); none for a value
+in one spelling, each label read through IDNA 2003 into Unicode (the
+domain-spelling rule, `Handle.normalize_email_domain`), so the spellings the
+email backend sends as one domain are one; none for a value
 with no `@`, which is no address, nor on any other platform, where the value
 itself is the address. A live email handle is unique by it.
 
@@ -534,6 +565,11 @@ may merge. Which handle an address lands on is the spelling key's, except at two
 sites still open for a ruling, where it picks the handle a provider's alias lands
 on: a directory adoption's handle that found the person, and a claimant's email
 handle.
+
+**Domain key** — an organization's domain in the one spelling the domain-spelling rule
+gives (`Handle.normalize_email_domain`), stored as `Organization.domain_key`
+beside the domain as typed; `Organization.domain_filter` finds an organization
+by any spelling of its domain through it. Several organizations may share one.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
@@ -573,8 +609,22 @@ Channel child, so posts use the same channel-scoped message identity and access.
 
 **Message template** — one row of outgoing mail's text for one kind, key and
 language (`messaging_templates.MessageTemplate`). A sender renders the row a
-recipient reads; the addon sends nothing. See
+recipient reads; messaging delivers what is sent. See
 [the message templates README](../src/angee/messaging_templates/README.md).
+
+**Send a message template as system work** — render an effective message
+template for one address as named system work and record it on messaging's
+system channel (`MessageTemplateManager.send_as_system`); the row's language is
+the mail's, the caller's own gate authorised the send, and the caller names the
+values the mail is useless without (`must_print`), which each body must print. See
+[sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
+
+**Test send** — an administrator's send of a message template with its sample
+to their own account address (`MessageTemplateManager.send_test`): decided by
+the row's `preview` alone and projected as `can_send_test`, then sent as named
+system work on messaging's system channel with a `[Test] ` subject, the
+administrator recorded as who caused it. See
+[a test send](../src/angee/messaging_templates/README.md#a-test-send).
 
 **Layout / template / block / part** — a message template's four kinds, written
 once. A **template** is the mail itself, with its subject, preheader and the
