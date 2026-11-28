@@ -5,8 +5,13 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "exports": { ".": "./src/index.tsx" },
-  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "dependencies": {
     "@angee/app": "workspace:*",
     "@angee/refine": "workspace:*",
