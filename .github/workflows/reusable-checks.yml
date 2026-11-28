@@ -108,6 +108,7 @@ env:
 
   PRIMARY_SLOT: ${{ inputs.consumer-path || (github.repository == 'ang-ee/angee-messaging-bridges' && 'angee-messaging-bridges') || 'angee' }}
   COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+  BRIDGE_SOURCE_GUARD: tests/test_layering.py
   FRAMEWORK_QUALITY_TESTS: >-
     tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
     tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
@@ -283,6 +284,10 @@ jobs:
         with:
           node-version: "26"
           package-manager-cache: false
+      - name: Check the pinned bridge source boundary
+        if: ${{ inputs.uv-enabled && inputs.stack-enabled && inputs.addons-profile == 'full' }}
+        working-directory: stack/workspaces/src/angee-messaging-bridges
+        run: ../../../.venv/bin/python -m pytest -q -p no:django --noconftest "$BRIDGE_SOURCE_GUARD"
       - id: select
         shell: bash
         env:
@@ -883,6 +888,7 @@ jobs:
           args=()
           ignore=()
           if [ -n "$DONOR" ]; then args+=( --donor "$DONOR" ); fi
+          if [ "$PRIMARY_SLOT" = angee ]; then ignore+=( --ignore "$BRIDGE_SOURCE_GUARD" ); fi
           while IFS= read -r test_path; do ignore+=( --ignore "$test_path" ); done < <(jq -r '.[]' <<< "$QUALITY_TESTS")
           env -u DATABASE_URL ../../../.venv/bin/python ../angee/scripts/changed_path_selection.py pytest \
             --base "${TEST_BASE:-}" --head "${TEST_HEAD:-}" "${args[@]}" -- -q "${ignore[@]}" ${{ inputs.pytest-extra-args }}
