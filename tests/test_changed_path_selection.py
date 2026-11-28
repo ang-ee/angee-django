@@ -230,6 +230,21 @@ def test_package_edit_reaches_native_reverse_fragments(tmp_path, monkeypatch) ->
     assert stack.paths == ("angee.consumer",)
 
 
+def test_new_resource_owner_needs_only_its_composed_closure(addon_repo, monkeypatch) -> None:
+    root, graph, _ = addon_repo
+    directory = Path("fixture_addons/leaf")
+    addon = graph.owners[directory]
+    monkeypatch.setattr(
+        "angee.base.addons.addon_facts", lambda name, capability, index: {"demo": []} if name == addon else {},
+    )
+    packages, stack = web_plan(
+        root, [directory / "resources/demo/010_record.yaml"], graph, {},
+        base=None, fallback="", additions={directory: addon}, graph_fallback="",
+    )
+    assert packages.mode == "empty"
+    assert stack.paths == (addon,)
+
+
 @pytest.mark.parametrize("existing_drift", [False, True])
 def test_additive_rendered_lock_reaches_only_new_stack_project(tmp_path, existing_drift) -> None:
     git(tmp_path, "init")

@@ -609,6 +609,20 @@ def web_plan(
     external = {name for name in graph.dependencies.keys() - local if name.startswith("angee.")}
     if framework and runtime_inputs and not external:
         return packages, Selection("full", "existing runtime input with no native external addon graph")
+    resource_roots = set(additions.values()) | (affected if runtime_inputs else set())
+    if resource_roots:
+        from django.core.exceptions import ImproperlyConfigured
+        from django_compose.components import installed_components
+
+        from angee.base.addons import addon_facts
+
+        try:
+            index = installed_components(GROUP)
+            roots.update(
+                name for name in resource_roots if addon_facts(name, "angee.resources", index=index)
+            )
+        except (ImportError, ImproperlyConfigured):
+            return packages, Selection("full", "native resource declarations unavailable")
     roots.update(
         name for directory, name in graph.owners.items()
         if (name in affected and (root / directory / "web/package.json").is_file())
