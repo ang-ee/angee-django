@@ -154,36 +154,38 @@ read.
 - **A person's address is refused** (none, or one system mail refuses:
   `Message.objects.clean_system_recipient` before the send, or the send keyed `to`):
   that person is skipped and counted in the task's log, and the others still go.
-- **One question's values cannot be sent** (`QUESTION_REFUSALS`: `invalid_values`,
-  `values_too_large`, `render_budget`, `subject_too_long`, such as a choice longer
-  than a value may be). The person's template row first renders its own sample; a
-  row that refuses it is the row's fault (the next bullet but one). Otherwise the
-  question is skipped for that one person, logged by its public id and the code, and
-  everyone else is still tried, since labels, facts and the asker are each person's
-  own read. A digest renders each listed question alone to find it, then lists the
-  others: up to `DIGEST_QUESTION_LIMIT` renders for that person, and only after a
-  refused send. A digest whose questions fail only together lists half as many until
-  it sends, its count still naming them all. A run that skipped any question fails
-  once, at the end, naming the questions' public ids, and is not retried. Since a
-  row's own sample decides whose fault a refusal is, a deployment's own row must keep
-  a sample that renders: a stale one turns each question's fault into the row's.
+- **One mail's values cannot be sent.** Each send's refusal names its sources
+  (`refusal_sources`); one of the `values` alone (a choice longer than a value may
+  be, a subject the values make too long, a required value that is null for this
+  question) skips that question for that one person, logged by its public id and
+  the code, and everyone else is still tried, since labels, facts and the asker are
+  each person's own read. A digest renders each listed question alone to find it,
+  then lists the others: up to `DIGEST_QUESTION_LIMIT` renders for that person, and
+  only after a refused send. A digest whose questions fail only together lists half
+  as many until it sends, its count still naming them all. A run that skipped any
+  question fails once, at the end, naming the questions' public ids, and is not
+  retried.
 - **One person's mail fails otherwise:** it is logged by their primary key and the
   refusal's code and counted, the others still go, and the task fails once everyone
   was tried, so the failure stays visible.
-- **The deployment, or its own row of a template, cannot send** (`RUN_REFUSALS`: a
-  row that does not show the question's link, `value_not_printed`; one that prints
-  a non-link as a link, `value_not_linkable`; a row that no longer renders,
-  `message_template_refused` or `render_failed`; no default brand kit,
-  `no_brand_kit`, which each run also checks before any render): that is never a
-  person's skip. The others are still mailed, and the run fails once with
-  `DecisionMailUnsendable`, which says what to fix. A row that stopped being the
-  one that renders while the run sent (`not_effective`, an override saved mid-run)
-  is retried, and the retry reads the rows again.
-- **No refusal's own words leave the addon.** A render that fails
-  (`render_failed`) quotes its exception, which may quote a value such as the link,
-  so every refusal is logged and raised again as its codes and this addon's words,
-  never its message; only messaging's channel refusals, fixed sentences the task
-  retries, pass as they are.
+- **The deployment, or a template row, cannot send** (a refusal whose sources hold
+  `deployment` or `template`, which wins over `values` it also refuses, or an
+  `unknown` render failure): a row that does not show the question's link, one that
+  prints a non-link as a link or requires a value the bridge never sets, a row that
+  no longer renders, no default brand kit (which each run also checks before any
+  render). That is never a person's skip. The others are still mailed, since a row
+  is one language's, and the run fails once with `DecisionMailUnsendable`, which says
+  what to fix ("set a default brand kit", "edit the template row"); a refusal of the
+  deployment at a send (a default kit unset mid-run) stops the run there, since no
+  later send could succeed. The bridge's one link, the question's, is always one a
+  mail can carry, so a value refused as a link is the row's. A row that
+  stopped being the one that renders while the run sent (`not_effective`, an
+  override saved mid-run) is retried, and the retry reads the rows again.
+- **No refusal's own words leave the addon.** The bridge reads a refusal's codes and
+  sources only, and raises its own error after the refusal's handler, so the error
+  holds no reference to the refusal; only messaging's channel refusals, fixed
+  sentences the task retries, pass as they are. A refusal with no source is
+  messaging's: a recipient's is a skip, the others are read by their code.
 - **The deployment cannot mail at all.** Each run refuses before anyone is mailed,
   in order: no public origin (`PublicOriginUnavailable`), system mail not configured
   (`Channel.objects.system_mail_configured()`, as `DecisionMailUnsendable`), and a
