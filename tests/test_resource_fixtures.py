@@ -8,12 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
-@pytest.mark.shared_inputs
 def test_declared_resource_values_are_accepted_by_their_model_field(tmp_path: Path) -> None:
     """All local addon fixtures resolve through a fresh composed Django registry.
 
