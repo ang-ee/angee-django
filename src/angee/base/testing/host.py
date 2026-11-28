@@ -24,7 +24,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
@@ -161,6 +161,10 @@ def _check() -> None:
     from angee.base.permissions import declared_rebac_schema
 
     django.setup()
+    call_command("rebac", "check", skip_checks=True)
+    # Native build-zed checks cross-app collisions, but drops field backings.
+    with TemporaryDirectory() as directory:
+        call_command("rebac", "build-zed", out=Path(directory) / "effective.zed", skip_checks=True)
     # REBAC's checks inspect the active schema. Bind the emitted declarations
     # in this process so those checks do not require a synchronized database.
     schemas = [
