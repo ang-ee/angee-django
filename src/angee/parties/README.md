@@ -366,9 +366,13 @@ non-ASCII character whose lower case would be ASCII or of another length is kept
 as typed, so that no non-ASCII character turns into another mailbox's ASCII
 letter: the Kelvin sign is no `k`, so its address is never `kate@`'s handle, and
 `İ` stays `İ`, while `JOSÉ@` and `josé@` are one handle. The kept characters are
-computed from `str.lower`, never listed; a test pins today's two. An address is
-trimmed of ASCII whitespace only (`Handle.ADDRESS_WHITESPACE`): a value that
-begins with a non-ASCII space is no address, and its key keeps the space. The
+computed from `str.lower`, never listed; a test pins today's two. An address and
+its domain are trimmed of ASCII whitespace only (`Handle.ADDRESS_WHITESPACE`), so a
+value padded with a non-ASCII space, at either end of the local part or the domain,
+keeps the space in its key and is a handle of its own, never the plain address's.
+Before the `@` such a value is no address (`Handle.is_email_address`); after it, it
+is one exactly when Django's domain rule reads the space as a letter (every
+character from U+00A1 to U+FFFF), which most such spaces are. The
 spelling key, the person-matching key and `Handle.is_spelling_of` read a local
 part only through `normalize_local_part`. The rule holds for an address as it
 reaches the handle owner: two ingest parsers lower-case an address before it does,
