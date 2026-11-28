@@ -40,7 +40,7 @@ def commit(root: Path) -> str:
 @pytest.fixture(scope="module")
 def framework():
     graph = addon_graph(ROOT, ())
-    paths, shared, _ = collected(ROOT, ())
+    paths, shared, _, _ = collected(ROOT, ())
     return graph, tuple(paths), shared
 
 
@@ -484,6 +484,23 @@ def test_cli_preserves_pytest_patterns_and_skips_an_intentionally_empty_selectio
     record = json.loads(run.stdout)
     assert record["mode"] == "empty"
     assert record["paths"] == []
+
+
+@pytest.mark.parametrize("shard", [[], ["--splits", "1", "--group", "1"]])
+def test_unknown_input_keeps_native_no_tests_collected_for_required_full_run(tmp_path: Path, shard) -> None:
+    git(tmp_path, "init")
+    (tmp_path / "test_empty.py").write_text("# An empty pytest module.\n")
+    base = commit(tmp_path)
+    (tmp_path / "mystery.xml").write_text("<unknown/>\n")
+    head = commit(tmp_path)
+    run = subprocess.run([
+        sys.executable, str(SCRIPT), "pytest", "--root", str(tmp_path), "--base", base, "--head", head,
+        "--", "-p", "no:django", "-p", "no:randomly", "-q", *shard, "test_empty.py",
+    ], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert run.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, run.stdout + run.stderr
+    assert json.loads(run.stdout.splitlines()[0]) == {
+        "mode": "full", "reason": "shared or unowned input: mystery.xml", "paths": [],
+    }
 
 
 def test_consumer_collects_with_callers_prepopulated_registry_and_import_paths(tmp_path: Path) -> None:

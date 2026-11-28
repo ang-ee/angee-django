@@ -668,7 +668,7 @@ class Collection:
 
 def collected(
     root: Path, args: Sequence[str], *, setup_django: bool = False,
-) -> tuple[dict[Path, str], list[Path], frozenset[str]]:
+) -> tuple[dict[Path, str], list[Path], frozenset[str], bool]:
     command = [
         sys.executable, str(Path(__file__).resolve()), "_collect", "django" if setup_django else "pytest", *args,
     ]
@@ -682,6 +682,7 @@ def collected(
         {Path(path).relative_to(root): node for path, node in data["files"].items()},
         [Path(path).relative_to(root) for path in data["shared_paths"]],
         frozenset(data["apps"]),
+        data["excluded"],
     )
 
 
@@ -871,9 +872,9 @@ def run_selected(
                 print(json.dumps(asdict(Selection("empty", EMPTY_SHARED))), flush=True)
             return status
 
-        tests, shared_tests, shared_apps = collected(root, args, setup_django=registry.ready)
-        if not tests:
-            print(json.dumps(asdict(Selection("empty", "native pytest collected no shared tests"))), flush=True)
+        tests, shared_tests, shared_apps, excluded = collected(root, args, setup_django=registry.ready)
+        if excluded:
+            print(json.dumps(asdict(Selection("empty", EMPTY_SHARED))), flush=True)
             return 0
         selection, _ = select(
             root, plan.python, tuple(tests), plan.graph, isolated=plan.suites, shared_tests=shared_tests,
@@ -894,7 +895,7 @@ def run_selected(
         sys.path[:] = import_path
         os.chdir(callers)
     # A successfully collected nonempty selection may have no items in a particular shard.
-    return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and "--splits" in pytest_args else status
+    return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and included and "--splits" in pytest_args else status
 
 
 def installed_graph(root: Path, apps: Sequence[str]) -> tuple[AppGraph, str]:
@@ -927,14 +928,17 @@ def selection_plan(
     tests = {}
     shared_tests = []
     shared_apps = None
+    excluded = False
     if framework and not plan.fallback and (changed or plan.additions):
         args = shared_pytest_args(root, pytest_args, plan.suites)
-        tests, shared_tests, shared_apps = collected(root, args)
+        tests, shared_tests, shared_apps, excluded = collected(root, args)
     shared, hosts = select(
         root, plan.python, tuple(tests), plan.graph, fallback=plan.fallback,
         isolated=plan.suites, legacy=True, shared_tests=shared_tests,
         shared_apps=shared_apps, added_apps=tuple(plan.additions.values()), preflight=not framework,
     )
+    if excluded:
+        shared = Selection("empty", EMPTY_SHARED)
     groups = []
     if framework:
         from scripts.postgres_selection import GROUPS
@@ -959,10 +963,11 @@ def main(argv: Sequence[str]) -> int:
                 import django
 
                 django.setup()
-            status, _ = run_pytest(["--collect-only", *argv[2:]], [probe])
+            status, excluded = run_pytest(["--collect-only", *argv[2:]], [probe])
         if status in {pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED}:
             print(json.dumps({
                 "files": probe.files, "shared_paths": sorted(probe.shared_paths), "apps": sorted(probe.apps),
+                "excluded": excluded,
             }))
         return status
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
