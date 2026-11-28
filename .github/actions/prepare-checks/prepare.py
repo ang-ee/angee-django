@@ -84,7 +84,7 @@ def prepare(stack: Path, slot: str, extra: str, mixed_bridges: bool) -> Path | N
     return donor
 
 
-def configure(stack: Path, roots: str, sources: str, profile: str) -> None:
+def configure(stack: Path, roots: str, add_roots: str, sources: str, profile: str) -> None:
     """Write only the authored stack inputs that differ for this invocation."""
     subprocess.run(
         [str(stack / ".venv" / "bin" / "python"), "-c", """
@@ -94,20 +94,21 @@ from pathlib import Path
 
 import yaml
 
-roots, sources = map(json.loads, sys.argv[1:3])
+roots, additions, sources = map(json.loads, sys.argv[1:4])
 settings = Path("settings.yaml")
 document = yaml.safe_load(settings.read_text())
 if roots:
     document["INSTALLED_APPS"] = roots
-elif sys.argv[3] == "full":
+elif sys.argv[4] == "full":
     document["INSTALLED_APPS"].append("angee.messaging_integrate_matrix")
+document["INSTALLED_APPS"] = list(dict.fromkeys([*document["INSTALLED_APPS"], *additions]))
 settings.write_text(yaml.safe_dump(document, sort_keys=False))
 if sources:
     path = Path("pnpm-workspace.yaml")
     workspace = yaml.safe_load(path.read_text())
     workspace["packages"].extend(f"workspaces/src/{source['path']}/src/*/*/web" for source in sources)
     path.write_text(yaml.safe_dump(workspace, sort_keys=False))
-""", roots, sources, profile],
+""", roots, add_roots, sources, profile],
         cwd=stack,
         check=True,
     )
@@ -119,11 +120,12 @@ def main() -> None:
     parser.add_argument("--extra", default="")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--roots", default="[]")
+    parser.add_argument("--add-roots", default="[]")
     parser.add_argument("--sources", default="[]")
     options = parser.parse_args()
     stack = Path.cwd().resolve()
     donor = prepare(stack, options.slot, options.extra, options.slot == "angee" and options.profile == "full")
-    configure(stack, options.roots, options.sources, options.profile)
+    configure(stack, options.roots, options.add_roots, options.sources, options.profile)
     if donor is not None and (output := os.environ.get("GITHUB_OUTPUT")):
         with Path(output).open("a", encoding="utf-8") as stream:
             stream.write(f"donor={donor}\n")

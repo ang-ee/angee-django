@@ -77,8 +77,16 @@ the gate asks one question with an alternative per actor-writable candidate
 target plus skip, and the workflow `map` runs one IO attempt per confirmed
 mapping. Extractors own parsing and idempotent target ingest. Each attempt reports progress
 through `ArchiveExecutionReporter.heartbeat()`; the workflow retains source
-and target step records. No compatible candidate takes `unsupported`; the
-installed resource needs no target configuration patch or answer input form.
+and target step records. Incompatible target resource types take `unsupported`.
+When no writable candidate is eligible, the gate fails with the extractors'
+`target_instructions`; correcting the target state and retrying opens review.
+The installed resource needs no target configuration patch or answer input form.
+
+An extractor's `target_filters` narrow the writable candidates and are rechecked
+before each import attempt. Paged extractors read `reporter.context.state` and
+return `reporter.context.next_page(checkpoint)` to continue through the native
+workflow runner. Their final JSON result is wrapped by `archive_execute` as usual;
+extractors must make replay of the last unacknowledged page idempotent.
 
 `ArchiveExtractor` owns the `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES` registry;
 its addon registers a native Django check for every contributed extractor.

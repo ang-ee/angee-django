@@ -437,7 +437,7 @@ describe("ConsoleLayout", () => {
     })).toBeNull();
   });
 
-  test("portals a ControlBand into the area-control row", async () => {
+  test("portals a ControlBand above the middle pane", async () => {
     const { container } = renderInRouter(
       <ConsoleLayout>
         <ControlBand>
@@ -448,11 +448,12 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Body content");
 
-    const control = container.querySelector(".area-control");
+    const control = container.querySelector("[data-console-controls]");
     const button = await screen.findByRole("button", { name: "Band control" });
-    // Lands in the layout's control row, not inline in the content area.
+    // The band shares the middle pane with the scrollable record, beside the explorer.
     expect(control?.contains(button)).toBe(true);
-    expect(screen.getByRole("main").contains(button)).toBe(false);
+    expect(screen.getByRole("main").previousElementSibling).toBe(control);
+    expect(container.querySelector(".area-control")?.contains(button)).toBe(false);
   });
 
   test("keeps a delayed console notice above an already-mounted control band", async () => {
@@ -487,8 +488,8 @@ describe("ConsoleLayout", () => {
       await noticeRequested;
     });
     const notice = await screen.findByText("Restart notice");
-    const host = container.querySelector(".area-control");
-    expect(host?.contains(notice)).toBe(true);
+    const host = container.querySelector("[data-console-controls]");
+    expect(container.querySelector("[data-console-notices]")?.contains(notice)).toBe(true);
     expect(host?.contains(filters)).toBe(true);
     expect(notice.compareDocumentPosition(filters) & Node.DOCUMENT_POSITION_FOLLOWING)
       .not.toBe(0);
@@ -509,12 +510,12 @@ describe("ConsoleLayout", () => {
     const { container } = renderInRouter(<ConsoleLayout><Page /></ConsoleLayout>);
     const finder = await screen.findByRole("button", { name: "Finder filters" });
     const result = await screen.findByRole("button", { name: "Result filters" });
-    const host = container.querySelector(".area-control");
+    const host = container.querySelector("[data-console-controls]");
     expect(host?.contains(result)).toBe(true);
     expect(screen.getByRole("region", { name: "Finder" }).contains(finder)).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Read record" }));
     await screen.findByText("Message record");
-    expect(host?.querySelector("[data-console-controls]")?.childNodes.length).toBe(0);
+    expect(host?.childNodes.length).toBe(0);
     expect(screen.getByRole("button", { name: "Finder filters" })).toBe(finder);
     expect(screen.getByRole("region", { name: "Finder" }).contains(finder)).toBe(true);
   });
@@ -530,7 +531,7 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Tall body");
 
-    expect(screen.getByRole("main").className).toBe("console-content-main");
+    expect(screen.getByRole("main").className).toBe("console-content-main flex-1");
     expect(screen.getByRole("main").contains(screen.getByRole("region", { name: "Page body" }))).toBe(true);
     expect(container.querySelector(".area-content")?.className).toContain("h-full");
     const statusHost = container.querySelector(".area-status");
@@ -545,7 +546,7 @@ describe("ConsoleLayout", () => {
       </ConsoleLayout>,
     );
     const mainAction = await screen.findByRole("button", { name: "Main file action" });
-    const host = container.querySelector(".area-control");
+    const host = container.querySelector("[data-console-controls]");
     expect(host?.contains(mainAction)).toBe(true);
 
     fireEvent.click(await screen.findByRole("tab", { name: "File details" }));
@@ -585,7 +586,7 @@ describe("ConsoleLayout", () => {
       .toBeTruthy();
   });
 
-  test("leaves the area-control row empty when no ControlBand is mounted", async () => {
+  test("leaves notice and middle-pane control hosts empty when no band is mounted", async () => {
     const { container } = renderInRouter(
       <ConsoleLayout>
         <section aria-label="Page body">Body content</section>
@@ -593,12 +594,11 @@ describe("ConsoleLayout", () => {
     );
     await screen.findByText("Body content");
 
-    // Empty display:contents hosts contribute no box, so the auto-height grid
-    // row still collapses to zero without a grey band.
-    const control = container.querySelector(".area-control");
+    // Empty notice and toolbar hosts reserve no visible strip.
+    const control = container.querySelector("[data-console-controls]");
     expect(control?.textContent).toBe("");
-    expect(control?.querySelector("[data-console-notices]")?.className).toContain("contents");
-    expect(control?.querySelector("[data-console-controls]")?.className).toContain("contents");
+    expect(container.querySelector("[data-console-notices]")?.textContent).toBe("");
+    expect(control?.childElementCount).toBe(0);
   });
 
   test("renders the band inline when there is no layout above", () => {

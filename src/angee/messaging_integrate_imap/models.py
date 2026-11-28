@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -21,10 +21,13 @@ from angee.messaging_integrate_imap.backend import (
     ImapSamplePreviewRequest,
 )
 
+if TYPE_CHECKING:
+    from angee.workflows.steps import NextPage
+    from angee.workflows_integrate.archive_steps import ArchiveExecutionReporter
+
 
 class ImapChannelSampling(Composable, extends="messaging.Channel"):
-    """Compose bounded imports without a second channel, cursor or intake ledger."""
-
+    """Compose historical email imports without a second channel or live cursor."""
 
     class Meta:
         abstract = True
@@ -34,11 +37,30 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
 
         self.require_access("write", actor)
         if self.lifecycle != self.Lifecycle.PAUSED:
-            raise ValidationError("Pause this IMAP channel before changing its mailbox position.")
+            raise ValidationError("Pause this IMAP channel before importing history or changing its mailbox position.")
         backend = self.backend
         if not isinstance(backend, ImapChannelBackend):
             raise ValidationError("Mailbox positioning is available for IMAP channels.")
         return backend
+
+    def import_imap_mbox(
+        self, file: Any, *, reporter: ArchiveExecutionReporter,
+    ) -> dict[str, Any] | NextPage:
+        """Import one archive page under the same admission and sync lock as mailbox samples."""
+
+        from angee.messaging_integrate_imap.extractor import import_mbox_page
+
+        actor = reporter.context.actor
+        file.require_access("read", actor)
+        with actor_context(actor):
+            current = type(self)._base_manager.get(pk=self.pk)
+            current._require_paused_imap(actor)
+            with current.sync_lock() as acquired:
+                if not acquired:
+                    raise ValidationError("The channel is busy. Retry when its current operation finishes.")
+                current.refresh_from_db()
+                backend = current._require_paused_imap(actor)
+                return import_mbox_page(file, channel=current, own_addresses=backend.own_addresses(), reporter=reporter)
 
     def imap_delivery_boundary(self) -> dict[str, Any]:
         """Return this channel's retained future-only delivery intent, or ``{}`` when it syncs history."""

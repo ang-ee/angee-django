@@ -58,6 +58,7 @@ from angee.messaging_templates.engine import (
     INVALID_VALUES,
     MESSAGE_TEMPLATE_REFUSED,
     NO_BRAND_KIT,
+    REFUSAL_SOURCE,
     RENDER_BUDGET,
     RENDER_BUDGET_EXCEEDED,
     RENDER_FAILED,
@@ -67,6 +68,7 @@ from angee.messaging_templates.engine import (
     SUBJECT_TOO_LONG,
     VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
+    RefusalSource,
     RenderBudget,
     RenderBudgetExceeded,
     register,
@@ -1716,8 +1718,66 @@ def test_required_values_and_shapes(plain: Any, kit: Any) -> None:
             _render(template, values, kit)
     rendered = _render(template, {"order": {"total": 3}, "coupon": None, "note": None}, kit)
     assert "3 [] []" in rendered.plain_text and "None" not in rendered.html
+    both = _mail("Hi {{ person.first_name }}, {{ name }}.", {"person.first_name": "x", "name": "x"}, key="tests.both")
+    with pytest.raises(ValidationError) as refusal:  # a path under the wrong shape is its consequence, not missing
+        _render(both, {"person": "flat"}, kit)
+    assert [(item.messages[0], item.params[REFUSAL_SOURCE]) for item in refusal.value.error_list] == [
+        ("person is an object.", RefusalSource.VALUES),
+        ("name is required and missing or null.", RefusalSource.TEMPLATE),
+    ]
+    listed = _mail("{% for item in items %}{{ item.name }}{% endfor %}", {"items.*.name": "x"}, key="tests.listed")
+    for values, refusals in (  # a mis-shaped item hides the paths under it, never its siblings'
+        ({"items": ["flat", {}]}, [("items.* is an object.", RefusalSource.VALUES),
+                                   ("items.*.name is required and missing or null.", RefusalSource.TEMPLATE)]),
+        ({"items": ["flat", {"name": "Ana"}]}, [("items.* is an object.", RefusalSource.VALUES)]),
+    ):
+        with pytest.raises(ValidationError) as refusal:
+            _render(listed, values, kit)
+        assert [(item.messages[0], item.params[REFUSAL_SOURCE]) for item in refusal.value.error_list] == refusals
     rendered = _render(template, {"order": {"total": SafeString("<b>3</b>")}}, kit)
     assert "&lt;b&gt;3&lt;/b&gt;" in rendered.html
+
+
+REQUIRED = {"question.asked_by.name": "x", "items.*.name": "x"}
+ASKED = {"question": {"asked_by": {"name": "Ana"}}}
+
+
+@pytest.mark.parametrize(("values", "lacking"), [
+    pytest.param({"question": {"asked_by": {"name": None}}}, [("question.asked_by.name", "values")],
+                 id="the-leaf-null"),
+    pytest.param({"question": {"asked_by": None}}, [("question.asked_by.name", "values")], id="a-parent-null"),
+    pytest.param({"question": None}, [("question.asked_by.name", "values")], id="the-root-null"),
+    pytest.param({"question": {"asked_by": {}}}, [("question.asked_by.name", "template")],
+                 id="an-object-without-the-member"),
+    pytest.param({"question": {}}, [("question.asked_by.name", "template")], id="a-parent-absent"),
+    pytest.param({}, [("question.asked_by.name", "template")], id="nothing-set"),
+    pytest.param({**ASKED, "items": [None]}, [("items.*.name", "values")], id="a-list-item-null"),
+    pytest.param({**ASKED, "items": [{"name": None}]}, [("items.*.name", "values")], id="an-items-member-null"),
+    pytest.param({**ASKED, "items": [{}]}, [("items.*.name", "template")], id="an-item-without-the-member"),
+    pytest.param({**ASKED, "items": [{"name": None}, {}]}, [("items.*.name", "template")],
+                 id="one-item-null-and-one-without-the-member"),
+    pytest.param({"question": {"asked_by": {"name": None}}, "items": [{}]},
+                 [("question.asked_by.name", "values"), ("items.*.name", "template")], id="one-of-each"),
+    pytest.param({"question": {"asked_by": {"name": ""}}, "items": []}, [], id="an-empty-string-and-an-empty-list"),
+    pytest.param({**ASKED, "items": None}, [], id="a-null-list"),
+    pytest.param(ASKED, [], id="an-absent-list"),
+])
+def test_a_required_path_null_for_this_item_is_the_values_and_one_never_set_the_templates(
+    plain: Any, kit: Any, values: dict[str, Any], lacking: list[tuple[str, str]],
+) -> None:
+    """Where the path stops decides: at a key present and null, here or above it, the item has no value (skip it);
+    at a key the values do not set, the template asks for something the sender never gives. An empty string prints
+    nothing and an empty, absent or null list loops no item: neither is missing."""
+
+    del plain
+    template = _mail("{{ question.asked_by.name }}{% for item in items %} {{ item.name }}{% endfor %}.", REQUIRED)
+    if not lacking:
+        assert "None" not in _render(template, values, kit).plain_text
+        return
+    with pytest.raises(ValidationError) as refusal:
+        _render(template, values, kit)
+    assert [(item.messages[0], item.code, item.params[REFUSAL_SOURCE]) for item in refusal.value.error_list] == [
+        (f"{path} is required and missing or null.", INVALID_VALUES, whose) for path, whose in lacking]
 
 
 def test_variables_caps(plain: Any) -> None:
@@ -1932,7 +1992,7 @@ def test_any_other_failure_is_logged_then_refused_as_render_failed(
             with system_context(reason="tests.messaging_templates.render.preview"):
                 preview = template.preview(kit=kit)
         assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
-        assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+        assert caught.value.messages == [f"The message template did not render: it raised {raised.__name__}."]
         assert preview.rendered is None
         assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
         assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(
@@ -2212,9 +2272,11 @@ def test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date(plain: An
     assert _render(template, {"when": "2026-11-24"}, kit).plain_text.strip() == "2026-11-24"
     with timezone.override(zoneinfo.ZoneInfo("Europe/Berlin")):
         assert _render(template, {"when": "2026-11-24T23:30:00+00:00"}, kit).plain_text.strip() == "2026-11-25"
-    for value in ("2026-11-24T15:30:00", "2026-02-30", "soon", 12):
-        with pytest.raises(ValidationError, match="when is not a date"):
+    for value, kind in (("2026-11-24T15:30:00", "text of 19 characters"), ("2026-02-30", "text of 10 characters"),
+                        ("soon", "text of 4 characters"), (12, "a number"), (1.5, "a number"), (True, "true or false")):
+        with pytest.raises(ValidationError) as refusal:
             _render(template, {"when": value}, kit)
+        assert refusal.value.messages == [f"when is not a date, or a date and time with its offset: it is {kind}."]
 
 
 # ---------- the probes, by name ----------

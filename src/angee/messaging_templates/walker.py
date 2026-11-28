@@ -35,11 +35,11 @@ import math
 import quopri
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Protocol, cast
+from types import TracebackType
+from typing import Any, Protocol, Self, cast
 
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
@@ -82,10 +82,13 @@ from angee.messaging_templates.engine import (
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
+    RefusalSource,
     RenderBudget,
     brand_values,
     clean_link,
     filter_names,
+    refusal_item,
+    refusal_sources,
     url,
 )
 from angee.messaging_templates.html_checks import (
@@ -177,40 +180,69 @@ type Path = tuple[str, ...]
 logger = logging.getLogger(__name__)
 
 
-@contextmanager
-def refusals_only(root: WalkedRow) -> Iterator[None]:
+class refusals_only:  # a context manager named as a phrase at each entry, as contextlib.suppress is
     """The one owner of "only ``ValidationError`` leaves" a walk, ``prepare()``, a render's passes or its warnings.
 
     Every public entry of a walk runs inside it, so ``MessageTemplate.render``,
     ``MessageTemplate.preview`` and a sender rendering a walk itself are covered
-    whole. A ``ValidationError`` passes as it is. ``MemoryError`` and
-    ``RecursionError`` pass unconverted: they say the process ran out of room, not
-    that the row cannot render, and no admitted row and values reach either. Any
-    other exception is logged, then becomes ``ValidationError(code=RENDER_FAILED)``:
-    one error record naming ``root`` (its kind, key and language) and the
-    exception's type, never its message or its traceback, which may quote a value
-    the render was given (a sign-in link).
+    whole. This addon's own refusals pass as they are: a ``ValidationError`` whose
+    items carry their source (:func:`~angee.messaging_templates.engine.refusal_sources`),
+    as every one :func:`~angee.messaging_templates.engine.refusal_item` builds does.
+    ``MemoryError`` and ``RecursionError`` pass unconverted: they say the process ran
+    out of room, not that the row cannot render, and no admitted row and values reach
+    either. Any other exception, a ``ValidationError`` a filter, a tag or a loader
+    raises with no source among them (its words are its raiser's, and may quote a
+    value), is logged and swallowed, so every ``ValidationError`` that leaves an entry
+    carries a source: one error record naming ``root`` (its
+    kind, key and language) and the exception's type, never its message or its
+    traceback, which may quote a value the render was given (a sign-in link). The
+    entry then raises :meth:`refused` after the block, ``ValidationError(code=RENDER_FAILED)``,
+    where no exception is being handled: raised inside the block's exit it would
+    carry the original as its ``__context__``, which a caller that logs the refusal
+    with its traceback prints::
+
+        with refusals_only(self.root) as guard:
+            ...
+            return result
+        raise guard.refused()
     """
 
-    try:
-        yield
-    except (ValidationError, MemoryError, RecursionError):
-        raise
-    except Exception as error:
+    def __init__(self, root: WalkedRow) -> None:
+        self.root = root
+        self.failure = ""
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self, kind: type[BaseException] | None, error: BaseException | None, traceback: TracebackType | None,
+    ) -> bool:
+        if not isinstance(error, Exception) or isinstance(error, (MemoryError, RecursionError)):
+            return False
+        if isinstance(error, ValidationError) and refusal_sources(error):
+            return False
+        self.failure = type(error).__name__
         logger.error(
             "A message template failed to render: the %s %s in %s raised %s.",
-            root.kind, root.key, root.language, type(error).__name__,
+            self.root.kind, self.root.key, self.root.language, self.failure,
         )
-        raise ValidationError(
-            "The message template did not render: %(error)s", code=RENDER_FAILED,
-            params={"error": f"{type(error).__name__}: {error}"},
-        ) from error
+        return True
+
+    def refused(self) -> ValidationError:
+        """The ``render_failed`` refusal of the exception the block swallowed, naming its type alone."""
+
+        return refusal_item(
+            "The message template did not render: it raised %(error)s.", RENDER_FAILED, RefusalSource.UNKNOWN,
+            params={"error": self.failure},
+        )
 
 
-def _refused(messages: Iterable[str], code: str) -> ValidationError:
-    """One ``ValidationError`` whose every item carries ``code``: Django keeps no code on an error built from a list."""
+def _refused(code: str, *groups: tuple[Iterable[str], RefusalSource]) -> ValidationError:
+    """One ``ValidationError`` whose every item carries ``code`` and its group's source (:func:`refusal_item`): Django
+    keeps no code on an error built from a list."""
 
-    return ValidationError([ValidationError(message, code=code) for message in dict.fromkeys(messages)])
+    return ValidationError([refusal_item(message, code, source) for messages, source in groups
+                            for message in dict.fromkeys(messages)])
 
 
 class RowPiece(StrEnum):
@@ -535,15 +567,20 @@ class TemplateWalk:
            refused over 50,000 characters of JSON (characters, not escapes), with
            a string over 10,000, with over 500 list items in all, with a
            reserved root, or holding a character no mail can encode (a lone
-           surrogate).
+           surrogate). A string's path is named only when the row declares it:
+           a caller's own key may be its data.
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
            string, number, boolean or null, a string without its control
            characters and bidirectional overrides and isolates
            (:data:`UNPRINTED`), so one holding nothing else is empty;
            at a :attr:`float_paths` path, a number one a float holds.
-        3. Each :attr:`required` path present and not null, in every present item.
-           Each value at a :attr:`link_paths` path that :func:`~angee.messaging_templates.engine.url`
+        3. Each :attr:`required` path present and not null, in every present item,
+           but for one under a value of the wrong shape (in that list item alone),
+           which that value's refusal covers; both are refused together. A path that stops at a
+           null is the values' to refuse, one the values do not set the
+           template's (:func:`_lacks`). Each value at a
+           :attr:`link_paths` path that :func:`~angee.messaging_templates.engine.url`
            would empty and is not blank is refused, code ``value_not_linkable``,
            as :func:`~angee.messaging_templates.engine.clean_link` words it: a
            render never sends an empty link in place of one it was given.
@@ -560,42 +597,53 @@ class TemplateWalk:
         (:class:`_DatePrinter`).
         """
 
-        with refusals_only(self.root):
+        with refusals_only(self.root) as guard:
             if not isinstance(values, Mapping):
-                raise ValidationError("Pass the values as an object of names to values.", code=INVALID_VALUES)
+                raise refusal_item(
+                    "Pass the values as an object of names to values.", INVALID_VALUES, RefusalSource.VALUES,
+                )
+            failure = ""  # each refusal below is raised after its handler: it holds no reference to the error
             try:
                 text = json.dumps(values, cls=DjangoJSONEncoder, ensure_ascii=False)
                 data = json.loads(text)
             except (TypeError, ValueError, RecursionError) as error:
-                raise ValidationError(f"The values are not JSON: {error}", code=INVALID_VALUES) from error
+                failure = type(error).__name__
+            if failure:
+                raise refusal_item(f"The values are not JSON ({failure}).", INVALID_VALUES, RefusalSource.VALUES)
             if len(text) > VALUES_JSON_LIMIT:
-                raise ValidationError(
-                    f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code=VALUES_TOO_LARGE,
+                raise refusal_item(
+                    f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", VALUES_TOO_LARGE,
+                    RefusalSource.VALUES,
                 )
             try:
                 text.encode()
-            except UnicodeEncodeError as error:
-                raise ValidationError(
-                    "The values hold a character no mail can encode, a lone surrogate.", code=INVALID_VALUES,
-                ) from error
-            errors = _value_errors(data)
+            except UnicodeEncodeError:  # its args hold the whole text
+                failure = "surrogate"
+            if failure:
+                raise refusal_item(
+                    "The values hold a character no mail can encode, a lone surrogate.", INVALID_VALUES,
+                    RefusalSource.VALUES,
+                )
+            errors = _value_errors(data, self.declared)
             if errors:
-                raise _refused(errors, INVALID_VALUES)
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
             tree = _tree(self.declared)
             shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
-            errors.extend(
-                f"{_dotted(path)} is required and missing or null." for path in sorted(self.required)
-                if _lacks(shaped, path)
-            )
-            if errors:
-                raise _refused(errors, INVALID_VALUES)
+            lacking = [  # the row's text reads these unguarded
+                (path, source) for path in sorted(self.required) if (source := _lacks(shaped, path))
+            ]
+            null, unset = ([f"{_dotted(path)} is required and missing or null." for path, source in lacking
+                            if source == whose] for whose in (RefusalSource.VALUES, RefusalSource.TEMPLATE))
+            if errors or lacking:
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES), (null, RefusalSource.VALUES),
+                               (unset, RefusalSource.TEMPLATE))
             filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
             for path in sorted(self.float_paths):
                 errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
                               if isinstance(number, (int, float)) and not isinstance(number, bool)
                               and not _finite(number))
             if errors:
-                raise _refused(errors, INVALID_VALUES)
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
             for path in sorted(self.link_paths):
                 for link in _at(filled, path):
                     try:
@@ -603,13 +651,15 @@ class TemplateWalk:
                     except ValidationError as refusal:
                         errors.extend(refusal.messages)
             if errors:
-                raise _refused(errors, VALUE_NOT_LINKABLE)
+                raise _refused(VALUE_NOT_LINKABLE, (errors, RefusalSource.VALUES))
             printer = _DatePrinter(self.date_paths)
+            formats: list[str] = []
             for path in sorted(self.date_paths):
-                _parse_dates(filled, path, path, printer, errors)
-            if errors:
-                raise _refused(errors, INVALID_VALUES)
+                _parse_dates(filled, path, path, printer, errors, formats)
+            if errors or formats:
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES), (formats, RefusalSource.TEMPLATE))
             return filled
+        raise guard.refused()
 
     @sensitive_variables()
     def render(
@@ -627,7 +677,7 @@ class TemplateWalk:
         HTML engine, the subject and preheader at its top level; (4) the plain-text
         body on the text engine, from the rows' text forms. ``frame`` renders a
         layout around a fixed body, subject and preheader. Raises ``ValidationError``
-        alone (:func:`refusals_only`), but ``must_print`` given as one bare string, a
+        alone (:class:`refusals_only`), but ``must_print`` given as one bare string, a
         ``TypeError``, before anything else; the paths are read once, so any iterable
         serves both checks below. Every variable of this frame, and of every
         frame it calls (:meth:`prepare`, the engine, Django's template frames, the
@@ -651,10 +701,10 @@ class TemplateWalk:
         if isinstance(must_print, str):
             raise TypeError("Pass must_print as an iterable of paths, not one path.")
         must_print = tuple(must_print)
-        with refusals_only(self.root):
+        with refusals_only(self.root) as guard:
             unprinted = self._unprinted(must_print)
             if unprinted:
-                raise _refused(unprinted, VALUE_NOT_PRINTED)
+                raise _refused(VALUE_NOT_PRINTED, (unprinted, RefusalSource.TEMPLATE))
             language = self.language
             with translation.override(language):
                 prepared = self.prepare(values)
@@ -689,10 +739,11 @@ class TemplateWalk:
                 subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
                 direction=direction,
             )
-            unshown = self._unshown(must_print, prepared, rendered)
-            if unshown:
-                raise _refused(unshown, VALUE_NOT_PRINTED)
+            blank, hidden = self._unshown(must_print, prepared, rendered)
+            if blank or hidden:
+                raise _refused(VALUE_NOT_PRINTED, (blank, RefusalSource.VALUES), (hidden, RefusalSource.TEMPLATE))
             return rendered
+        raise guard.refused()
 
     def _unprinted(self, must_print: tuple[str, ...]) -> list[str]:
         """Why the walked text cannot print each of ``must_print`` in both bodies, before anything renders."""
@@ -711,10 +762,12 @@ class TemplateWalk:
 
     def _unshown(
         self, must_print: tuple[str, ...], prepared: Mapping[str, Any], rendered: RenderedMessage,
-    ) -> list[str]:
-        """Why this render's bodies do not show each of ``must_print`` that names no list item."""
+    ) -> tuple[list[str], list[str]]:
+        """Why this render's bodies do not show each of ``must_print`` that names no list item: the values' (blank, not
+        text), then the template's (a body that does not show the value, as a condition left it out)."""
 
         unshown: list[str] = []
+        hidden: list[str] = []
         for path in must_print:
             segments = tuple(path.split("."))
             if "*" in segments:
@@ -726,9 +779,9 @@ class TemplateWalk:
                 unshown.append(f"{path} is empty, and this mail is sent for it.")
             else:
                 missing = rendered.bodies_without(value)
-                unshown.extend(f"The {body} body of this mail does not show {path}, which it is sent for."
-                               for form, body in _BODIES if form in missing)
-        return unshown
+                hidden.extend(f"The {body} body of this mail does not show {path}, which it is sent for."
+                              for form, body in _BODIES if form in missing)
+        return unshown, hidden
 
     def _engine(self, form: RowPiece, mail_globals: Mapping[str, Any]) -> MessageTemplateEngine:
         """An engine serving ``form`` of every walked row, through a per-render ``cached.Loader``."""
@@ -749,7 +802,7 @@ class TemplateWalk:
         text and its size, raw or quoted-printable.
         """
 
-        with refusals_only(self.root):
+        with refusals_only(self.root) as guard:
             warnings: list[TemplateWarning] = []
             carries_message_fields = self.root.handler.carries_message_fields
             if carries_message_fields and len(rendered.subject) > SUBJECT_WARNING_LENGTH:
@@ -782,6 +835,7 @@ class TemplateWalk:
             if size > SIZE_WARNING_BYTES:
                 warnings.append(TemplateWarning(TemplateWarningCode.SIZE, f"The HTML is {size} bytes."))
             return warnings
+        raise guard.refused()
 
 
 ENCODED_WORD_OPENER = re.compile(r"=\?(?=[^?]*\?[bq]\?)", re.IGNORECASE)
@@ -799,9 +853,9 @@ def _one_line(text: str, name: str) -> str:
     line = " ".join(word for word in (UNPRINTED.sub("", word) for word in text.split()) if word)
     line = ENCODED_WORD_OPENER.sub("= ?", line)
     if len(line) > SUBJECT_LIMIT:
-        raise ValidationError(
-            "The rendered %(name)s is over %(limit)s characters.",
-            code=SUBJECT_TOO_LONG, params={"name": name, "limit": SUBJECT_LIMIT},
+        raise refusal_item(
+            "The rendered %(name)s is over %(limit)s characters.", SUBJECT_TOO_LONG, RefusalSource.VALUES,
+            params={"name": name, "limit": SUBJECT_LIMIT},
         )
     return line
 
@@ -815,14 +869,18 @@ def _plain(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip() + "\n"
 
 
-def _value_errors(data: Any) -> list[str]:
+def _value_errors(data: Any, declared: Iterable[str]) -> list[str]:
+    """What is wrong with ``data`` as a whole, read before undeclared keys are dropped: a path is named only when it
+    is a prefix the row declares; a caller's own key, which may be its data, is not."""
+
+    named = {".".join(prefix) for prefix in _prefixes(tuple(path.split(".")) for path in declared)}
     errors: list[str] = []
     items = 0
     pending: list[tuple[str, Any]] = [("", data)]
     while pending:
         path, value = pending.pop()
         if isinstance(value, str) and len(value) > VALUE_STRING_LIMIT:
-            errors.append(f"{path or 'A value'} is over {VALUE_STRING_LIMIT} characters.")
+            errors.append(f"{path if path in named else 'A value'} is over {VALUE_STRING_LIMIT} characters.")
         elif isinstance(value, list):
             items += len(value)
             pending.extend((f"{path}.*", item) for item in value)
@@ -846,8 +904,13 @@ def _tree(declared: Iterable[str]) -> dict[str, Any]:
     return tree
 
 
+_MISSHAPED: Any = object()
+"""What :func:`_shaped` leaves in place of a value of the wrong shape: its refusal covers every path under it, in
+that value alone (one list item, not its siblings), so :func:`_lacks` reads none of them as missing."""
+
+
 def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> Any:
-    """Drop what ``D`` does not declare and refuse a value whose shape it contradicts."""
+    """Drop what ``D`` does not declare; refuse a value whose shape it contradicts, :data:`_MISSHAPED` in its place."""
 
     if value is None:
         return None
@@ -857,15 +920,15 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
         if isinstance(value, (int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
-        return None
+        return _MISSHAPED
     if "*" in tree:
         if not isinstance(value, list):
             errors.append(f"{_dotted(here)} is a list.")
-            return None
+            return _MISSHAPED
         return [_shaped(item, tree["*"], (*here, "*"), errors) for item in value]
     if not isinstance(value, dict):
         errors.append(f"{_dotted(here) or 'The values'} is an object.")
-        return None
+        return _MISSHAPED
     return {key: _shaped(value[key], subtree, (*here, key), errors) for key, subtree in tree.items() if key in value}
 
 
@@ -892,18 +955,27 @@ def _at(value: Any, path: Path) -> Iterator[Any]:
         yield from _at(value[head], rest)
 
 
-def _lacks(value: Any, path: Path) -> bool:
-    """Whether ``path`` is missing or null in ``value``; a ``*`` binds only the items present."""
+def _lacks(value: Any, path: Path) -> RefusalSource | None:
+    """Whose fault ``path`` missing or null in ``value`` is, else ``None``, read where the path stops: the values'
+    at a key present and null, this item having no value there; the template's at a key the values do not set, as
+    a sender sets every key it gives, null for an item without the value. A ``*`` binds only the items present (an
+    absent or null list, none); over them, one item that does not set the key makes it the template's. Under a
+    value of the wrong shape (:data:`_MISSHAPED`) nothing is missing: that value's refusal covers it."""
 
+    if value is _MISSHAPED:
+        return None
     head, rest = path[0], path[1:]
     if head == "*":
         if not isinstance(value, list):
-            return False
-        return any(item is None or (bool(rest) and _lacks(item, rest)) for item in value)
+            return None
+        found = {RefusalSource.VALUES if item is None else _lacks(item, rest) if rest else None for item in value}
+        return next((whose for whose in (RefusalSource.TEMPLATE, RefusalSource.VALUES) if whose in found), None)
     child = value.get(head) if isinstance(value, dict) else None
-    if child is None:
-        return not (rest and rest[0] == "*")
-    return bool(rest) and _lacks(child, rest)
+    if child is not None:
+        return _lacks(child, rest) if rest else None
+    if rest[:1] == ("*",):  # an absent or null list binds no item
+        return None
+    return RefusalSource.VALUES if isinstance(value, dict) and head in value else RefusalSource.TEMPLATE
 
 
 def _filled(value: Any, tree: dict[str, Any]) -> Any:
@@ -917,7 +989,21 @@ def _filled(value: Any, tree: dict[str, Any]) -> Any:
     return {key: _filled(present.get(key), subtree) for key, subtree in tree.items()}
 
 
-def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, errors: list[str]) -> None:
+def _kind(value: Any) -> str:
+    """What a JSON value is, in plain words with its article."""
+
+    if value is None:
+        return "nothing"
+    if isinstance(value, bool):
+        return "true or false"
+    if isinstance(value, (int, float)):
+        return "a number"
+    return "a list" if isinstance(value, list) else "an object" if isinstance(value, dict) else "text"
+
+
+def _parse_dates(
+    value: Any, path: Path, full: Path, printer: _DatePrinter, errors: list[str], formats: list[str],
+) -> None:
     """Turn each non-empty string at ``path`` into a ``date``, else an aware ``datetime``, in place.
 
     Refuse, naming the path, a string that is neither, and a moment the render
@@ -930,7 +1016,7 @@ def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, erro
     )
     for key, child in children:
         if rest:
-            _parse_dates(child, rest, full, printer, errors)
+            _parse_dates(child, rest, full, printer, errors, formats)
             continue
         if child == "":
             continue
@@ -944,10 +1030,11 @@ def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, erro
             except ValueError:
                 parsed = None
         if parsed is None:
-            errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: {str(child)[:40]!r}.")
+            given = f"text of {len(child)} characters" if isinstance(child, str) else _kind(child)
+            errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: it is {given}.")
             continue
         if (refusal := printer.refusal(full, parsed)) is not None:
-            errors.append(f"{_dotted(full)} {refusal}")
+            (errors if refusal[1] == RefusalSource.VALUES else formats).append(f"{_dotted(full)} {refusal[0]}")
             continue
         value[key] = parsed
 
@@ -970,14 +1057,15 @@ class _DatePrinter:
         self.verdicts: dict[tuple[Path, str, int], str | None] = {}
         self.probed: dict[tuple[str, str, int], str | None] = {}
 
-    def refusal(self, path: Path, moment: date | datetime) -> str | None:
-        """Why ``moment`` cannot be printed at ``path``, or ``None``."""
+    def refusal(self, path: Path, moment: date | datetime) -> tuple[str, RefusalSource] | None:
+        """Why ``moment`` cannot be printed at ``path``, and whose that is (a moment the zone cannot hold is the
+        value's; a format that cannot print it, the template's), or ``None``."""
 
         if isinstance(moment, datetime):
             try:
                 moment = template_localtime(moment)
             except (OverflowError, ValueError):
-                return "is a moment the local time zone cannot hold."
+                return "is a moment the local time zone cannot hold.", RefusalSource.VALUES
         kind = "datetime" if isinstance(moment, datetime) else "date"
         end = moment.year if moment.year in (1, 9999) else 0
         key = (path, kind, end)
@@ -985,7 +1073,8 @@ class _DatePrinter:
             self.verdicts[key] = next(
                 (refusal for name in self.formats[path] if (refusal := self.probe(name, kind, end)) is not None), None,
             )
-        return self.verdicts[key]
+        verdict = self.verdicts[key]
+        return None if verdict is None else (verdict, RefusalSource.TEMPLATE)
 
     def probe(self, name: str, kind: str, end: int) -> str | None:
         """Ask Django's ``date`` filter to print a probe of ``kind`` at ``end`` in the format ``name``."""
@@ -1421,16 +1510,17 @@ class TemplateWalker:
         ``message_template_refused``.
         """
 
-        with refusals_only(root):
+        with refusals_only(root) as guard:
             walk = self.judge(root, rows)
             if walk.refusals:
-                raise _refused(walk.refusals, MESSAGE_TEMPLATE_REFUSED)
+                raise _refused(MESSAGE_TEMPLATE_REFUSED, (walk.refusals, RefusalSource.TEMPLATE))
             return walk
+        raise guard.refused()
 
     def judge(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
         """Walk ``root`` as :meth:`walk` does, and return the walk with its refusals and the rows it reached."""
 
-        with refusals_only(root):
+        with refusals_only(root) as guard:
             root_name = root.handler.template_name(root.key)
             walk = TemplateWalk(root=root, root_name=root_name, language=str(root.language), rows={root_name: root})
             checks = self._gather(walk, rows)
@@ -1439,6 +1529,7 @@ class TemplateWalker:
             if not walk.refusals:
                 self._walk_trees(walk, checks)
             return walk
+        raise guard.refused()
 
     def _gather(self, walk: TemplateWalk, reader: RowReader) -> dict[str, _RowCheck]:
         """Rows reached, level by level, each counted before it is parsed and checked alone.

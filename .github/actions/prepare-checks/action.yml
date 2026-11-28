@@ -19,6 +19,9 @@ inputs:
   roots:
     description: Authored roots for this invocation. An empty list preserves the rendered profile.
     default: "[]"
+  add-roots:
+    description: Reached roots added to an authored full profile.
+    default: "[]"
   sources-token:
     description: Token for consumer source access.
     required: true
@@ -106,8 +109,9 @@ runs:
         EXTRA: ${{ inputs.extra }}
         PROFILE: ${{ inputs.profile }}
         ROOTS: ${{ inputs.roots }}
+        ADD_ROOTS: ${{ inputs.add-roots }}
         SOURCES: ${{ inputs.sources }}
       run: |
-        args=( "$SLOT" --profile "$PROFILE" --roots "$ROOTS" --sources "$SOURCES" )
+        args=( "$SLOT" --profile "$PROFILE" --roots "$ROOTS" --add-roots "$ADD_ROOTS" --sources "$SOURCES" )
         if [ -n "$EXTRA" ]; then args+=( --extra "$EXTRA" ); fi
         python3 "$GITHUB_ACTION_PATH/prepare.py" "${args[@]}"
