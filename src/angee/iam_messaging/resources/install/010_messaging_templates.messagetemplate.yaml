@@ -1,0 +1,61 @@
+# The sign-in link's mail, in the base layout with the greeting, button, ignore notice and
+# signature the message template library ships. The server builds the link and its expiry;
+# the first name is the person's own, and the renderer keeps it text.
+- xref: template.sign_in_link.en
+  kind: template
+  key: iam_messaging.sign_in_link
+  language: en
+  name: Sign-in link
+  description: The single-use link an administrator sends a person to sign in without a password.
+  format: markdown
+  layout: base
+  subject: Your sign-in link
+  preheader: 'Sign in to {{ brand.name }} once with this link.'
+  source: |-
+    {% include "parts/greeting" with person=person only %}
+
+    Use the link below to sign in to {{ brand.name }}. It works once and expires on {{ expires_at|date:"DATETIME_FORMAT" }} ({{ expires_at|date:"T" }}). A newer link replaces it.
+
+    {% include "blocks/button" with label="Sign in" url=link only %}
+
+    {% include "parts/ignore_notice" only %}
+
+    {% include "parts/signature" only %}
+  variables:
+    link: The single-use sign-in link the server builds; whoever opens it can sign in once.
+    expires_at: When the link stops working.
+    person.first_name: The recipient's first name; may be empty.
+  sample:
+    link: https://app.example.test/sign-in-link#token=usr_sample.not-a-real-secret
+    expires_at: '2026-11-28T09:30:00+00:00'
+    person:
+      first_name: Ana
+- xref: template.sign_in_link.es
+  kind: template
+  key: iam_messaging.sign_in_link
+  language: es
+  name: Sign-in link
+  description: The single-use link an administrator sends a person to sign in without a password.
+  format: markdown
+  layout: base
+  subject: Tu enlace para iniciar sesión
+  preheader: 'Inicia sesión en {{ brand.name }} una vez con este enlace.'
+  source: |-
+    {% include "parts/greeting" with person=person only %}
+
+    Usa el enlace de abajo para iniciar sesión en {{ brand.name }}. Funciona una sola vez y caduca el {{ expires_at|date:"DATETIME_FORMAT" }} ({{ expires_at|date:"T" }}). Un enlace más reciente lo reemplaza.
+
+    {% include "blocks/button" with label="Iniciar sesión" url=link only %}
+
+    {% include "parts/ignore_notice" only %}
+
+    {% include "parts/signature" only %}
+  variables:
+    link: The single-use sign-in link the server builds; whoever opens it can sign in once.
+    expires_at: When the link stops working.
+    person.first_name: The recipient's first name; may be empty.
+  sample:
+    link: https://app.example.test/sign-in-link#token=usr_sample.not-a-real-secret
+    expires_at: '2026-11-28T09:30:00+00:00'
+    person:
+      first_name: Ana
