@@ -547,7 +547,7 @@ jobs:
 
   # Preserve the required check name and accept only skips justified by the plan.
   uv:
-    if: ${{ always() && inputs.uv-enabled }}
+    if: ${{ !cancelled() && inputs.uv-enabled }}
     needs: [python-quality, select, uv-shard, uv-postgres, addon-hosts]
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
@@ -911,7 +911,7 @@ jobs:
 
   # A green aggregate requires the exact plan and each enabled worker's verdict.
   stack:
-    if: ${{ always() && inputs.stack-enabled }}
+    if: ${{ !cancelled() && inputs.stack-enabled }}
     needs: [select, stack-shard, addon-hosts, python-quality]
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
