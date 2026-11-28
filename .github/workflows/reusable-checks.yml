@@ -178,7 +178,7 @@ jobs:
           mapfile -t tests < <(jq -r '.[]' <<< "$QUALITY_TESTS")
           if (("${#tests[@]}")); then
             cd "workspaces/src/$PRIMARY_SLOT"
-            ../../../.venv/bin/python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q "${tests[@]}"
+            "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q "${tests[@]}"
           fi
       - name: Typecheck the consumer with the framework policy and native typing host
         if: ${{ inputs.consumer-path != '' }}
@@ -287,7 +287,8 @@ jobs:
       - name: Check the pinned bridge source boundary
         if: ${{ inputs.uv-enabled && inputs.stack-enabled && inputs.addons-profile == 'full' }}
         working-directory: stack/workspaces/src/angee-messaging-bridges
-        run: ../../../.venv/bin/python -m pytest -q -p no:django --noconftest "$BRIDGE_SOURCE_GUARD"
+        run: >-
+          "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m pytest -q -p no:django --noconftest "$BRIDGE_SOURCE_GUARD"
       - id: select
         shell: bash
         env:
@@ -865,7 +866,7 @@ jobs:
           REACHED_ROOTS: ${{ toJSON(fromJSON(needs.select.outputs.plan).stack.paths) }}
         run: |
           if [ "$PRIMARY_SLOT" = angee ] && [ "$STACK_MODE" = selected ]; then
-            reached=$(../../../.venv/bin/python - <<'PY'
+            reached=$("$GITHUB_WORKSPACE/stack/.venv/bin/python" - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -890,7 +891,7 @@ jobs:
           if [ -n "$DONOR" ]; then args+=( --donor "$DONOR" ); fi
           if [ "$PRIMARY_SLOT" = angee ]; then ignore+=( --ignore "$BRIDGE_SOURCE_GUARD" ); fi
           while IFS= read -r test_path; do ignore+=( --ignore "$test_path" ); done < <(jq -r '.[]' <<< "$QUALITY_TESTS")
-          env -u DATABASE_URL ../../../.venv/bin/python ../angee/scripts/changed_path_selection.py pytest \
+          env -u DATABASE_URL "$GITHUB_WORKSPACE/stack/.venv/bin/python" ../angee/scripts/changed_path_selection.py pytest \
             --base "${TEST_BASE:-}" --head "${TEST_HEAD:-}" "${args[@]}" -- -q "${ignore[@]}" ${{ inputs.pytest-extra-args }}
 
   # A green aggregate requires the exact plan and each enabled worker's verdict.
