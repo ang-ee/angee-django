@@ -760,15 +760,15 @@ def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: st
 
 @pytest.mark.parametrize("queued", [True, False], ids=["queued", "a-draft"])
 @pytest.mark.parametrize("entry", ["jörg@example.test", "kate@ex\uff3fample.test"])
-def test_a_persons_compose_refuses_what_the_transport_cannot_carry_as_clean_system_recipient_does(
+def test_a_persons_compose_refuses_what_the_transport_cannot_carry_as_clean_sendable_recipient_does(
     desk: Any, entry: str, queued: bool,
 ) -> None:
     """``clean_recipient`` reads the entry; compose, queued or held as a draft, refuses it under its role with the
-    code and words of the whole recipient rule (``clean_system_recipient``), before anything is written."""
+    code and words of the whole recipient rule (``clean_sendable_recipient``), before anything is written."""
 
     assert Message.objects.clean_recipient(entry) == ("", entry)
     with pytest.raises(ValidationError) as asked:
-        Message.objects.clean_system_recipient(entry)
+        Message.objects.clean_sendable_recipient(entry)
     with system_context(reason="tests.messaging.compose.clean_recipient"):
         handles, rows = Handle._base_manager.count(), _rows()
     with _refused(key="to", code="cannot_carry") as refused:

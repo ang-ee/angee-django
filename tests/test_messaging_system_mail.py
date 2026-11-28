@@ -527,8 +527,8 @@ def test_a_system_mail_to_a_merged_handles_address_reads_only_its_redirect_more(
 def test_a_system_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_on_the_wire(
     system_mailer: Any, domain: str,
 ) -> None:
-    """The system recipient rule refuses what the transport cannot carry before anything is recorded; a space it
-    strips from the entry's end leaves the cleaned address, which is what is recorded and sent."""
+    """The recipient rule (``clean_sendable_recipient``) refuses what the transport cannot carry before anything is
+    recorded; a space it strips from the entry's end leaves the cleaned address, which is what is recorded and sent."""
 
     entry, rows = f"kate@{domain}", _rows()
     try:
@@ -1498,9 +1498,9 @@ def test_a_rebound_system_backend_gives_callers_and_the_writer_one_answer(system
 @override_settings(MAILERS={"transport": LOCMEM}, DEFAULT_FROM_EMAIL=SENDER)
 def test_whether_system_mail_is_configured_and_can_reach_an_address_is_answered_with_no_database() -> None:
     assert Channel.objects.system_mail_configured()
-    assert Message.objects.clean_system_recipient("Reader <reader@example.test>") == ("Reader", "reader@example.test")
+    assert Message.objects.clean_sendable_recipient("Reader <reader@example.test>") == ("Reader", "reader@example.test")
     with pytest.raises(ValidationError) as refused:
-        Message.objects.clean_system_recipient("jörg@example.test")
+        Message.objects.clean_sendable_recipient("jörg@example.test")
     assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
 
 
@@ -1527,7 +1527,7 @@ def test_system_mail_refuses_exactly_the_recipients_its_recipient_rule_refuses(
     """Django's email validator refuses the first odd address and admits the second; system mail's rule decides."""
 
     expected = [] if refusal is None else [("cc", refusal)]
-    assert _refusals(lambda: Message.objects.clean_system_recipient(entry, key="cc")) == expected
+    assert _refusals(lambda: Message.objects.clean_sendable_recipient(entry, key="cc")) == expected
     assert _refusals(lambda: Message.objects.compose_as_system(
         reason="tests.system_mail", to=["reader@example.test"], cc=[entry], text="Hello.",
     )) == expected

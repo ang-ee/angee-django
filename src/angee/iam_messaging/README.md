@@ -17,7 +17,7 @@ the `issue_sign_in_link` permission, which this addon's fragment declares on
 `auth/user` (platform admins) and unions into IAM's `active_account_granted`
 and `nonstaff_account_granted`. It refuses what IAM's actions refuse (protected,
 service, the actor's own account), inactive accounts, any account whose email
-system mail cannot be sent to (messaging's `Message.objects.clean_system_recipient`:
+system mail cannot be sent to (messaging's `Message.objects.clean_sendable_recipient`:
 one address the handle owner lands, which the transport can carry; the refusal
 names no address) and a deployment that cannot deliver the link. It also refuses a
 second link within `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN` seconds (60 by

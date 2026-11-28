@@ -458,7 +458,7 @@ is that backend's own contract, which callers do not name. The sender rule is
 takes, plus `require_carried`: a sender whose part before the `@` is outside
 ASCII is refused, as no transport here speaks SMTPUTF8, and so is one whose
 domain is no host name in its IDNA form. A recipient's rule is
-`Message.objects.clean_system_recipient(entry, key=...)`, the same two, which
+`Message.objects.clean_sendable_recipient(entry, key=...)`, the same two, which
 every compose applies to each recipient it is handed and a caller asks before
 offering a send; both read nothing. A system mail is mailed exactly at the address its
 caller gave, after that rule, which its recipient row records, on whichever

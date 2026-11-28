@@ -401,8 +401,8 @@ live in code docstrings.
     (`DEFAULT_FROM_EMAIL`) from settings alone, and
     `ChannelManager.system_mail_configured()` answers whether system mail can be
     sent, as the backend the registry binds to the system key decides.
-    `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
-    recipient rule, which reads nothing. `require_carried(address, key=...)`
+    `MessageManager.clean_sendable_recipient(entry, key=...)` is the recipient
+    rule every compose applies, which reads nothing. `require_carried(address, key=...)`
     (`angee.messaging.email`) is the one rule for what the transport can carry,
     refusing `cannot_carry`. With `DEBUG` off, an
     error report hides every local of the system write's frames, and of the
@@ -531,7 +531,10 @@ live in code docstrings.
   was handed fails at delivery with that reason: a recipient a reply inherits
   from its parent, the kept handle a person's address was merged into, and a
   row written before the rule. `carries_address` is removed: `require_carried`
-  is the one rule. Before, a person's compose to an address whose part before the `@` is outside
+  is the one rule. `MessageManager.clean_system_recipient` is renamed
+  `clean_sendable_recipient`, with no alias, as it is the rule of every
+  compose, a person's too: a caller of `clean_system_recipient` changes the
+  name. Before, a person's compose to an address whose part before the `@` is outside
   ASCII was written and its delivery refused; of the 19 non-ASCII spaces right
   after the `@`, 14 reached the wire as a mailbox with a space in it, one
   (U+1680) failed at delivery with "The email could not be rendered.", and 4
@@ -1205,7 +1208,7 @@ live in code docstrings.
   to show on the system channel. A missing template's refusal names no command
   ("This deployment has not installed the sign-in link's email template; its
   operator loads its resources (provision does)."). Whether an account's address can
-  receive its link is messaging's `Message.objects.clean_system_recipient`, no
+  receive its link is messaging's `Message.objects.clean_sendable_recipient`, no
   longer Django's `validate_email`: an administrator sees the account's own
   refusal for an address outside ASCII before the @ (as before) and now also for
   one messaging refuses that Django admits (a quoted local part with an escaped space),

@@ -152,7 +152,7 @@ read.
 ## When a mail cannot be sent
 
 - **A person's address is refused** (none, or one system mail refuses:
-  `Message.objects.clean_system_recipient` before the send, or the send keyed `to`):
+  `Message.objects.clean_sendable_recipient` before the send, or the send keyed `to`):
   that person is skipped and counted in the task's log, and the others still go.
 - **One question's values cannot be sent** (`QUESTION_REFUSALS`: `invalid_values`,
   `values_too_large`, `render_budget`, `subject_too_long`, such as a choice longer
