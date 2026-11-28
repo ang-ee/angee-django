@@ -641,9 +641,11 @@ room within the organization's 20 concurrent GitHub-hosted jobs.
   tests. The owning distribution checks use the required built package cohort.
 - **Composition:** a selected stack job composes the reached addon roots or the
   authored profile needed for changed package consumers, verifies native
-  migrations and SDL, and uses the generated web manifest and pnpm's reverse
+  migrations and the installed SDL command, and uses the generated web manifest and pnpm's reverse
   filters for affected fragment checks. A selected addon closure validates its
   resource tiers through the native loader on its disposable migrated database.
+  A mixed resource and framework package change uses the full profile and
+  includes the reached resource roots before loading demo data.
   The full profile additionally provisions
   its database, runs system checks, loads demo data and exercises deferred reads
   and saves of composed models. A selected bridge source run can use its native
