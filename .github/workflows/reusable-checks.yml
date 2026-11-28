@@ -200,11 +200,18 @@ jobs:
           host = Path.cwd().resolve()
           slot = host / "workspaces/src" / os.environ["CONSUMER_PATH"]
           framework = host / "workspaces/src/angee"
+          sys.path.insert(0, str(framework / "scripts"))
+          from changed_path_selection import addon_graph
+
           typing_root = host / ".mypy_cache/consumer_typing"
           typing_root.mkdir(parents=True, exist_ok=True)
           # Authored isolated settings use the same native configuration owner.
           (typing_root / "ci_consumer_typing.py").write_text((host / "settings.py").read_text())
           authored = yaml.safe_load((host / "settings.yaml").read_text())
+          # Mypy checks the whole consumer source, including addons outside the runtime roots.
+          roots = authored["INSTALLED_APPS"]
+          owned = addon_graph(slot, roots).owners.values()
+          authored["INSTALLED_APPS"] = list(dict.fromkeys([*roots, *sorted(owned)]))
           authored["COMPOSE_OUTPUT_DIR"] = str(typing_root / "ci_typing_runtime")
           authored["COMPOSE_OUTPUT_MODULE"] = "ci_typing_runtime"
           authored["DATABASES"] = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
