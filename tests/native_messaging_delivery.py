@@ -973,7 +973,7 @@ class DeliveryContracts(DeliveryFixtures):
             claim = changeset_model()._base_manager.get(key="discarded-turn")
             self.assertEqual(claim.created_row.pk, reply.pk)
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_email_explicit_refusals_and_lost_acknowledgements_settle_distinctly(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -995,7 +995,7 @@ class DeliveryContracts(DeliveryFixtures):
             connection_.send_messages.side_effect = error
             with self.subTest(error=type(error).__name__), system_context(reason="email refusal fixture"), patch.object(
                 transport, "email_message", return_value=envelope,
-            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=connection_)):
+            ), patch("angee.messaging.email.mailers", {constants.TRANSPORT_MAILER_ALIAS: connection_}):
                 row = self.outbound(external_id=f"email-{index}")
                 self.backend.deliver.side_effect = transport.deliver
                 row.deliver()
@@ -1004,7 +1004,7 @@ class DeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.status, expected)
                 self.assertNotIn("private", row.local_metadata["delivery_error"])
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_email_render_failure_precedes_the_effect_and_fails_definitely(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -1018,7 +1018,7 @@ class DeliveryContracts(DeliveryFixtures):
             row.refresh_from_db()
             self.assertNotIn("private", row.local_metadata["delivery_error"])
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_email_open_failures_are_not_sent_and_always_close_the_connection(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -1028,14 +1028,14 @@ class DeliveryContracts(DeliveryFixtures):
             connection_.open.side_effect = error
             with self.subTest(error=type(error).__name__), patch.object(
                 transport, "email_message", return_value=envelope,
-            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=connection_)):
+            ), patch("angee.messaging.email.mailers", {constants.TRANSPORT_MAILER_ALIAS: connection_}):
                 with self.assertRaises(IntegrationError) as failure:
                     transport.deliver(self.outbound(external_id=type(error).__name__))
                 self.assertTrue(failure.exception.transient)
             connection_.send_messages.assert_not_called()
             connection_.close.assert_called_once()
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_real_anymail_http_exceptions_retry_only_provable_connection_failures(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -1064,7 +1064,7 @@ class DeliveryContracts(DeliveryFixtures):
                 api.session, "request", side_effect=request_error,
             ), patch.object(transport, "email_message", return_value=envelope), patch.object(
                 api, "send_messages", side_effect=lambda messages: api.post_to_esp(payload, messages[0]),
-            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=api)), system_context(
+            ), patch("angee.messaging.email.mailers", {constants.TRANSPORT_MAILER_ALIAS: api}), system_context(
                 reason="real Anymail request exception settlement",
             ):
                 # post_to_esp, rather than a fabricated wrapper, raises Anymail's

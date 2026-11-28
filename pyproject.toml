@@ -25,6 +25,7 @@ dependencies = [
     "angee-checklists==3.0.0",
     "angee-dashboards==3.0.0",
     "angee-decisions==3.0.0",
+    "angee-decisions-messaging==3.0.0",
     "angee-extraction==3.0.0",
     "angee-graphql==3.0.0",
     "angee-iam==3.0.0",
@@ -107,6 +108,8 @@ dev = [
     "hypothesis>=6.100",
     "html5lib>=1.1,<2",
     "import-linter>=2.1",
+    "grimp>=3.19",
+    "iniconfig>=2.3",
     "psycopg[binary,pool]>=3.2",
     "angee-django-stubs[compatible-mypy]==6.1.2.post3",
     "angee-mypy==2.1.0",
@@ -152,6 +155,7 @@ angee-calendar-integrate-ics = {workspace = true}
 angee-checklists = {workspace = true}
 angee-dashboards = {workspace = true}
 angee-decisions = {workspace = true}
+angee-decisions-messaging = {workspace = true}
 angee-extraction = {workspace = true}
 angee-graphql = {workspace = true}
 angee-iam = {workspace = true}
@@ -230,6 +234,7 @@ bypass-selection = true
 only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 
 [tool.pytest.ini_options]
+markers = ["shared_inputs: reads inputs across the composed host or repository"]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
@@ -255,6 +260,8 @@ exclude = [
   # Django-authored migrations live here. The composer owns its shape; lint
   # the abstract sources instead.
   "**/runtime",
+  # Addon test hosts (angee.base.testing.host) are emitted output too.
+  ".test-hosts",
   # Materialized addon migration sources are pinned by digest and immutable.
   # Addon migration templates (compose_migrations/) are source and stay checked.
   "**/runtime_migrations",
@@ -385,6 +392,7 @@ allow_indirect_imports = true
 source_modules = ["angee.**"]
 forbidden_modules = ["tests", "angee.*.testing", "angee.*.testing.**", "html5lib"]
 ignore_imports = [
+  "angee.*.tests.** -> angee.*.testing",
   "angee.*.tests.** -> angee.*.testing.**",
   "angee.*.tests.** -> tests",
   "angee.*.testing -> angee.*.testing.**",

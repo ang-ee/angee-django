@@ -788,7 +788,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             return tuple(source.reply_addresses())
 
     def requester_address(self) -> str:
-        """Return the requester's address: the claimed email, else an emailed request's Reply-To, else its sender."""
+        """Return the requester's address as its source gives it: the claimed email, else an emailed request's
+        Reply-To as the header first spells it, else its sender as the handle stores it."""
 
         if self.claimed_email:
             return self.claimed_email
@@ -799,7 +800,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         sender = source.sender if source is not None else None
         if source is None or sender is None or source.platform != "email":
             return ""
-        return str(sender.canonical().value or "").strip().lower()
+        return str(sender.canonical().value or "").strip()
 
     def provide_requester_account(self, *, reason: str) -> Any:
         """Return the requester's account, giving a requester without one a passwordless person.
@@ -1186,13 +1187,20 @@ class TaskIntake(Composable, extends="projects.Task"):
 
     @staticmethod
     def _requester_key(need: Need) -> tuple[str, Any] | None:
-        """Identify a request's requester: its party, else their address, else the sender of its source message."""
+        """Identify a request's requester: its party, else their address, else the sender of its source message.
+
+        The requests of one requester are given one account to await
+        (``Need.provide_requester_account``), so an address is keyed as iam keys
+        an account's email (``normalize_email``): two spellings iam keeps as two
+        accounts are two requesters, and the task names the request to ask
+        rather than await an account the answer would not come from.
+        """
 
         if need.party_id is not None:
             return ("party", need.party_id)
         address = need.requester_address()
         if address:
-            return ("address", address.lower())
+            return ("address", get_user_model().objects.normalize_email(address))
         source = need.source_message
         if source is not None and source.sender is not None:
             return ("sender", source.sender.canonical().pk)

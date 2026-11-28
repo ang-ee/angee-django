@@ -1,77 +1,305 @@
-"""The merge gate's changed-path selection reaches the tests a change can break."""
+"""Changed-path selection composes native app dependencies with pytest's own paths."""
 
+import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
+from scripts.changed_path_selection import AppGraph, addon_graph, changed_paths, collected, isolated_suites, select
+from scripts.postgres_selection import entries, groups, kept
 
 ROOT = Path(__file__).resolve().parents[1]
-FULL_SUITE = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]["testpaths"]
+SCRIPT = ROOT / "scripts/changed_path_selection.py"
 
 
-def reached(*changed: str) -> list[str]:
-    """Run the selection as CI does: changed paths on stdin, test files on stdout."""
+def git(root: Path, *args: str) -> str:
+    return subprocess.check_output(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.test", *args], cwd=root, text=True,
+    ).strip()
 
-    result = subprocess.run(
-        [sys.executable, "scripts/changed_path_selection.py"],
-        cwd=ROOT, input="\n".join(changed), capture_output=True, text=True, check=True,
+
+def commit(root: Path) -> str:
+    git(root, "add", ".")
+    git(root, "commit", "--no-gpg-sign", "-m", "inputs")
+    return git(root, "rev-parse", "HEAD")
+
+
+@pytest.fixture(scope="module")
+def framework():
+    graph = addon_graph(ROOT, ())
+    paths, shared = collected(ROOT, ())
+    return graph, tuple(paths), shared
+
+
+@pytest.mark.parametrize(("changes", "expected_hosts"), [
+    (["src/angee/uom/tests/test_uom.py"], ("angee.uom",)),
+    (["docs/checks.md"], ()),
+    ([], ()),
+])
+def test_changes_without_shared_inputs_exclude_shared_suites(framework, changes, expected_hosts) -> None:
+    graph, paths, profiles = framework
+    suites = isolated_suites(ROOT, graph.owners)
+    assert list(suites.values()) == ["angee.uom"]
+    shared, hosts = select(
+        ROOT, list(map(Path, changes)), paths,
+        graph, isolated=suites, legacy=True, shared_tests=profiles,
     )
-    return result.stdout.split()
+    assert shared.mode == "empty"
+    assert hosts.paths == expected_hosts
+    postgres = entries()
+    chosen = kept(postgres, shared.paths)
+    assert chosen == []
+    assert groups(postgres, chosen, {}) == []
 
 
-def test_a_change_reaches_its_test_files_their_importers_and_composed_profiles() -> None:
-    tests = reached("tests/test_stack.py", "src/angee/provenance/managers.py", "tests/native_intake_capture.py")
-
-    assert {"tests/test_stack.py", "tests/test_provenance_native.py", "tests/test_composed_intake.py"} <= set(tests)
-    assert "tests/test_documentation_contracts.py" not in tests
-
-
-def test_a_template_reaches_the_tests_that_render_or_read_the_templates() -> None:
-    tests = reached("templates/projects/web/template/settings.py")
-
-    assert {"tests/test_stack_templates.py", "tests/test_addon_templates.py", "tests/test_host_build.py"} <= set(tests)
-    assert "tests" not in tests
-
-
-@pytest.mark.parametrize(
-    "changed", ["tests/conftest.py", "src/angee/storage/permissions.zed", "uv.lock", ".python-version"],
-)
-def test_an_input_every_test_reads_selects_the_full_suite(changed: str) -> None:
-    assert reached(changed) == FULL_SUITE
+def test_legacy_template_readers_and_profile_references_survive(framework) -> None:
+    graph, paths, profiles = framework
+    template = Path("templates/projects/web/template/settings.py")
+    shared, _ = select(ROOT, [template], paths, graph, legacy=True, shared_tests=profiles)
+    assert {
+        "tests/test_stack_templates.py", "tests/test_addon_templates.py", "tests/test_host_build.py",
+    } <= set(shared.paths)
+    assert "tests/test_composed_examples.py" not in kept(entries(), shared.paths)
+    profile = Path("tests/native_intake_capture.py")
+    shared, _ = select(ROOT, [profile], paths, graph, legacy=True, shared_tests=profiles)
+    assert "tests/test_composed_intake.py" in shared.paths
 
 
-def test_docs_and_web_code_reach_no_python_test() -> None:
-    assert reached("docs/checks.md", "packages/refine/src/provider.ts") == []
+def test_addon_frontend_edit_reaches_its_python_reader(framework) -> None:
+    graph, paths, profiles = framework
+    action = Path("src/angee/messaging_integrate_imap/web/src/ImportImapSampleAction.tsx")
+    shared, _ = select(ROOT, [action], paths, graph, legacy=True, shared_tests=profiles)
+    assert shared.mode == "selected"
+    assert "tests/test_messaging_imap.py" in shared.paths
+    assert "tests/test_composed_examples.py" in shared.paths
 
 
-@pytest.mark.parametrize(
-    "changed", ["src/angee/base/checks.py", "src/angee/server/urls.py", "src/angee/graphql/records.py"],
-)
-def test_a_shared_owner_selects_the_full_suite(changed: str) -> None:
-    assert reached(changed) == FULL_SUITE
+def test_calendar_change_reaches_global_composition_readers(framework) -> None:
+    graph, paths, profiles = framework
+    change = Path("src/angee/calendar/models.py")
+    shared, _ = select(ROOT, [change], paths, graph, legacy=True, shared_tests=profiles)
+    assert {
+        "tests/test_base_checks.py", "tests/test_composition.py", "tests/test_fields.py",
+        "tests/test_merge.py", "tests/test_model_names.py", "tests/test_resource_fixtures.py",
+    } <= set(shared.paths)
 
 
-def test_a_module_every_test_loads_selects_the_full_suite() -> None:
-    """tests/conftest.py imports it, and the repository's conftest imports tests/conftest.py for every test."""
-
-    assert reached("src/angee/checklists/testing/models.py") == FULL_SUITE
-
-
-@pytest.mark.parametrize("changed", ["src/angee/projects/removed_module.py", ".agents/tools/owner-map-guard.py"])
-def test_a_python_file_outside_the_import_graph_selects_the_full_suite(changed: str) -> None:
-    assert reached(changed) == FULL_SUITE
-
-
-def test_a_package_init_reaches_every_importer_of_the_package() -> None:
-    """Importing tests.hierdemo.models runs tests/hierdemo/__init__.py first."""
-
-    assert {"tests/test_append_only.py", "tests/test_hierarchy.py"} <= set(reached("tests/hierdemo/__init__.py"))
+@pytest.mark.parametrize(("change", "mode"), [
+    ("src/angee/calendar/models.py", "selected"),
+    ("src/angee/storage/permissions.zed", "full"),
+    ("tests/native_graphql_document_budgets.py", "selected"),
+    ("examples/src/example/notes/tests/test_workflow_steps.py", "selected"),
+])
+def test_postgres_examples_profile_runs_for_its_inputs(framework, change: str, mode: str) -> None:
+    graph, paths, profiles = framework
+    shared, _ = select(ROOT, [Path(change)], paths, graph, legacy=True, shared_tests=profiles)
+    assert shared.mode == mode
+    postgres = entries()
+    chosen = postgres if shared.mode == "full" else kept(postgres, shared.paths)
+    assert "tests/test_composed_examples.py" in chosen
 
 
-def test_a_compose_migration_template_reaches_the_tests_that_import_it() -> None:
-    tests = reached("src/angee/projects/compose_migrations/projects/task_recurrence_due_rule.py")
+@pytest.mark.parametrize("path", [
+    "uv.lock", ".python-version", "tests/conftest.py", "src/angee/calendar/apps.py",
+    "src/angee/storage/permissions.zed", "src/angee/projects/removed_module.py",
+    "src/angee/checklists/testing/models.py", ".agents/tools/owner-map-guard.py",
+])
+def test_legacy_fallback_preserves_shared_inputs(framework, path: str) -> None:
+    graph, paths, profiles = framework
+    shared, _ = select(ROOT, [Path(path)], paths, graph, legacy=True, shared_tests=profiles)
+    assert shared.mode == "full"
+    assert shared.reason
 
-    assert "tests/test_projects_due_rules.py" in tests
-    assert tests != FULL_SUITE
+
+@pytest.fixture()
+def addon_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """An isolated import graph with a prerequisite, leaf, consumer, and extra test-only importer."""
+    owners = {}
+    files = {}
+    for name in ("base", "leaf", "consumer", "mixed"):
+        folder = Path("fixture_addons") / name
+        owners[folder] = f"fixture_addons.{name}"
+        files[folder / "__init__.py"] = ""
+        files[folder / "models.py"] = ""
+        files[folder / "pytest.ini"] = "[pytest]\ntestpaths = tests\n"
+        files[folder / "tests" / "__init__.py"] = ""
+        files[folder / "tests" / "test_contract.py"] = "def test_contract(): pass\n"
+    files[Path("fixture_addons/__init__.py")] = ""
+    files[Path("fixture_addons/leaf/testing.py")] = "VALUE = 1\n"
+    files[Path("fixture_addons/mixed/tests/test_contract.py")] = (
+        "from fixture_addons.leaf.testing import VALUE\n\ndef test_contract(): assert VALUE == 1\n"
+    )
+    files[Path("tests/__init__.py")] = ""
+    files[Path("tests/test_registry.py")] = (
+        "def test_contract():\n    return apps.get_model('leaf_label', 'Record')\n"
+    )
+    files[Path("tests/test_profile.py")] = "def test_contract(): pass\n"
+    for path, content in files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    graph = AppGraph(
+        owners, {"fixture_addons.leaf": ["fixture_addons.base"], "fixture_addons.consumer": ["fixture_addons.leaf"]},
+        {"leaf_label": "fixture_addons.leaf"},
+    )
+    paths = [path for path in files if path.name.startswith("test_")]
+    return tmp_path, graph, paths
+
+
+def test_selects_changed_leaf_and_reverse_consumers_without_its_prerequisite(addon_repo) -> None:
+    root, graph, paths = addon_repo
+    profile = Path("tests/test_profile.py")
+    shared, _ = select(
+        root, [Path("fixture_addons/leaf/models.py")], paths, graph, shared_tests=[profile],
+    )
+    assert shared.mode == "selected"
+    assert {
+        "fixture_addons/leaf/tests/test_contract.py", "fixture_addons/consumer/tests/test_contract.py",
+        "tests/test_registry.py", profile.as_posix(),
+    } <= set(shared.paths)
+    assert "fixture_addons/base/tests/test_contract.py" not in shared.paths
+
+
+def test_test_helper_reaches_mixed_importer_without_a_runtime_edge(addon_repo) -> None:
+    root, graph, paths = addon_repo
+    shared, _ = select(root, [Path("fixture_addons/leaf/testing.py")], paths, graph)
+    assert "fixture_addons/mixed/tests/test_contract.py" in shared.paths
+    assert "fixture_addons/base/tests/test_contract.py" not in shared.paths
+
+
+def test_migration_template_namespace_does_not_break_the_native_module_graph(addon_repo) -> None:
+    root, graph, paths = addon_repo
+    migration = Path("fixture_addons/leaf/compose_migrations/preflight.py")
+    (root / migration.parent).mkdir()
+    (root / migration).touch()
+    source = Path("fixture_addons/leaf/models.py")
+    shared, _ = select(root, [source], paths, graph)
+    assert shared.mode == "selected"
+    shared, _ = select(root, [migration], paths, graph)
+    assert shared.mode == "full"
+
+
+def test_custom_native_layout_broadens_host_selection(addon_repo) -> None:
+    root, graph, paths = addon_repo
+    (root / "fixture_addons/consumer/pytest.ini").write_text("[pytest]\ntestpaths = checks\n")
+    shared, hosts = select(
+        root, [Path("fixture_addons/leaf/tests/test_contract.py")], paths, graph, isolated=graph.owners,
+    )
+    assert shared.paths == ("fixture_addons/leaf/tests/test_contract.py",)
+    assert hosts.mode == "full"
+    assert hosts.reason == "custom isolated test layout"
+
+
+@pytest.mark.parametrize("change", ["fixture_addons/leaf/host_fixtures.py", "fixture_addons/leaf/web/widget.tsx"])
+def test_declared_isolated_plugin_reaches_its_host_without_a_runtime_edge(addon_repo, change: str) -> None:
+    root, graph, paths = addon_repo
+    fixtures = Path("fixture_addons/leaf/host_fixtures.py")
+    (root / fixtures).write_text("import pytest\n")
+    (root / "fixture_addons/mixed/tests/test_contract.py").write_text("def test_contract(): pass\n")
+    (root / "fixture_addons/mixed/conftest.py").write_text(
+        "pytest_plugins = ('fixture_addons.leaf.host_fixtures',)\n",
+    )
+    _, hosts = select(root, [Path(change)], paths, graph, isolated=graph.owners)
+    assert "fixture_addons.mixed" in hosts.paths
+    assert "fixture_addons.base" not in hosts.paths
+
+
+@pytest.mark.parametrize("name", ["permissions.extends.zed", "sample.edi.xml", "invoice.pdf", "documents.console.ts"])
+def test_non_python_addon_inputs_broaden_the_shared_host(addon_repo, name: str) -> None:
+    root, graph, paths = addon_repo
+    shared, hosts = select(
+        root, [Path("fixture_addons/leaf") / name], paths, graph, isolated=graph.owners,
+    )
+    assert shared.mode == "full"
+    assert hosts.paths == ("fixture_addons.consumer", "fixture_addons.leaf", "fixture_addons.mixed")
+
+
+def test_explicit_shared_reader_runs_for_frontend_changes_but_prose_is_empty(addon_repo) -> None:
+    root, graph, paths = addon_repo
+    profile = Path("tests/test_profile.py")
+    shared, _ = select(root, [Path("web/widget.tsx")], paths, graph, shared_tests=[profile])
+    assert shared.paths == (profile.as_posix(),)
+    shared, hosts = select(root, [Path("docs/checks.md")], paths, graph, shared_tests=[profile])
+    assert shared.mode == hosts.mode == "empty"
+
+
+def test_exact_diff_handles_missing_baselines_and_deletions(tmp_path: Path) -> None:
+    git(tmp_path, "init")
+    module = tmp_path / "test_demo.py"
+    module.write_text("def test_demo(): pass\n")
+    base = commit(tmp_path)
+    module.write_text("def test_demo(): assert True\n")
+    head = commit(tmp_path)
+    assert changed_paths(tmp_path, base, head) == ([Path(module.name)], "")
+    assert "base" in changed_paths(tmp_path, "1" * 40, head)[1]
+    assert "head" in changed_paths(tmp_path, base, base)[1]
+    module.unlink()
+    assert "removed" in changed_paths(tmp_path, base, commit(tmp_path))[1]
+
+
+def test_cli_preserves_pytest_patterns_and_skips_an_intentionally_empty_selection(tmp_path: Path) -> None:
+    git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    docs = tmp_path / "README.md"
+    docs.write_text("before\n")
+    base = commit(tmp_path)
+    (tmp_path / "testWithoutUnderscore.py").write_text("def test_selected(): pass\n")
+    head = commit(tmp_path)
+    command = [
+        sys.executable, str(SCRIPT), "pytest", "--root", str(tmp_path), "--base", base, "--head", head,
+        "--", "-p", "no:django", "-o", "python_files=test*.py", "-q",
+    ]
+    run = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, check=True)
+    record = json.loads(run.stdout.splitlines()[0])
+    assert record["paths"] == ["testWithoutUnderscore.py"]
+    assert "1 passed" in run.stdout
+    docs.write_text("after\n")
+    command[command.index(base)] = head
+    command[command.index("--head") + 1] = commit(tmp_path)
+    run = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, check=True)
+    record = json.loads(run.stdout)
+    assert record["mode"] == "empty"
+    assert record["paths"] == []
+
+
+def test_consumer_collects_with_callers_prepopulated_registry_and_import_paths(tmp_path: Path) -> None:
+    git(tmp_path, "init")
+    tests, plugins = tmp_path / "tests", tmp_path / "plugins"
+    tests.mkdir()
+    plugins.mkdir()
+    (tests / "__init__.py").touch()
+    (plugins / "uses_registry.py").write_text("from django.apps import apps\nassert apps.ready\n")
+    (tmp_path / "review_settings.py").write_text("SECRET_KEY = 'test'\nINSTALLED_APPS = []\n")
+    module = tests / "test_contract.py"
+    module.write_text("def test_contract(): pass\n")
+    (tests / "test_other.py").write_text("def test_other(): pass\n")
+    base = commit(tmp_path)
+    module.write_text("def test_contract(): assert True\n")
+    head = commit(tmp_path)
+    launcher = """
+import os
+import sys
+from pathlib import Path
+
+import django
+
+script_dir, base, head = sys.argv[1:]
+sys.path[:0] = [script_dir, str(Path.cwd() / "plugins")]
+os.environ["DJANGO_SETTINGS_MODULE"] = "review_settings"
+django.setup()
+
+from changed_path_selection import run_selected
+
+raise SystemExit(run_selected(
+    ["-p", "django", "-p", "uses_registry", "-p", "no:randomly", "-q"],
+    root=Path.cwd(), base=base, head=head, apps=("django.contrib.contenttypes",),
+))
+"""
+    command = [sys.executable, "-c", launcher, str(SCRIPT.parent)]
+    for diff, mode, count in (([base, head], "selected", 1), (["", ""], "full", 2)):
+        run = subprocess.run([*command, *diff], cwd=tmp_path, capture_output=True, text=True, check=False)
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert json.loads(run.stdout.splitlines()[0])["mode"] == mode, run.stdout
+        assert f"{count} passed" in run.stdout

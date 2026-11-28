@@ -1,15 +1,30 @@
 import { containerChildren, expectValidBaseAddon } from "@angee/app/testing";
+import { statusTone } from "@angee/ui";
 import type { ChatterTabContent, ChatterViewContext } from "@angee/ui/runtime";
 import { isValidElement } from "react";
 import { describe, expect, test } from "vitest";
 
-import messaging from "./index";
+import messaging, { MESSAGE_STATUS_TONES, NewMessageAction } from "./index";
 import { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
 import { RecordConversationPane, type RecordConversationPaneProps } from "./RecordConversationPane";
 
 describe("messaging addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
+  });
+
+  test("colours a message's delivery status in its own app, scoped to the field, and exports New message", () => {
+    // Field-scoped: the generic words claim no global status tone another addon could need.
+    expect(messaging.statusTones).not.toHaveProperty("queued");
+    expect(messaging.vocabulary).toEqual([{ app: "messaging", resources: { "messaging.Message": { fields: { status: { tones: MESSAGE_STATUS_TONES } } } } }]);
+    // What tells the states apart: Queued and Sent are not alarms, Uncertain is not Failed.
+    expect(MESSAGE_STATUS_TONES).toEqual({ DRAFT: "neutral", QUEUED: "info", SENT: "success", UNCERTAIN: "warning" });
+    // A scheduled draft does not read as Uncertain does.
+    expect(statusTone("DRAFT", { ...MESSAGE_STATUS_TONES })).not.toBe(statusTone("UNCERTAIN", { ...MESSAGE_STATUS_TONES }));
+    expect(statusTone("FAILED", { ...MESSAGE_STATUS_TONES })).toBe("danger");
+    expect(statusTone("UNCERTAIN", { ...MESSAGE_STATUS_TONES })).toBe("warning");
+    expect(messaging.icons).toHaveProperty("reply");
+    expect(typeof NewMessageAction).toBe("function");
   });
 
   test("passes the shell selection to Discussion and keys its filters by target", () => {

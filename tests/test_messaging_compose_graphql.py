@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 from smtplib import SMTPRecipientsRefused
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
@@ -25,12 +24,12 @@ from rebac import evaluator_scope, system_context
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.messaging.constants import DELIVER_MESSAGE_TASK
+from angee.messaging.constants import DELIVER_MESSAGE_TASK, TRANSPORT_MAILER_ALIAS
 from angee.messaging.delivery import run_message_delivery
 from angee.messaging.testing.models import Channel, Message, Part, Recipient, Thread
 from tests.conftest import make_integration
 from tests.messaging_campaign import grant, make_user
-from tests.test_messaging_compose import DESK, _file, _receive, _rows
+from tests.test_messaging_compose import DESK, MAILERS, NO_TRANSPORT, _file, _receive, _rows
 from tests.test_messaging_compose import desk as desk
 from tests.test_messaging_graphql import _schema
 
@@ -189,7 +188,7 @@ def _argument_names(console: Any) -> set[str]:
 
 def test_a_refusal_with_a_code_reaches_the_client_with_it(console: Any, desk: Any, settings: Any) -> None:
     request = _receive(desk, "unconfigured")
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = False
+    settings.MAILERS = NO_TRANSPORT
     with pytest.raises(_Refusal) as refused:
         _compose(console, desk.owner, parent=request.public_id, text="Which team?", idempotency_key="unconfigured")
     payload = refused.value.payload
@@ -335,7 +334,7 @@ def test_every_status_a_replay_can_return_is_reported(console: Any, desk: Any) -
 def mailer(desk: Any, settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """The deliveries composing enqueues on commit, which Django's in-memory mailer sends when run."""
 
-    settings.MAILERS = {"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}}
+    settings.MAILERS = MAILERS
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(celery_app, "send_task", lambda name, *, kwargs, **options: enqueued.append(kwargs))
     return enqueued
@@ -371,7 +370,7 @@ def test_a_refused_delivery_reads_back_why_and_how_often(
 
     transport = Mock()
     transport.send_messages.side_effect = SMTPRecipientsRefused({"client@example.test": (code, b"Refused.")})
-    monkeypatch.setattr("angee.messaging.email.mailers", SimpleNamespace(default=transport))
+    monkeypatch.setattr("angee.messaging.email.mailers", {TRANSPORT_MAILER_ALIAS: transport})
     with django_capture_on_commit_callbacks(execute=True):
         composed = _compose(console, desk.owner, **_new(desk, idempotency_key=f"refused-{code}"))
     (delivery,) = mailer

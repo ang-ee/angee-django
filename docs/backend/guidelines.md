@@ -161,7 +161,12 @@ Use these owners instead of maintaining another contract in an addon:
   reconcile/load flows, and writes that begin from a model class. QuerySets own
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
-  promote it to a model or manager method.
+  promote it to a model or manager method. A read predicate's second home is a
+  model classmethod returning a `Q` that its callers compose, for a predicate
+  several managers or a relation path must share (the base manager, an unaudited
+  read, a join from another model); for example
+  [`Handle.spellings_filter`](../../src/angee/parties/models.py),
+  `Handle.identifies_account_filter(prefix)` and `Organization.domain_filter`.
 - **Database routing:** Angee runs on one database, Django's `default`. It
   selects no database per operation, and the base system check `angee.E050`
   requires only the `default` alias in `DATABASES` and refuses any
@@ -231,8 +236,11 @@ Use these owners instead of maintaining another contract in an addon:
 - **Batch per reader, answer per row.** A relation the owner computes (targets
   read per referenced type, a reader's facts for a run list) is an
   [`InstancePrefetch`](../../src/angee/base/prefetch.py) hinted through a native
-  `Prefetch(..., to_attr=...)`; a row's per-reader answers live in a
-  `ReaderMemo`, never remembered without an actor or under sudo; its owner answers
+  `Prefetch(..., to_attr=...)`; a reader's facts computed by a model's batch
+  classmethod hint a `ReaderBatch` naming it. A row's per-reader answers live in a
+  `ReaderMemo`, never remembered without an actor or under sudo: the batch
+  classmethod remembers into a `ReaderMemo`; an explicit primer such as
+  `needaction_for_messages` fills it directly. Its owner answers
   every miss from the rule, so sudo computes and never reads as empty. A resolver reads
   the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
   hint only for a row loaded another way, so it reads its own value through the
@@ -671,9 +679,13 @@ Use these owners instead of maintaining another contract in an addon:
   [tags](../../src/angee/tags/schema.py) do; they do not infer them from type fields.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
-- **Derived columns have two drift classes and two owners.** Signals own instance
-  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
-  `bulk_create` and queryset `update` paths, where signals do not run.
+- **Derived columns have two drift classes and two owners.** A column derived
+  from the row's own columns (a key) is written by the model's `save`, beside the
+  columns it derives from, whenever a save names them; a column derived from other
+  rows (a count, a denormalized reference) is kept by signals on instance
+  saves/deletes, cascades, and queryset deletes. Idempotent repair passes own the
+  `bulk_create` and queryset `update` paths, where neither runs
+  ([`repair_keys`](../../src/angee/parties/managers.py) for parties' keys).
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with
@@ -729,8 +741,13 @@ data through REBAC, never a queryset bypass.
   An owner seals the permissions it derives this way through the base
   [sealed-permission check](../../src/angee/base/checks.py)
   (`check_sealed_permissions`), which refuses a fragment that changes one:
-  messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
-  (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
+  messaging's [`check_messaging_seals`](../../src/angee/messaging/checks.py)
+  (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and,
+  in its `SEALED` map, the permissions kept closed to fragments because each
+  applies the system channel's seal or `& read`, which an appended arm would
+  escape. The thread's `write` is the known open one, and a thread's
+  `read_granted` is not sealed on system threads: widening it reaches system mail
+  too ([messaging's README](../../src/angee/messaging/README.md#system-mail)).
   Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
   (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
   can restore file inheritance.
@@ -1026,7 +1043,8 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. Its
+  deliberate exceptions, each with its guard: merge and system mail (below).
 - **Structural reads use Django's `_base_manager`, including in consumers.**
   It is the model's unscoped read manager (`Meta.base_manager_name`), with no
   REBAC scope and no audit row. Use it for membership predicates, existence
@@ -1075,6 +1093,18 @@ data through REBAC, never a queryset bypass.
     hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
+- **System mail is named system work.** Also a deliberate exception: the
+  calling verb checks its own permission first; only then does it call
+  [`MessageManager.compose_as_system`](../../src/angee/messaging/managers.py),
+  which consults no send right and records the causing actor in the changeset
+  ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
+  Its direct callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
+  Mail sent through Django's mail API is system mail. A consumer that sends its
+  organisation's own mail may instead send it straight through the `transport`
+  mailer by name (`MAILERS["transport"]`, messaging's `TRANSPORT_MAILER_ALIAS`):
+  that mail is outside messaging, which neither records, delivers nor retries it.
+  This is a deliberate exception, and it ends when named system work can compose
+  on an ordinary channel.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

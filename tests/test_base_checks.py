@@ -8,6 +8,7 @@ import pytest
 from django.apps import apps
 from django.core import checks
 from django.core.checks.registry import registry
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import isolate_apps
@@ -32,6 +33,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
@@ -72,18 +74,6 @@ def test_trash_default_manager_check(guarded: bool) -> None:
         assert len(trash_errors) == (0 if guarded else 1)
         if trash_errors:
             assert trash_errors[0].obj is Removable
-
-
-def test_installed_trash_models_compose_the_trash_scopes() -> None:
-    models_ = [model for model in apps.get_models() if issubclass(model, TrashMixin)]
-    assert models_
-    assert all(not [error for error in model.check() if error.id == "angee.E036"] for model in models_)
-
-
-def test_installed_append_only_default_managers_compose_guard() -> None:
-    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
-    assert models
-    assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
 
 
 def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
@@ -220,21 +210,38 @@ def test_native_rebac_database_check_and_base_checks_are_registered() -> None:
     assert sum(check is check_database_routers for check in registry.registered_checks) == 1
 
 
-@pytest.mark.parametrize(
-    "origin,debug,valid",
-    [
-        ("", False, True),
-        ("https://app.example.test", False, True),
-        ("https://app.example.test:8443/", False, True),
-        ("http://localhost:5173", True, True),
-        ("http://app.example.test", False, False),
-        ("https://*.example.test", False, False),
-        ("https://user:secret@app.example.test", False, False),
-        ("https://app.example.test/path", False, False),
-        ("https://app.example.test:notaport", False, False),
-        ("https://exa mple.test", False, False),
-    ],
-)
+ORIGINS = [
+    ("", False, True),
+    ("https://app.example.test", False, True),
+    ("https://app.example.test:8443/", False, True),
+    ("http://localhost:5173", True, True),
+    ("http://app.example.test", False, False),
+    ("https://*.example.test", False, False),
+    ("https://user:secret@app.example.test", False, False),
+    ("https://app.example.test/path", False, False),
+    ("https://app.example.test:notaport", False, False),
+    ("https://exa mple.test", False, False),
+]
+
+
+@pytest.mark.parametrize(("origin", "debug", "valid"), ORIGINS)
+def test_the_configured_public_origin_is_the_one_the_check_accepts_and_none_is_a_coded_refusal(
+    origin: str, debug: bool, valid: bool,
+) -> None:
+    """The accessor asks the owner's rule of the setting: a valid origin comes back bare; an unset or invalid one is
+    refused with the owner's code, as an ``ImproperlyConfigured`` too."""
+
+    with override_settings(ANGEE_PUBLIC_ORIGIN=origin, DEBUG=debug):
+        if origin and valid:
+            assert configured_public_origin() == origin.rstrip("/")
+            return
+        with pytest.raises(PublicOriginUnavailable) as refusal:
+            configured_public_origin()
+    assert (refusal.value.code, str(refusal.value)) == ("PUBLIC_ORIGIN_UNAVAILABLE", "PUBLIC_ORIGIN_UNAVAILABLE")
+    assert isinstance(refusal.value, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(("origin", "debug", "valid"), ORIGINS)
 def test_an_invalid_public_origin_fails_the_system_check(origin: str, debug: bool, valid: bool) -> None:
     """Only a bare public origin is trusted for CSRF and links; any other set value is reported."""
 
@@ -430,17 +437,6 @@ def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, r
         assert errors == []
 
 
-@pytest.mark.django_db
-def test_installed_models_spell_ownership_one_way() -> None:
-    """No installed definition names a relation owner other than OwnerMixin's column.
-
-    Test modules register their own models in the shared registry, so this
-    asserts the spelling rule alone; E022 and E027 have their focused tests.
-    """
-
-    assert [error.msg for error in check_ownership() if error.id == "angee.E045"] == []
-
-
 def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
     """A seal without its owner or on an undeclared permission is reported, never raised."""
 
@@ -526,4 +522,3 @@ def test_a_stored_implementation_key_nothing_registers_is_named_with_its_rows_an
     assert check_stored_impl_keys(databases=["default"]) == [], "every installed model's keys are registered"
     assert check_stored_impl_keys in registry.get_checks()
     assert check_stored_impl_keys.tags == (checks.Tags.database,)
-
