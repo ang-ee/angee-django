@@ -1,0 +1,117 @@
+name: Prepare locked stack checks
+description: Render a disposable stack and install pinned caller and framework check environments.
+inputs:
+  slot:
+    description: Source slot that owns the primary runtime lock.
+    required: true
+  extra:
+    description: Native project extra used by both planning and execution.
+    default: ""
+  profile:
+    description: Rendered stack profile.
+    required: true
+  bridges-ref:
+    description: Exact optional bridge source ref.
+    required: true
+  sources:
+    description: Declared consumer source slots.
+    required: true
+  roots:
+    description: Authored roots for this invocation. An empty list preserves the rendered profile.
+    default: "[]"
+  add-roots:
+    description: Reached roots added to an authored full profile.
+    default: "[]"
+  sources-token:
+    description: Token for consumer source access.
+    required: true
+  bridges-token:
+    description: Token for bridge source access.
+    required: true
+  angee-version:
+    description: Released operator version that renders the stack.
+    required: true
+  python-version:
+    description: Optional override of the framework checkout's managed Python.
+    default: ""
+outputs:
+  donor:
+    description: Complete native framework export consumed by the consumer selection proof.
+    value: ${{ steps.install.outputs.donor }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v5
+      if: ${{ inputs.profile == 'full' }}
+      with:
+        repository: ang-ee/angee-messaging-bridges
+        ref: ${{ github.repository == 'ang-ee/angee-messaging-bridges' && github.sha || inputs.bridges-ref }}
+        path: stack/workspaces/src/angee-messaging-bridges
+        token: ${{ inputs.bridges-token }}
+    - name: Check out declared consumer sources
+      if: ${{ inputs.sources != '[]' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.sources-token }}
+        CONSUMER_SOURCES: ${{ inputs.sources }}
+        CALLER_REPOSITORY: ${{ github.repository }}
+        CALLER_SHA: ${{ github.sha }}
+      run: |
+        python3 - <<'PY'
+        import json
+        import os
+        import subprocess
+        from pathlib import Path
+
+        subprocess.run(["gh", "auth", "setup-git"], check=True)
+        for source in json.loads(os.environ["CONSUMER_SOURCES"]):
+            slot = source["path"]
+            assert Path(slot).name == slot and slot not in {".", "..", "angee"}, slot
+            destination = Path("stack/workspaces/src") / slot
+            ref = os.environ["CALLER_SHA"] if source["repository"] == os.environ["CALLER_REPOSITORY"] else source["ref"]
+            subprocess.run([
+                "gh", "repo", "clone", source["repository"], str(destination), "--", "--depth=1", "--no-checkout",
+            ], check=True)
+            subprocess.run(["git", "-C", str(destination), "fetch", "--depth=1", "origin", ref], check=True)
+            subprocess.run(["git", "-C", str(destination), "checkout", "--detach", "FETCH_HEAD"], check=True)
+        PY
+    - name: Install the stack renderer
+      shell: bash
+      env:
+        ANGEE_VERSION: ${{ inputs.angee-version }}
+        ANGEE_INSTALL_DIR: ${{ runner.temp }}/bin
+      run: |
+        mkdir -p "$ANGEE_INSTALL_DIR"
+        curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
+        echo "$ANGEE_INSTALL_DIR" >> "$GITHUB_PATH"
+    - name: Use the pinned managed Python
+      shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
+      run: echo "UV_PYTHON=${PYTHON_VERSION:-$(cat stack/workspaces/src/angee/.python-version)}" >> "$GITHUB_ENV"
+    - uses: astral-sh/setup-uv@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Render the stack
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+      run: >-
+        angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee/templates/stacks/dev"
+        "$GITHUB_WORKSPACE/stack" --force --yes
+        --input project_name=ci-stack --input "addons_profile=$PROFILE"
+    - name: Install the locked runtime and check tools
+      id: install
+      shell: bash
+      working-directory: stack
+      env:
+        SLOT: ${{ inputs.slot }}
+        EXTRA: ${{ inputs.extra }}
+        PROFILE: ${{ inputs.profile }}
+        ROOTS: ${{ inputs.roots }}
+        ADD_ROOTS: ${{ inputs.add-roots }}
+        SOURCES: ${{ inputs.sources }}
+      run: |
+        args=( "$SLOT" --profile "$PROFILE" --roots "$ROOTS" --add-roots "$ADD_ROOTS" --sources "$SOURCES" )
+        if [ -n "$EXTRA" ]; then args+=( --extra "$EXTRA" ); fi
+        python3 "$GITHUB_ACTION_PATH/prepare.py" "${args[@]}"

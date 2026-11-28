@@ -48,6 +48,10 @@ SYSTEM_SEND_CALLERS: frozenset[Path] = frozenset({
     # Mails a question only to the people it is put to, each judged by decisions' own rule before the send:
     # ``act`` and ``read`` on the question (``Decision.objects.deciders``/``put_to``, ``administrators``).
     Path("src/angee/decisions_messaging/models.py"),
+    # The sign-in link's mail: sent only after `User.lock_for_account_action` decided the account's
+    # `auth/user#issue_sign_in_link` (platform administrators) on the locked row; its row, address and
+    # values are the server's.
+    Path("src/angee/iam_messaging/models.py"),
 })
 """The source modules that call ``send_as_system``, each added here in a reviewed change.
 

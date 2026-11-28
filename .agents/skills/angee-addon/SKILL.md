@@ -134,15 +134,18 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
 
 5. **Declare the test suite.** Keep the rendered composed test and native
-   `pytest.ini` in the addon. For a new framework addon, run the
-   [isolated addon host](../../../docs/checks.md#isolated-addon-test-hosts).
-   A consumer addon runs through its collection's existing host.
+   `pytest.ini` in a new framework or consumer addon. Run its
+   [isolated addon host](../../../docs/checks.md#isolated-addon-test-hosts)
+   using the addon's native installed requirements. Keep the suite separate
+   from the project's existing shared test host.
    When maintaining a legacy bare-host suite, reuse its existing
    [test compositions](../../../docs/checks.md#source-addon-test-models).
 
 6. **Register the web fragment** (only when the addon renders). `templates/addons/web` rendered with `addon_id=<label>`
    and `include_web=true` emits it under `web/`; then adapt. `web/package.json`: name `@angee/<label>` (framework) or `@<ns>/<label>-web` (notes:
    `@angee-example/notes-web`), private, `exports: { ".": "./src/index.tsx" }`, `@angee/app` and `@angee/ui` as `workspace:*`.
+   Refresh the [rendered CI workspace lock](../../../docs/checks.md#refresh-the-rendered-ci-workspace-lock)
+   for an added web workspace package.
 
    ```tsx
    // web/src/index.tsx — one greppable seam per addon (examples/src/example/notes/web/src/index.tsx)

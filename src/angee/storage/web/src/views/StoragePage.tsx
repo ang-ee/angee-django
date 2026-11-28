@@ -14,7 +14,6 @@ import { useFileActions } from "../data/use-file-actions";
 import { useStorageT } from "../i18n";
 import { useStorageUpload } from "../data/use-upload";
 import { FilePreviewFrame } from "./FilePreviewFrame";
-import { filePreviewPageFromSearch } from "./FilePreview";
 import { StorageExplorer, type StorageExplorerController } from "./StorageExplorer";
 import { StorageListContent } from "./StorageListContent";
 
@@ -57,9 +56,6 @@ export function StoragePage(): ReactElement {
     [filesHref, navigate, fileResource],
   );
   const openFileId = useRouteRecordId() ?? null;
-  const openFilePreviewPage = openFileId
-    ? filePreviewPageFromSearch(search, openFileId)
-    : null;
   const searchStr = useRouterState({ select: (state) => state.location.searchStr });
   useBreadcrumbCollectionLink(
     filesHref,
@@ -105,8 +101,8 @@ export function StoragePage(): ReactElement {
       groupStack: (controller.selectedId ?? ALL_SCOPE) === ALL_SCOPE ? [ALL_FILES_DEFAULT_GROUP] : [],
     }}>
       <StoragePageContent controller={controller} fileResource={fileResource} navigationScope={navigationScope}
-        openFile={openFile} openFileId={openFileId} openFilePreviewPage={openFilePreviewPage}
-        uploads={uploads} fileActions={fileActions} closeDetail={closeDetail} onOpenFile={openFileRoute} />
+        openFile={openFile} openFileId={openFileId}
+        uploads={uploads} closeDetail={closeDetail} onOpenFile={openFileRoute} />
     </ResourceViewProvider>}
   </StorageExplorer>;
 }
@@ -115,22 +111,18 @@ function StoragePageContent({
   controller,
   openFile,
   openFileId,
-  openFilePreviewPage,
   fileResource,
   navigationScope,
   uploads,
-  fileActions,
   closeDetail,
   onOpenFile,
 }: {
   controller: StorageExplorerController;
   openFile: { folder?: string | null } | null;
   openFileId: string | null;
-  openFilePreviewPage: number | null;
   fileResource: DataResourceMetadata | undefined;
   navigationScope: ListViewNavigationScope | null;
   uploads: ReturnType<typeof useStorageUpload>;
-  fileActions: ReturnType<typeof useFileActions>;
   closeDetail: () => void;
   onOpenFile: (id: string, scope?: ListViewNavigationScope) => void;
 }): ReactElement {
@@ -156,8 +148,8 @@ function StoragePageContent({
     }
     return [t("file.eyebrow"), [drive, ...path].filter(Boolean).join(" / ")].filter(Boolean).join(" · ");
   }, [controller.rootId, controller.rootOptions, controller.treeRows, openFile?.folder, t]);
-  return openFileId ? <FilePreviewFrame id={openFileId} page={openFilePreviewPage} crumbs={crumbs}
-    fileActions={fileActions} closeDetail={closeDetail} fileNavigation={fileNavigation} /> :
+  return openFileId ? <FilePreviewFrame id={openFileId} crumbs={crumbs}
+    closeDetail={closeDetail} fileNavigation={fileNavigation} /> :
     <StorageListContent controller={controller} fileResource={fileResource} navigationScope={navigationScope}
       uploads={uploads} onListStateChange={onListStateChange} />;
 }

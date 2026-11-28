@@ -87,13 +87,23 @@ why only a contact administrator may merge two addresses; system mail
 (`compose_as_system`, so `send_mail`) records the address on the kept
 handle's row and goes exactly there, so a merge never redirects an account's
 or a workflow's mail. A person's compose in another spelling of the kept
-handle's own address is mailed as typed. An address the
-transport cannot carry as typed (`carries_address`) records nothing and is
-mailed at the handle's value. The reader (`Recipient.envelope_address`) asks
+handle's own address is mailed as typed. An address no transport here can
+carry (`require_carried`: one whose part before the `@` is outside ASCII, as no
+transport here speaks SMTPUTF8, or whose domain is no host name in its IDNA
+form, such as one with a non-ASCII space right after the `@`, or longer than
+`Handle.DOMAIN_NAME_LIMIT`) is refused `cannot_carry` before anything is
+written, for a person's recipient as for a system mail's and a sender; a space
+at an entry's end is stripped by the recipient rule first. Only an address no
+compose was handed fails at delivery with that reason: a recipient a reply
+inherits from its parent, the kept handle a person's address was merged into,
+and a row written before the rule. A spelling of an address the transport
+carries is always carried, as the spelling key keeps any character whose lower
+case would be ASCII. The reader (`Recipient.envelope_address`) asks
 the message's channel what a recorded address the handle's merges no longer
 name means (the merge it was written under reverted, a row written past that
-check): on the system channel (`Channel.system_only`) the whole message is
-refused, settled failed with the reason "A recipient of this message no longer
+check): on the system channel (`Channel.system_only`), and for a message
+whose channel is gone, which the reader cannot tell from system mail, the whole
+message is refused, settled failed with the reason "A recipient of this message no longer
 names the address it was written for.", so system mail is exact or not sent and
 never reaches the kept handle's mailbox, and a new mail lands on the address's
 own handle; a person's row, which records only spellings of its own handle and
@@ -105,9 +115,12 @@ the message is read as above each time. A name inbound mail stored with a litera
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
-one whose local part is outside ASCII is admitted but cannot be delivered, as
-no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
-naming the address. A message takes at most
+one whose local part is outside ASCII, which inbound mail stores as it came,
+cannot be delivered, as no transport here speaks SMTPUTF8: a compose handed one
+is refused (above), and the delivery of one no compose was handed fails with
+that reason stored, naming the address. One whose handle holds a domain the
+transport cannot write fails the same way with the domain's reason, never with
+the codec's error. A message takes at most
 [`MessageManager.recipient_limit()`](managers.py) addresses across `to`, `cc`
 and `bcc` (`ANGEE_MESSAGING_MAX_RECIPIENTS`, 50) and
 `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both settings
@@ -439,11 +452,12 @@ sender the sender rule accepts, for messaging's own), and `compose_as_system`
 refuses exactly when it is false. `SystemChannelBackend.system_mail_configured()`
 is that backend's own contract, which callers do not name. The sender rule is
 `MessageManager.clean_recipient`, the one check every address messaging lands
-takes, plus `carries_address`: a sender whose part before the `@` is outside
-ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
-`Message.objects.clean_system_recipient(entry, key=...)`, which
-`compose_as_system` applies to each recipient and a caller asks before offering
-a send; both read nothing. A system mail is mailed exactly at the address its
+takes, plus `require_carried`: a sender whose part before the `@` is outside
+ASCII is refused, as no transport here speaks SMTPUTF8, and so is one whose
+domain is no host name in its IDNA form. A recipient's rule is
+`Message.objects.clean_system_recipient(entry, key=...)`, the same two, which
+every compose applies to each recipient it is handed and a caller asks before
+offering a send; both read nothing. A system mail is mailed exactly at the address its
 caller gave, after that rule, which its recipient row records, on whichever
 handle holds any spelling of it; it goes out from `DEFAULT_FROM_EMAIL` as
 configured, whatever spelling the sender's handle was first stored in.

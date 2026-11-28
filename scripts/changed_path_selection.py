@@ -4,27 +4,39 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 import tomllib
 from collections.abc import Sequence
 from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass
+from importlib import metadata
+from importlib.util import find_spec
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Literal
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pytest
+from packaging.markers import Marker
 
-ROOT = Path(__file__).resolve().parents[1]
 GROUP = "angee.addons"
+EMPTY_SHARED = "no shared pytest targets after standalone exclusion"
 GRAPH_INPUTS = {
-    "apps.py", "pyproject.toml", "uv.lock", "pytest.ini", "setup.cfg", "tox.ini",
-    ".python-version", "settings.py", "settings.yaml", "autoconfig.py",
+    "pyproject.toml", "uv.lock", "pytest.ini", "setup.cfg", "tox.ini",
+    ".python-version", "settings.py", "settings.yaml",
     ".test_durations", ".test_durations_postgres",
 }
+APP_INPUTS = {"apps.py", "autoconfig.py", "permissions.zed", "permissions.extends.zed"}
+WORKSPACE_INPUTS = {Path("pyproject.toml"), Path("uv.lock")}
+JS_INPUTS = {Path("package.json"), Path("pnpm-workspace.yaml"), Path("pnpm-lock.yaml")}
+STACK_LOCK = Path(".github/ci/pnpm-lock.yaml")
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 TEMPLATE_READER = re.compile(r"""/\s*["']templates[/"']""")
 APP_LOOKUP = re.compile(r"""\b(?:get_model|get_app_config)\(\s*["'](\w+)(?:\.\w+)?["']""")
@@ -51,6 +63,15 @@ class AppGraph:
     labels: dict[str, str]
 
 
+def git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, check=False)
+
+
+def absent_at(root: Path, base: str, path: Path) -> bool:
+    entry = git(root, "ls-tree", base, "--", path.as_posix())
+    return not entry.returncode and not entry.stdout
+
+
 def changed_paths(root: Path, base: str | None, head: str | None) -> tuple[list[Path], str]:
     """Compare the caller's precise base and checked head, treating removals as unknown ownership."""
     if not base or not head:
@@ -58,23 +79,22 @@ def changed_paths(root: Path, base: str | None, head: str | None) -> tuple[list[
     if not COMMIT.fullmatch(base) or not COMMIT.fullmatch(head):
         return [], "expected exact base and head commit IDs"
 
-    def git(*args: str) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.run(["git", *args], cwd=root, capture_output=True, check=False)
-
-    checked = git("rev-parse", "HEAD")
+    checked = git(root, "rev-parse", "HEAD")
     if checked.returncode or checked.stdout.strip().decode() != head:
         return [], "requested head differs from the checkout"
-    diff = git("diff", "--name-status", "-z", "--no-renames", base, head, "--")
+    diff = git(root, "diff", "--name-status", "-z", "--no-renames", base, head, "--")
     if diff.returncode:
         return [], "base or diff unavailable"
     fields = diff.stdout.rstrip(b"\0").split(b"\0") if diff.stdout else []
     paths = []
+    fallback = ""
     for status, name in zip(fields[::2], fields[1::2], strict=True):
         path = Path(os.fsdecode(name))
         if status not in {b"A", b"M"} or not (root / path).is_file():
-            return [], f"removed or replaced input: {path}"
-        paths.append(path)
-    return sorted(paths), ""
+            fallback = fallback or f"removed or replaced input: {path}"
+        else:
+            paths.append(path)
+    return sorted(paths), fallback
 
 
 def python_input(path: Path) -> bool:
@@ -98,7 +118,21 @@ def shared_input_reason(changed: Sequence[Path]) -> str:
 def addon_graph(root: Path, apps: Sequence[str]) -> AppGraph:
     from django_compose.components import inspect_apps, installed_components
 
-    roots = apps or sorted(installed_components(GROUP).providers)
+    index = installed_components(GROUP)
+    roots = list(apps)
+    for name in sorted(index.providers.keys() - set(apps)):
+        try:
+            spec = find_spec(name)
+        except ModuleNotFoundError:
+            spec = None
+        if spec is not None:
+            roots.append(name)
+        elif origin := index.distributions[index.providers[name]].origin:
+            source = urlsplit(origin.url)
+            if source.scheme == "file" and Path(url2pathname(source.path)).resolve().is_relative_to(root):
+                # An unimportable local provider is a configuration defect,
+                # even if it isn't part of the current shared test host.
+                roots.append(name)
     result = inspect_apps(roots, group=GROUP)
     owners = {}
     for entry in result["app_entries"]:
@@ -139,6 +173,128 @@ def reverse_addons(changed: set[str], dependencies: dict[str, list[str]]) -> set
 def isolated_suites(root: Path, owners: dict[Path, str]) -> dict[Path, str]:
     """An addon-local pytest.ini declares and configures a standalone composed suite."""
     return {directory: addon for directory, addon in owners.items() if (root / directory / "pytest.ini").is_file()}
+
+
+def uv_export(root: Path, extra: Sequence[str], *, prune: Sequence[str] = ()) -> dict:
+    """Read uv's standard resolved install records without installing another environment."""
+
+    result = subprocess.run(
+        ["uv", "export", "--frozen", "--offline", "--format", "pylock.toml",
+         *(arg for name in extra for arg in ("--extra", name)),
+         *(arg for name in prune for arg in ("--prune", name))],
+        cwd=root, capture_output=True, check=True, timeout=30,
+    )
+    return tomllib.loads(result.stdout.decode())
+
+
+def global_entry_points(distribution: metadata.Distribution) -> bool:
+    """Check plugin autoload and collisions with installed executable entry points."""
+
+    if distribution.entry_points.select(group="pytest11"):
+        return True
+    scripts = {entry.name for entry in distribution.entry_points.select(group="console_scripts")}
+    return bool(scripts) and any(
+        entry.name in scripts and entry.dist.name != distribution.name
+        for entry in metadata.entry_points(group="console_scripts")
+    )
+
+
+def global_install_effect(records: Sequence[dict], donor: Path | None, root: Path) -> bool:
+    """Detect changed effective donor records and installation-wide Python hooks."""
+
+    def active(record: dict) -> bool:
+        return "marker" not in record or Marker(record["marker"]).evaluate(context="lock_file")
+
+    donor_records = {
+        record["name"]: record for record in tomllib.loads(donor.read_text())["packages"] if active(record)
+    } if donor else {}
+    for record in records:
+        if not active(record):
+            continue
+        name = record["name"]
+        if name in donor_records:
+            prior = donor_records[name]
+            if "directory" in record and "directory" in prior:
+                actual = root / record["directory"]["path"]
+                previous = donor.parent / prior["directory"]["path"]
+                prior = {**prior, "directory": {**prior["directory"], "path": record["directory"]["path"]}}
+                if actual.resolve() != previous.resolve():
+                    return True
+            if record != prior:
+                return True
+            continue
+        distribution = metadata.distribution(name)
+        if global_entry_points(distribution) or distribution.files is None:
+            return True
+        if any(
+            len(path.parts) == 1 and (path.suffix == ".pth" or path.stem in {"sitecustomize", "usercustomize"})
+            for path in distribution.files
+        ):
+            return True
+    return False
+
+
+def additive_addons(
+    root: Path, base: str | None, changes: Sequence[Path], graph: AppGraph, isolated: dict[Path, str],
+    *, apps: Sequence[str], extra: Sequence[str], donor: Path | None,
+) -> dict[Path, str]:
+    """Prove that new standalone addon roots account for the entire native install delta."""
+
+    if not base or Path("pyproject.toml") not in changes:
+        return {}
+    additions = {
+        path: name for path, name in isolated.items()
+        if path / "pyproject.toml" in changes and absent_at(root, base, path)
+        and conventional_test_dir(root, path) is not None
+    }
+    new_apps = set(additions.values())
+    if not additions or new_apps.intersection(apps) or reverse_addons(new_apps, graph.dependencies) != new_apps:
+        return {}
+    if any(
+        path not in WORKSPACE_INPUTS | {Path("pnpm-lock.yaml"), STACK_LOCK} and path.suffix != ".md"
+        and addon_at(path, additions) is None
+        for path in changes
+    ) or git(root, "diff", "--quiet", "HEAD", "--").returncode:
+        return {}
+
+    from django_compose.components import installed_components
+
+    try:
+        index = installed_components(GROUP)
+        distributions = {index.providers[name]: path for path, name in additions.items()}
+        previous = tomllib.loads(git(root, "show", f"{base}:pyproject.toml").stdout.decode())
+        current = tomllib.loads((root / "pyproject.toml").read_text())
+        uv = current["tool"]["uv"]
+        for name, path in distributions.items():
+            distribution = index.distributions[name]
+            if global_entry_points(distribution):
+                return {}
+            current["project"]["dependencies"].remove(f"{name}=={distribution.version}")
+            if uv["sources"].pop(name) != {"workspace": True}:
+                return {}
+            if path.as_posix() in uv["workspace"]["members"]:
+                uv["workspace"]["members"].remove(path.as_posix())
+        if current != previous:
+            return {}
+        archive = git(root, "archive", base)
+        archive.check_returncode()
+        with TemporaryDirectory(prefix="angee-selection-") as directory:
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tree:
+                tree.extractall(directory, filter="data")
+            before = uv_export(Path(directory), extra)
+        if uv_export(root, extra, prune=tuple(sorted(distributions))) != before:
+            return {}
+        after = uv_export(root, extra)
+        records = after.pop("packages")
+        for record in before.pop("packages"):
+            records.remove(record)
+        for name, path in distributions.items():
+            records.remove({"name": name, "directory": {"path": path.as_posix(), "editable": True}})
+        if after == before and not global_install_effect(records, donor, root):
+            return additions
+    except (ImportError, KeyError, ValueError, OSError, subprocess.SubprocessError, tarfile.TarError):
+        pass
+    return {}
 
 
 def conventional_test_dir(root: Path, directory: Path) -> Path | None:
@@ -212,6 +368,7 @@ def import_reach(
     root_conftest = root / "conftest.py"
     if python_inputs and root_conftest.is_file() and reach.intersection(conftest_imports(root_conftest, reference)):
         selected.update(tests)
+        reach.add("conftest")
         return selected, reach
     for path in tests:
         module = module_name(path, owners)
@@ -247,6 +404,8 @@ def import_reach(
 def select(
     root: Path, changed: Sequence[Path], tests: Sequence[Path], apps: AppGraph, *, fallback: str = "",
     isolated: dict[Path, str] | None = None, legacy: bool = False, shared_tests: Sequence[Path] = (),
+    added_apps: Sequence[str] = (), shared_apps: frozenset[str] | None = None,
+    preflight: bool = False,
 ) -> tuple[Selection, Selection]:
     """Select shared-host pytest paths and standalone addon names using the same changed inputs."""
     isolated = isolated or {}
@@ -255,7 +414,7 @@ def select(
     fallback = fallback or shared_input_reason(changes)
     if fallback:
         return Selection("full", fallback), Selection("full", fallback, full_hosts)
-    if not changes:
+    if not changes and not added_apps:
         # Consumer contract suites can read frontend declarations directly.
         paths = [path.as_posix() for path in shared_tests] if not legacy and any(
             path.suffix != ".md" for path in changed
@@ -264,7 +423,7 @@ def select(
 
     test_dirs = {directory: conventional_test_dir(root, directory) for directory in isolated}
     owner_tests: set[str] = set()
-    source_apps: set[str] = set()
+    source_apps = set(added_apps)
     broad_shared = ""
     broad_hosts = "custom isolated test layout" if None in test_dirs.values() else ""
     for path in changes:
@@ -285,7 +444,9 @@ def select(
         if path not in tests:
             source_apps.add(addon)
         if (
-            (path.suffix != ".py" and python_input(path))
+            (path.name in APP_INPUTS and (shared_apps is None or addon in shared_apps))
+            or (path.name not in APP_INPUTS and relative.parts[0] != "resources"
+                and path.suffix != ".py" and python_input(path))
             or path.name == "conftest.py"
             or relative.parts[0] == "testing"
         ):
@@ -295,7 +456,7 @@ def select(
             broad_hosts = f"test support input: {path}"
 
     affected = reverse_addons(source_apps, apps.dependencies)
-    python_inputs = any(map(python_input, changes))
+    python_inputs = bool(added_apps) or any(map(python_input, changes))
     imports = import_reach(
         root, apps, changes, tests, affected, python_inputs=python_inputs, isolated=isolated,
     ) if not broad_shared or full_hosts else None
@@ -306,12 +467,25 @@ def select(
         {"angee.base", "angee.server", "angee.graphql"}
     ):
         broad_shared = "shared framework owner changed"
-    if source_apps or not legacy:
+    if source_apps or not legacy and not owner_tests:
         reached.update(shared_tests)
     selected = {path.as_posix() for path in reached}
     if not broad_shared and tests and set(tests) <= reached:
         broad_shared = "changed inputs reach the whole shared host"
     shared = Selection("full", broad_shared) if broad_shared else Selection.reached(sorted(selected))
+    if preflight and shared.mode == "empty":
+        dirs = tuple(test_dir for test_dir in test_dirs.values() if test_dir is not None)
+        modules = tuple(module_name(directory / "__init__.py", apps.owners) for directory in dirs)
+        if any(not any(path.is_relative_to(directory) for directory in dirs) for path in changes) or any(
+            name in {"conftest", "tests"} or (
+                (name.startswith("tests.") or ".tests." in name)
+                and not any(name.startswith(f"{module}.") for module in modules)
+            )
+            for name in importers
+        ):
+            shared = Selection("selected", "native pytest paths after shared host setup")
+    if added_apps and shared.mode != "full":
+        shared = Selection(shared.mode, "verified additive addon inputs", shared.paths)
 
     # Test-helper imports can cross suite boundaries independently of native app requirements.
     owner_tests.update(addon for addon in full_hosts if any(name.startswith(f"{addon}.") for name in importers))
@@ -322,7 +496,152 @@ def select(
     hosts = Selection("full", broad_hosts, full_hosts) if broad_hosts else Selection.reached(
         sorted(set(full_hosts) & (affected | owner_tests)),
     )
+    if added_apps and hosts.mode == "selected":
+        hosts = Selection("selected", "verified additive addon inputs", hosts.paths)
     return shared, hosts
+
+
+def pnpm_projects(root: Path, projects: Sequence[Path] = ()) -> set[Path]:
+    """Project pnpm's workspace package paths and native reverse selection."""
+
+    result = subprocess.run(
+        ["pnpm", *(arg for path in projects for arg in ("--filter", f"...{{./{path.as_posix()}}}")),
+         "-r", "list", "--depth", "-1", "--lockfile-only", "--json"],
+        cwd=root, capture_output=True, check=True, timeout=30,
+    )
+    return {
+        path.relative_to(root) for package in json.loads(result.stdout)
+        if (path := Path(package["path"]).resolve()).is_relative_to(root)
+    }
+
+
+def additive_web_lock(root: Path, base: str, lock: Path, web_projects: set[Path]) -> bool:
+    """Verify that native workspace importers are the only JS lock change."""
+
+    import yaml
+
+    try:
+        previous = yaml.safe_load(git(root, "show", f"{base}:{lock.as_posix()}").stdout)
+        current = yaml.safe_load((root / lock).read_text())
+        importers = current["importers"]
+        for path in web_projects:
+            del importers[path.as_posix()]
+        return previous == current
+    except (KeyError, TypeError, OSError, yaml.YAMLError):
+        return False
+
+
+def web_plan(
+    root: Path, changes: Sequence[Path], graph: AppGraph, isolated: dict[Path, str],
+    *, base: str | None, fallback: str, additions: dict[Path, str], graph_fallback: str, framework: bool = False,
+) -> tuple[Selection, Selection]:
+    """Project independent package tests and native composed integration roots."""
+
+    if fallback:
+        return Selection("full", fallback), Selection("full", fallback)
+    paths = [path for path in changes if path.suffix != ".md"]
+    global_js = JS_INPUTS.intersection(paths)
+    if any(path.parts[0] == ".github" and path != STACK_LOCK for path in paths):
+        global_js.add(Path(".github"))
+    new_web = {
+        directory / "web" for directory in graph.owners
+        if base and directory / "web/package.json" in paths
+        and absent_at(root, base, directory / "web")
+    }
+    package_paths = [
+        path for path in paths
+        if path.parts[0] == "packages" or (
+            "web" in path.parts and addon_at(path, graph.owners) is not None
+            and (root / "pnpm-workspace.yaml").is_file()
+        )
+    ]
+    package_targets: set[Path] = set()
+    reached: set[Path] = set()
+    try:
+        if package_paths or (new_web and Path("pnpm-lock.yaml") in global_js):
+            projects = pnpm_projects(root)
+            if (
+                base and new_web and new_web <= projects and Path("pnpm-lock.yaml") in global_js
+                and additive_web_lock(root, base, Path("pnpm-lock.yaml"), new_web)
+            ):
+                global_js.remove(Path("pnpm-lock.yaml"))
+            for path in package_paths:
+                owner = next((parent for parent in path.parents if parent in projects), None)
+                if owner is None or not owner.parts:
+                    global_js.add(path)
+                    break
+                package_targets.add(owner)
+            if package_targets and not global_js:
+                reached = pnpm_projects(root, sorted(package_targets))
+    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError):
+        reason = "native pnpm workspace unavailable"
+        return Selection("full", reason), Selection("full", reason)
+    if global_js:
+        reason = f"shared JS or workflow input: {min(global_js)}"
+        return Selection("full", reason), Selection("full", reason)
+    packages = Selection.reached([path.as_posix() for path in reached if path.parts[:1] == ("packages",)])
+    if STACK_LOCK in paths and not (
+        base and new_web and additive_web_lock(
+            root, base, STACK_LOCK, {Path("workspaces/src") / root.name / path for path in new_web},
+        )
+    ):
+        return packages, Selection("full", f"shared rendered lock input: {STACK_LOCK}")
+    roots = {name for path, name in additions.items() if (root / path / "web/package.json").is_file()}
+    source_apps = set()
+    runtime_inputs = False
+    for path in paths:
+        if (
+            path.parts[0] in {"templates", "scripts"}
+            or path.name in {"settings.py", "settings.yaml", ".python-version"}
+        ):
+            return packages, Selection("full", f"shared composition input: {path}")
+        if addon_at(path, additions) is not None or path in WORKSPACE_INPUTS:
+            continue
+        owner = addon_at(path, graph.owners)
+        if owner is None and path.parts[0] == "src":
+            return packages, Selection("full", graph_fallback or f"unowned composition input: {path}")
+        if owner:
+            directory, name = owner
+            test_dir = conventional_test_dir(root, directory) if directory in isolated else None
+            if (
+                (test_dir and path.is_relative_to(test_dir))
+                or path.relative_to(directory).parts[0] in {"tests", "testing"}
+            ):
+                continue
+            source_apps.add(name)
+            runtime_inputs |= python_input(path)
+    if graph_fallback and (source_apps or reached or any(path.parts[0] == "src" for path in paths)):
+        return packages, Selection("full", graph_fallback)
+    affected = reverse_addons(source_apps, graph.dependencies)
+    local = set(graph.owners.values())
+    external = {name for name in graph.dependencies.keys() - local if name.startswith("angee.")}
+    if framework and runtime_inputs and not external:
+        return packages, Selection("full", "existing runtime input with no native external addon graph")
+    resource_candidates = set(additions.values()) | (affected if runtime_inputs else set())
+    resource_roots = set()
+    if resource_candidates:
+        from django.core.exceptions import ImproperlyConfigured
+        from django_compose.components import installed_components
+
+        from angee.base.addons import addon_facts
+
+        try:
+            index = installed_components(GROUP)
+            resource_roots = {
+                name for name in resource_candidates if addon_facts(name, "angee.resources", index=index)
+            }
+        except (ImportError, ImproperlyConfigured):
+            return packages, Selection("full", "native resource declarations unavailable")
+    roots.update(
+        name for directory, name in graph.owners.items()
+        if (name in affected and (root / directory / "web/package.json").is_file())
+        or any(path.is_relative_to(directory) for path in reached)
+    )
+    roots.update(affected & external)
+    roots.update(resource_roots)
+    if resource_roots and packages.mode != "empty":
+        return packages, Selection("full", "package and resource inputs both affect composition", tuple(sorted(roots)))
+    return packages, Selection.reached(sorted(roots))
 
 
 class Collection:
@@ -331,6 +650,7 @@ class Collection:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
         self.shared_paths: set[str] = set()
+        self.apps: set[str] = set()
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_configure(self, config: pytest.Config) -> None:
@@ -339,30 +659,198 @@ class Collection:
         config.option.splits = None
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
+        from django.apps import apps
+
         self.files = {str(item.path): item.nodeid.partition("::")[0] for item in session.items}
         self.shared_paths = {str(item.path) for item in session.items if item.get_closest_marker("shared_inputs")}
+        self.apps = {app.name for app in apps.get_app_configs()} if apps.ready else set()
 
 
 def collected(
     root: Path, args: Sequence[str], *, setup_django: bool = False,
-) -> tuple[dict[Path, str], list[Path]]:
+) -> tuple[dict[Path, str], list[Path], frozenset[str], bool]:
     command = [
         sys.executable, str(Path(__file__).resolve()), "_collect", "django" if setup_django else "pytest", *args,
     ]
     environ = {**os.environ, "PYTHONPATH": os.pathsep.join(map(os.path.abspath, sys.path))}
     result = subprocess.run(command, cwd=root, env=environ, capture_output=True, text=True, check=False)
-    if result.returncode:
+    if result.returncode not in {pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED}:
         sys.stderr.write(result.stderr)
         raise SystemExit(result.returncode)
     data = json.loads(result.stdout)
     return (
         {Path(path).relative_to(root): node for path, node in data["files"].items()},
         [Path(path).relative_to(root) for path in data["shared_paths"]],
+        frozenset(data["apps"]),
+        data["excluded"],
     )
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Carry the shared scope through native pytest, including xdist workers."""
+
+    parser.addoption("--angee-isolated-root", action="append", default=[], help=argparse.SUPPRESS)
+
+
+def collection_path(config: pytest.Config, target: str, *, pyargs: bool) -> Path | None:
+    path: str | None = target.partition("::")[0]
+    if pyargs:
+        from _pytest.main import search_pypath
+
+        path = search_pypath(
+            path, consider_namespace_packages=config.getini("consider_namespace_packages"),
+        )
+    return (config.invocation_params.dir / path).resolve() if path is not None else None
+
+
+def eligible_targets(
+    config: pytest.Config, targets: Sequence[str], *, pyargs: bool, roots: Sequence[Path],
+) -> list[str]:
+    return [
+        target for target in targets
+        if (path := collection_path(config, target, pyargs=pyargs)) is None
+        or not any(path.is_relative_to(root) for root in roots)
+    ]
+
+
+def conftest_anchor(config: pytest.Config, target: str, *, pyargs: bool, roots: Sequence[Path]) -> str:
+    """Avoid pytest's early test* subdirectory expansion for an excluded addon."""
+
+    path = collection_path(config, target, pyargs=pyargs)
+    if path is None:
+        return target
+    anchor = path
+    while any(root.parent == anchor and root.name.startswith("test") for root in roots):
+        # A file anchor loads its ancestor conftests without scanning siblings.
+        file = next((child for child in sorted(anchor.iterdir()) if child.is_file()), None)
+        if file is not None:
+            return str(file)
+        anchor = anchor.parent
+    return str(anchor) if anchor != path else target
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config: pytest.Config) -> None:
+    options = early_config.known_args_namespace
+    roots = tuple(map(Path, options.angee_isolated_root))
+    if roots:
+        targets, _ = early_config._decide_args(
+            args=options.file_or_dir, pyargs=options.pyargs, testpaths=early_config.getini("testpaths"),
+            invocation_dir=early_config.invocation_params.dir, rootpath=early_config.rootpath, warn=False,
+        )
+        allowed = eligible_targets(early_config, targets, pyargs=options.pyargs, roots=roots)
+        if not allowed:
+            pytest.exit(EMPTY_SHARED, returncode=0)
+        options.file_or_dir = [
+            conftest_anchor(early_config, target, pyargs=options.pyargs, roots=roots) for target in allowed
+        ]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    roots = tuple(map(Path, config.getoption("angee_isolated_root")))
+    if not roots:
+        return None
+    config.args[:] = eligible_targets(config, config.args, pyargs=config.option.pyargs, roots=roots)
+    return None if config.args else pytest.ExitCode.OK
+
+
+def shared_pytest_args(root: Path, args: Sequence[str], suites: dict[Path, str]) -> list[str]:
+    """Exclude native standalone addon suite roots before pytest loads their conftests."""
+
+    options = [
+        arg for path in sorted(suites) for arg in
+        (f"--angee-isolated-root={root / path}", f"--ignore={root / path}")
+    ]
+    return ["-p", Path(__file__).stem, *options, *args] if options else list(args)
+
+
+def shared_targets(root: Path, args: Sequence[str], excluded: Sequence[Path]) -> list[str]:
+    return [
+        arg for arg in args if not any(
+            (root / arg.partition("::")[0]).resolve().is_relative_to(directory) for directory in excluded
+        )
+    ]
+
+
+class FullReport:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    @pytest.hookimpl()
+    def pytest_cmdline_main(self) -> None:
+        print(json.dumps(asdict(Selection("full", self.reason))), flush=True)
+
+
+def run_pytest(args: Sequence[str], plugins: Sequence[object] = ()) -> tuple[int, bool]:
+    """Run native pytest and recognize an intentionally excluded shared invocation."""
+
+    original = sys.path.copy()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        return pytest.main(list(args), plugins=list(plugins)), False
+    except pytest.exit.Exception as error:
+        if error.returncode != 0 or str(error) != EMPTY_SHARED:
+            raise
+        return pytest.ExitCode.OK, True
+    finally:
+        sys.path[:] = original
+
+
+@dataclass(frozen=True)
+class Inputs:
+    changes: Sequence[Path]
+    python: Sequence[Path]
+    graph: AppGraph
+    suites: dict[Path, str]
+    additions: dict[Path, str]
+    comparison_fallback: str
+    graph_fallback: str
+
+    @property
+    def fallback(self) -> str:
+        return self.comparison_fallback or self.graph_fallback or shared_input_reason(self.python)
+
+
+def unchanged_manifest(root: Path, base: str | None, path: Path) -> bool:
+    if not base or path.name != "pyproject.toml":
+        return False
+    previous = git(root, "show", f"{base}:{path.as_posix()}")
+    if previous.returncode:
+        return False
+    try:
+        return tomllib.loads(previous.stdout.decode()) == tomllib.loads((root / path).read_text())
+    except (OSError, ValueError):
+        return False
+
+
+def inputs(
+    root: Path, base: str | None, head: str | None, *,
+    apps: Sequence[str], extra: Sequence[str], donor: Path | None,
+) -> Inputs:
+    changes, fallback = changed_paths(root, base, head)
+    changes = [path for path in changes if not unchanged_manifest(root, base, path)]
+    graph, graph_fallback = installed_graph(root, apps)
+    suites = isolated_suites(root, graph.owners)
+    if graph_fallback:
+        suites = {
+            path.parent.relative_to(root): ".".join(path.parent.relative_to(root / "src").parts)
+            for path in sorted(root.glob("src/*/*/pytest.ini"))
+        }
+    additions = {} if fallback or graph_fallback else additive_addons(
+        root, base, changes, graph, suites, apps=apps, extra=extra, donor=donor,
+    )
+    python = [
+        path for path in changes
+        if path not in JS_INPUTS | {STACK_LOCK} and path.parts[0] != "packages"
+        and (not additions or (path not in WORKSPACE_INPUTS and addon_at(path, additions) is None))
+    ]
+    return Inputs(changes, python, graph, suites, additions, fallback, graph_fallback)
 
 
 def run_selected(
     pytest_args: Sequence[str], *, root: Path, base: str | None, head: str | None, apps: Sequence[str] = (),
+    extra: Sequence[str] = (), donor: Path | None = None,
 ) -> int:
     """Run the caller's native pytest invocation with a visible changed-path selection."""
     from django.apps import apps as registry
@@ -373,18 +861,25 @@ def run_selected(
     os.chdir(root)
     sys.path.insert(0, str(root))
     try:
-        changes, fallback = changed_paths(root, base, head)
-        fallback = fallback or shared_input_reason(changes)
+        plan = inputs(root, base, head, apps=apps, extra=extra, donor=donor)
+        fallback = plan.fallback
+        args = shared_pytest_args(root, pytest_args, plan.suites)
         if registry.ready and "DJANGO_SETTINGS_MODULE" not in os.environ:
             fallback = fallback or "caller Django settings are local to its interpreter"
-        if not fallback:
-            graph, fallback = installed_graph(root, apps, fallback)
         if fallback:
-            print(json.dumps(asdict(Selection("full", fallback))), flush=True)
-            return pytest.main(list(pytest_args))
+            status, empty = run_pytest(args, [FullReport(fallback)])
+            if empty:
+                print(json.dumps(asdict(Selection("empty", EMPTY_SHARED))), flush=True)
+            return status
 
-        tests, shared_tests = collected(root, pytest_args, setup_django=registry.ready)
-        selection, _ = select(root, changes, tuple(tests), graph, shared_tests=shared_tests)
+        tests, shared_tests, shared_apps, excluded = collected(root, args, setup_django=registry.ready)
+        if excluded:
+            print(json.dumps(asdict(Selection("empty", EMPTY_SHARED))), flush=True)
+            return 0
+        selection, _ = select(
+            root, plan.python, tuple(tests), plan.graph, isolated=plan.suites, shared_tests=shared_tests,
+            shared_apps=shared_apps, added_apps=tuple(plan.additions.values()),
+        )
         if selection.mode == "full":
             selection = Selection("full", selection.reason, tuple(sorted(path.as_posix() for path in tests)))
         print(json.dumps(asdict(selection)), flush=True)
@@ -395,48 +890,69 @@ def run_selected(
             arg for path, node in tests.items() if path.as_posix() not in included
             for arg in ("--deselect", f"{node}::")
         ]
-        status = pytest.main([*pytest_args, *options])
+        status, _ = run_pytest([*options, *args])
     finally:
         sys.path[:] = import_path
         os.chdir(callers)
     # A successfully collected nonempty selection may have no items in a particular shard.
-    return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and "--splits" in pytest_args else status
+    return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and included and "--splits" in pytest_args else status
 
 
-def installed_graph(root: Path, apps: Sequence[str], fallback: str) -> tuple[AppGraph, str]:
+def installed_graph(root: Path, apps: Sequence[str]) -> tuple[AppGraph, str]:
     from django.core.exceptions import ImproperlyConfigured
 
     try:
-        return addon_graph(root, apps), fallback
+        return addon_graph(root, apps), ""
     except (ImportError, ImproperlyConfigured) as error:
-        return AppGraph({}, {}, {}), fallback or f"native app graph unavailable: {error}"
+        return AppGraph({}, {}, {}), f"native app graph unavailable: {error}"
 
 
-def framework_plan(base: str | None, head: str | None) -> dict[str, Selection]:
-    changes, fallback = changed_paths(ROOT, base, head)
-    graph, fallback = installed_graph(ROOT, (), fallback)
-    # Native configuration names the existing shared host's broad fallback paths.
-    config = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
-    roots = tuple(config["testpaths"])
-    host_suites = isolated_suites(ROOT, graph.owners)
-    if not graph.owners:
-        # If native resolution fails, preserve declared suites and let the host's
-        # own composition report the failure. This scans config, not test files.
-        host_suites = {
-            directory.parent.relative_to(ROOT): f"angee.{directory.parent.name}"
-            for directory in (ROOT / "src/angee").glob("*/pytest.ini")
+def selection_plan(
+    root: Path, base: str | None, head: str | None, *, framework: bool,
+    apps: Sequence[str], extra: Sequence[str], donor: Path | None, pytest_args: Sequence[str],
+) -> tuple[dict[str, Selection], list[int]]:
+    plan = inputs(root, base, head, apps=apps, extra=extra, donor=donor)
+    packages, stack = web_plan(
+        root, plan.changes, plan.graph, plan.suites, base=base, fallback=plan.comparison_fallback,
+        additions=plan.additions, graph_fallback=plan.graph_fallback, framework=framework,
+    )
+    if not plan.additions and WORKSPACE_INPUTS.intersection(plan.python):
+        stack = Selection("full", "unverified Python workspace change", stack.paths)
+    if stack.mode == "full" and base:
+        new_roots = {
+            name for directory, name in plan.graph.owners.items()
+            if directory / "pyproject.toml" in plan.changes and absent_at(root, base, directory)
         }
-    needs_collection = not (fallback or shared_input_reason(changes)) and any(
-        selectable(path, graph) for path in changes
-    )
-    tests, shared_tests = collected(ROOT, ()) if needs_collection else ({}, [])
+        stack = Selection("full", stack.reason, tuple(sorted(new_roots | set(stack.paths))))
+    changed = any(selectable(path, plan.graph) for path in plan.python)
+    tests = {}
+    shared_tests = []
+    shared_apps = None
+    excluded = False
+    if framework and not plan.fallback and (changed or plan.additions):
+        args = shared_pytest_args(root, pytest_args, plan.suites)
+        tests, shared_tests, shared_apps, excluded = collected(root, args)
     shared, hosts = select(
-        ROOT, changes, tuple(tests), graph, fallback=fallback,
-        isolated=host_suites, legacy=True, shared_tests=shared_tests,
+        root, plan.python, tuple(tests), plan.graph, fallback=plan.fallback,
+        isolated=plan.suites, legacy=True, shared_tests=shared_tests,
+        shared_apps=shared_apps, added_apps=tuple(plan.additions.values()), preflight=not framework,
     )
-    if shared.mode == "full":
-        shared = Selection("full", shared.reason, roots)
-    return {"shared": shared, "hosts": hosts}
+    if excluded:
+        shared = Selection("empty", EMPTY_SHARED)
+    groups = []
+    if framework:
+        from scripts.postgres_selection import GROUPS
+        from scripts.postgres_selection import groups as duration_groups
+
+        if shared.mode == "full":
+            config = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+            roots = shared_targets(root, config["testpaths"], [root / path for path in plan.suites])
+            shared = Selection("full", shared.reason, tuple(roots))
+            groups = list(range(1, GROUPS + 1))
+        elif shared.mode == "selected":
+            durations = json.loads((root / ".test_durations").read_text())
+            groups = duration_groups([path.as_posix() for path in tests], shared.paths, durations) if durations else [1]
+    return {"shared": shared, "hosts": hosts, "packages": packages, "stack": stack}, groups
 
 
 def main(argv: Sequence[str]) -> int:
@@ -447,26 +963,36 @@ def main(argv: Sequence[str]) -> int:
                 import django
 
                 django.setup()
-            status = pytest.main(["--collect-only", *argv[2:]], plugins=[probe])
-        if status == pytest.ExitCode.OK:
-            print(json.dumps({"files": probe.files, "shared_paths": sorted(probe.shared_paths)}))
+            status, excluded = run_pytest(["--collect-only", *argv[2:]], [probe])
+        if status in {pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED}:
+            print(json.dumps({
+                "files": probe.files, "shared_paths": sorted(probe.shared_paths), "apps": sorted(probe.apps),
+                "excluded": excluded,
+            }))
         return status
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("command", choices=("framework", "pytest"))
+    parser.add_argument("command", choices=("framework", "plan", "pytest"))
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--base")
     parser.add_argument("--head")
     parser.add_argument("--app", action="append", default=[])
+    parser.add_argument("--extra", action="append", default=[])
+    parser.add_argument("--donor", type=Path)
     options, pytest_args = parser.parse_known_args(argv)
-    if options.command == "framework":
-        if pytest_args:
-            parser.error("framework accepts no pytest arguments")
-        plan = framework_plan(options.base, options.head)
-        print(json.dumps({name: asdict(selection) for name, selection in plan.items()}))
+    pytest_args = pytest_args[1:] if pytest_args[:1] == ["--"] else pytest_args
+    if options.command != "pytest":
+        framework = options.command == "framework"
+        plan, groups = selection_plan(
+            options.root.resolve(), options.base, options.head, framework=framework,
+            apps=options.app, extra=options.extra, donor=options.donor, pytest_args=pytest_args,
+        )
+        data = {name: asdict(selection) for name, selection in plan.items()}
+        print(json.dumps({**data, "groups": groups} if framework else data))
         return 0
     return run_selected(
-        pytest_args[1:] if pytest_args[:1] == ["--"] else pytest_args,
+        pytest_args,
         root=options.root, base=options.base, head=options.head, apps=options.app,
+        extra=options.extra, donor=options.donor,
     )
 
 

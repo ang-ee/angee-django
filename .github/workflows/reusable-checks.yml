@@ -31,14 +31,6 @@ on:
         required: false
         type: boolean
         default: false
-      pr-checks-enabled:
-        description: >-
-          Run the lanes a pull request's own run already ran on the tree a merge commit gives main
-          (the packages and the composed stack). A caller passes false on a push to main, where the
-          SQLite suite and the PostgreSQL selection, which a pull request runs in part, run whole.
-        required: false
-        type: boolean
-        default: true
       addons-profile:
         description: Addon composition profile; full is the only lane that checks out bridges.
         required: false
@@ -79,13 +71,13 @@ on:
         required: false
         type: string
         default: ""
-      consumer-tests:
-        description: JSON array of test paths relative to the consumer slot, including addon tests.
+      consumer-extra:
+        description: Native uv extra shared by the caller's selection proof and test workers.
         required: false
         type: string
-        default: "[]"
-      consumer-pytest-plugins:
-        description: JSON array of additional owning test-fixture plugins for the consumer.
+        default: ""
+      consumer-quality-tests:
+        description: JSON array of source-only pytest files run in the consumer quality job.
         required: false
         type: string
         default: "[]"
@@ -114,92 +106,269 @@ env:
   # distribution's older library.
   UV_PYTHON_PREFERENCE: only-managed
 
+  PRIMARY_SLOT: ${{ inputs.consumer-path || (github.repository == 'ang-ee/angee-messaging-bridges' && 'angee-messaging-bridges') || 'angee' }}
+  COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+  BRIDGE_SOURCE_GUARD: tests/test_layering.py
+  FRAMEWORK_QUALITY_TESTS: >-
+    tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
+    tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
+    tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
+    tests/test_runtime_image.py tests/test_messaging_system_mail_callers.py tests/test_packaging.py
+    tests/test_stack.py tests/test_layering.py tests/test_resource_fixtures.py
+  FRAMEWORK_QUALITY_NODES: >-
+    tests/test_stack_templates.py::test_stack_root_installs_with_the_framework_pnpm
+    tests/test_stack_templates.py::test_playwright_image_matches_e2e_lock_version
+    tests/test_stack_templates.py::test_stack_install_roots_compose_the_shared_pnpm_policy
+
 jobs:
   python-quality:
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled || inputs.consumer-path != '' || inputs.consumer-quality-tests != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+        if: inputs.uv-enabled
       - uses: astral-sh/setup-uv@v7
+        if: inputs.uv-enabled
         with:
           python-version: ${{ inputs.python-version }}
-      - run: uv run --locked python -m ruff check . --no-cache
-      - run: uv run --locked lint-imports --no-cache
-      - run: uv run --locked python -m mypy src
+      - if: inputs.uv-enabled
+        run: uv run --locked python -m ruff check . --no-cache
+      - if: inputs.uv-enabled
+        run: uv run --locked lint-imports --no-cache
+      - if: inputs.uv-enabled
+        run: uv run --locked python -m mypy src
         env:
           PYTHONPATH: src
-      # Static test contracts read source and docs without Django: patch
-      # targets, documentation links and recipes, the agent methodology, and the
-      # runtime image's Dockerfile, whose Python follows .python-version.
-      - run: >-
+      - name: Check framework source and emitted registry contracts without the shared host
+        if: inputs.uv-enabled
+        run: >-
           uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q
-          tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
-          tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
-          tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
-          tests/test_runtime_image.py
+          $FRAMEWORK_QUALITY_TESTS $FRAMEWORK_QUALITY_NODES
+      - name: Start from an empty stack directory
+        if: ${{ inputs.consumer-path != '' || inputs.consumer-quality-tests != '[]' }}
+        run: rm -rf stack
+      - uses: actions/checkout@v5
+        if: ${{ inputs.consumer-path != '' || inputs.consumer-quality-tests != '[]' }}
+        with:
+          repository: ${{ inputs.framework-repository }}
+          ref: ${{ github.repository == 'ang-ee/angee-django' && github.sha || inputs.framework-ref }}
+          path: stack/workspaces/src/angee
+      - uses: ./stack/workspaces/src/angee/.github/actions/prepare-checks
+        if: ${{ inputs.consumer-path != '' || inputs.consumer-quality-tests != '[]' }}
+        id: prepare
+        with:
+          slot: ${{ env.PRIMARY_SLOT }}
+          extra: ${{ inputs.consumer-extra }}
+          profile: ${{ inputs.addons-profile }}
+          bridges-ref: ${{ inputs.bridges-ref }}
+          sources: ${{ inputs.consumer-sources }}
+          sources-token: ${{ secrets.ADDON_SOURCES_TOKEN || github.token }}
+          bridges-token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+          angee-version: ${{ inputs.angee-version }}
+          python-version: ${{ inputs.python-version }}
+          roots: ${{ inputs.consumer-roots }}
+      - name: Check consumer source without the shared host
+        if: ${{ inputs.consumer-path != '' || inputs.consumer-quality-tests != '[]' }}
+        working-directory: stack
+        env:
+          QUALITY_TESTS: ${{ inputs.consumer-quality-tests }}
+        run: |
+          .venv/bin/python -m ruff check "workspaces/src/$PRIMARY_SLOT" --no-cache
+          mapfile -t tests < <(jq -r '.[]' <<< "$QUALITY_TESTS")
+          if (("${#tests[@]}")); then
+            cd "workspaces/src/$PRIMARY_SLOT"
+            "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q "${tests[@]}"
+          fi
+      - name: Typecheck the consumer with the framework policy and native typing host
+        if: ${{ inputs.consumer-path != '' }}
+        working-directory: stack
+        env:
+          CONSUMER_PATH: ${{ inputs.consumer-path }}
+          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
+        run: |
+          .venv/bin/python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
 
-  # One selection for the framework's SQLite shards, PostgreSQL groups and addon hosts.
+          import tomlkit
+          import yaml
+
+          host = Path.cwd().resolve()
+          slot = host / "workspaces/src" / os.environ["CONSUMER_PATH"]
+          framework = host / "workspaces/src/angee"
+          typing_root = host / ".mypy_cache/consumer_typing"
+          typing_root.mkdir(parents=True, exist_ok=True)
+          # Authored isolated settings use the same native configuration owner.
+          (typing_root / "ci_consumer_typing.py").write_text((host / "settings.py").read_text())
+          authored = yaml.safe_load((host / "settings.yaml").read_text())
+          authored["COMPOSE_OUTPUT_DIR"] = str(typing_root / "ci_typing_runtime")
+          authored["COMPOSE_OUTPUT_MODULE"] = "ci_typing_runtime"
+          authored["DATABASES"] = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+          (typing_root / "settings.yaml").write_text(yaml.safe_dump(authored, sort_keys=False))
+          # Locked angee-django-stubs gives its configured module priority over the env.
+          # Reuse the full policy; change only that native project selection.
+          policy = tomlkit.parse((framework / "pyproject.toml").read_text())
+          policy["tool"]["django-stubs"]["django_settings_module"] = "ci_consumer_typing"
+          config = typing_root / "mypy.toml"
+          config.write_text(tomlkit.dumps(policy))
+          os.environ["ANGEE_PROJECT_DIR"] = str(typing_root)
+          os.environ.pop("DATABASE_URL", None)
+          os.environ.pop("YAMLCONF_CONFFILE", None)
+          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
+              str(typing_root), str(framework), os.environ.get("PYTHONPATH"),
+          )))
+          source_roots = sorted(
+              str(host / "workspaces/src" / source["path"] / "src")
+              for source in json.loads(os.environ["CONSUMER_SOURCES"])
+          )
+          os.environ["MYPYPATH"] = os.pathsep.join(dict.fromkeys(filter(None, (
+              str(typing_root), str(slot / "src"), *source_roots, os.environ.get("MYPYPATH"),
+          ))))
+          subprocess.run([
+              sys.executable, "-m", "mypy", "--config-file", str(config),
+              str(slot / "src"),
+          ], cwd=framework, check=True)
+          PY
+
+  # One plan for scripts, isolated addon suites, workspace packages and composed checks.
   select:
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled || inputs.stack-enabled || inputs.pnpm-enabled }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     outputs:
-      sqlite-mode: ${{ steps.select.outputs.sqlite-mode }}
-      sqlite-tests: ${{ steps.select.outputs.sqlite-tests }}
-      addon-hosts: ${{ steps.select.outputs.addon-hosts }}
-      addon-host-count: ${{ steps.select.outputs.addon-host-count }}
+      plan: ${{ steps.select.outputs.plan }}
+      sqlite-groups: ${{ steps.select.outputs.sqlite-groups }}
       postgres-tests: ${{ steps.select.outputs.postgres-tests }}
       postgres-groups: ${{ steps.select.outputs.postgres-groups }}
+      stack-matrix: ${{ steps.select.outputs.stack-matrix }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          # A pull request's merge commit and its base give the changed paths.
-          fetch-depth: 2
+        if: ${{ inputs.uv-enabled && !inputs.stack-enabled }}
       - uses: astral-sh/setup-uv@v7
+        if: ${{ inputs.uv-enabled && !inputs.stack-enabled }}
         with:
           python-version: ${{ inputs.python-version }}
+      # The selector uses the same managed install and donor as the worker.
+      - name: Start from an empty stack directory
+        if: ${{ inputs.stack-enabled || !inputs.uv-enabled }}
+        run: rm -rf stack
+      - uses: actions/checkout@v5
+        if: ${{ inputs.stack-enabled || !inputs.uv-enabled }}
+        with:
+          repository: ${{ inputs.framework-repository }}
+          ref: ${{ github.repository == 'ang-ee/angee-django' && github.sha || inputs.framework-ref }}
+          path: stack/workspaces/src/angee
+      - uses: ./stack/workspaces/src/angee/.github/actions/prepare-checks
+        if: ${{ inputs.stack-enabled || !inputs.uv-enabled }}
+        id: prepare
+        with:
+          slot: ${{ env.PRIMARY_SLOT }}
+          extra: ${{ inputs.consumer-extra }}
+          profile: ${{ inputs.addons-profile }}
+          bridges-ref: ${{ inputs.bridges-ref }}
+          sources: ${{ inputs.consumer-sources }}
+          sources-token: ${{ secrets.ADDON_SOURCES_TOKEN || github.token }}
+          bridges-token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+          angee-version: ${{ inputs.angee-version }}
+          python-version: ${{ inputs.python-version }}
+          roots: ${{ inputs.consumer-roots }}
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.1.3
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Check the bridge source boundary
+        if: >-
+          ${{ env.PRIMARY_SLOT == 'angee-messaging-bridges' ||
+          (inputs.uv-enabled && inputs.stack-enabled && inputs.addons-profile == 'full') }}
+        working-directory: stack/workspaces/src/angee-messaging-bridges
+        run: |
+          if [ "$PRIMARY_SLOT" = angee-messaging-bridges ]; then
+            "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m ruff check . --no-cache
+          fi
+          "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m pytest -q -p no:django --noconftest "$BRIDGE_SOURCE_GUARD"
       - id: select
         shell: bash
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          UV_ENABLED: ${{ inputs.uv-enabled }}
+          USE_STACK: ${{ inputs.stack-enabled || !inputs.uv-enabled }}
           HEAD_SHA: ${{ github.sha }}
+          DONOR: ${{ steps.prepare.outputs.donor }}
+          EXTRA: ${{ inputs.consumer-extra }}
+          ROOTS: ${{ inputs.consumer-roots }}
+          QUALITY_TESTS: ${{ inputs.consumer-quality-tests }}
         run: |
-          if [ -n "$BASE" ] && ! git cat-file -e "$BASE^{commit}"; then
-            git fetch --depth=1 origin "$BASE" || echo "::warning::Comparison base unavailable; running full tests"
+          base=$COMPARE_BASE
+          if [[ "$base" =~ ^0+$ ]]; then base=; fi
+          slot=$PWD
+          python=( uv run --locked python )
+          if [ "$USE_STACK" = true ]; then
+            slot="$PWD/stack/workspaces/src/$PRIMARY_SLOT"
+            python=( "$PWD/stack/.venv/bin/python" )
           fi
-          plan=$(uv run --locked python scripts/changed_path_selection.py framework --base "$BASE" --head "$HEAD_SHA")
-          echo "$plan"
-          sqlite_mode=$(jq -er '.shared.mode' <<< "$plan")
-          reached=$(jq -er '.shared.paths[]?' <<< "$plan" || test "$sqlite_mode" = empty)
-          postgres=(scripts/postgres_selection.py)
-          if [ "$sqlite_mode" = full ]; then postgres+=(--all); fi
-          postgres_tests=$(uv run --locked python "${postgres[@]}" <<< "$reached")
-          postgres_groups=$(uv run --locked python "${postgres[@]}" --groups <<< "$reached")
-          echo "PostgreSQL groups $postgres_groups: $postgres_tests"
+          if [ -n "$base" ] && ! git -C "$slot" cat-file -e "$base^{commit}"; then
+            git -C "$slot" fetch --depth=1 origin "$base" || echo "::warning::Comparison base unavailable; running full tests"
+          fi
+          compare=( --base "$base" --head "$HEAD_SHA" )
+          if [ -n "$DONOR" ]; then compare+=( --donor "$DONOR" ); fi
+          args=()
+          if [ "$UV_ENABLED" = true ]; then
+            for test_path in $FRAMEWORK_QUALITY_TESTS; do args+=( --ignore "$test_path" ); done
+            for node in $FRAMEWORK_QUALITY_NODES; do args+=( --deselect "$node" ); done
+            plan=$(cd "$slot" && env -u DATABASE_URL "${python[@]}" scripts/changed_path_selection.py framework "${compare[@]}" -- "${args[@]}")
+            postgres=( scripts/postgres_selection.py )
+            if [ "$(jq -r '.shared.mode' <<< "$plan")" = full ]; then postgres+=( --all ); fi
+            reached=$(jq -r '.shared.paths[]' <<< "$plan")
+            postgres_tests=$(cd "$slot" && "${python[@]}" "${postgres[@]}" <<< "$reached")
+            postgres_groups=$(cd "$slot" && "${python[@]}" "${postgres[@]}" --groups <<< "$reached")
+          else
+            if [ -n "$EXTRA" ]; then args+=( --extra "$EXTRA" ); fi
+            while IFS= read -r app; do args+=( --app "$app" ); done < <(jq -r '.[]' <<< "$ROOTS")
+            ignore=()
+            while IFS= read -r test_path; do ignore+=( --ignore "$test_path" ); done < <(jq -r '.[]' <<< "$QUALITY_TESTS")
+            if [ "$PRIMARY_SLOT" = angee-messaging-bridges ]; then
+              ignore+=( --ignore "$BRIDGE_SOURCE_GUARD" )
+            fi
+            plan=$("${python[@]}" stack/workspaces/src/angee/scripts/changed_path_selection.py \
+              plan --root "$slot" "${compare[@]}" "${args[@]}" -- "${ignore[@]}")
+            postgres_tests=
+            postgres_groups='[]'
+          fi
+          jq . <<< "$plan"
+          matrix=$(jq -c --arg slot "$PRIMARY_SLOT" '
+            .shared.mode as $shared |
+            (if .stack.mode != "empty" or ($slot == "angee-messaging-bridges" and $shared != "empty")
+             then [{kind: "integration", group: 1, splits: 1}] else [] end)
+            + (if $slot != "angee" and $slot != "angee-messaging-bridges" then
+                (if $shared == "full" then 5 elif $shared == "selected" then 1 else 0 end) as $splits |
+                [range(1; $splits + 1) | {kind: "consumer", group: ., splits: $splits}]
+               else [] end)
+          ' <<< "$plan")
           {
-            echo "sqlite-mode=$sqlite_mode"
-            echo "sqlite-tests=$(jq -ce '.shared.paths' <<< "$plan")"
-            echo "addon-hosts=$(jq -ce '.hosts.paths' <<< "$plan")"
-            echo "addon-host-count=$(jq -er '.hosts.paths | length' <<< "$plan")"
+            echo "plan=$(jq -c . <<< "$plan")"
+            echo "sqlite-groups=$(jq -c '.groups // []' <<< "$plan")"
             echo "postgres-tests=$(printf '%s' "$postgres_tests" | tr '\n' ' ')"
             echo "postgres-groups=$postgres_groups"
+            echo "stack-matrix=$matrix"
           } >> "$GITHUB_OUTPUT"
 
-  # The suite runs as six contiguous shards of equal stored time
-  # (.test_durations, pytest-split); a test missing from it still runs in one.
-  # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
-  # and runner cleanup; retain per-test timings for balancing the shards.
   uv-shard:
-    name: uv ${{ matrix.group }}/6
+    name: uv ${{ matrix.group }}/${{ strategy.job-total }}
     needs: select
-    if: ${{ inputs.uv-enabled && needs.select.outputs.sqlite-mode != 'empty' }}
+    if: ${{ inputs.uv-enabled && needs.select.outputs.sqlite-groups != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4, 5, 6]
+        group: ${{ fromJSON(needs.select.outputs.sqlite-groups) }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -207,14 +376,19 @@ jobs:
           python-version: ${{ inputs.python-version }}
       - shell: bash
         env:
-          TESTS: ${{ needs.select.outputs.sqlite-tests }}
-          MODE: ${{ needs.select.outputs.sqlite-mode }}
+          TESTS: ${{ toJSON(fromJSON(needs.select.outputs.plan).shared.paths) }}
+          MODE: ${{ fromJSON(needs.select.outputs.plan).shared.mode }}
+          GROUP: ${{ matrix.group }}
+          SPLITS: ${{ strategy.job-total }}
         run: |
           mapfile -t tests < <(jq -r '.[]' <<< "$TESTS")
-          # A small selection can leave a shard nothing to run: pytest's exit code 5.
-          uv run --locked pytest -q -n auto --dist loadfile --durations=25 \
-            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} "${tests[@]}" \
-            || { [ $? -eq 5 ] && [ "$MODE" = selected ]; }
+          args=()
+          for test_path in $FRAMEWORK_QUALITY_TESTS; do args+=( --ignore "$test_path" ); done
+          for node in $FRAMEWORK_QUALITY_NODES; do args+=( --deselect "$node" ); done
+          if [ "$SPLITS" -gt 1 ]; then args+=( --splits "$SPLITS" --group "$GROUP" ); fi
+          env -u DATABASE_URL uv run --locked pytest -q -n auto --dist loadfile --durations=25 \
+            ${{ inputs.pytest-extra-args }} "${args[@]}" "${tests[@]}" \
+            || { [ $? -eq 5 ] && [ "$MODE" = selected ] && [ "$SPLITS" -gt 1 ]; }
 
   # The PostgreSQL selection is balanced over its own timing map
   # (.test_durations_postgres, least_duration): every worker flushes the
@@ -230,7 +404,7 @@ jobs:
     env:
       # A push to main measures the tests each group runs and keeps the measurements
       # for the timing map refresh in docs/checks.md; CI never writes the map itself.
-      RECORD_DURATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      RECORD_DURATIONS: ${{ github.ref == 'refs/heads/main' && fromJSON(needs.select.outputs.plan).shared.mode == 'full' }}
     strategy:
       fail-fast: false
       matrix:
@@ -310,64 +484,94 @@ jobs:
             postgresql-contracts.xml
           retention-days: 14
 
-  # One bounded job for every selected addon host.
   addon-hosts:
     name: addon hosts
     needs: select
-    if: ${{ inputs.uv-enabled && needs.select.outputs.addon-host-count != '0' }}
+    if: ${{ toJSON(fromJSON(needs.select.outputs.plan).hosts.paths) != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        if: inputs.uv-enabled
       - uses: astral-sh/setup-uv@v7
+        if: inputs.uv-enabled
         with:
           python-version: ${{ inputs.python-version }}
-      # The newest hosts composed against this lockfile; compose --if-stale recomposes a
-      # host whose composition inputs, the composer's own snapshot of its apps' sources
-      # and settings, changed since, so a stale host never runs.
       - uses: actions/cache@v4
+        if: inputs.uv-enabled
         with:
           path: .test-hosts/*/composed_test_runtime
           key: test-hosts-${{ hashFiles('uv.lock') }}-${{ hashFiles('src/**/*.py', 'src/**/*.zed', 'src/**/pyproject.toml', '!src/**/tests/**') }}
           restore-keys: test-hosts-${{ hashFiles('uv.lock') }}-
+      - name: Start from an empty stack directory
+        if: ${{ !inputs.uv-enabled }}
+        run: rm -rf stack
+      - uses: actions/checkout@v5
+        if: ${{ !inputs.uv-enabled }}
+        with:
+          repository: ${{ inputs.framework-repository }}
+          ref: ${{ github.repository == 'ang-ee/angee-django' && github.sha || inputs.framework-ref }}
+          path: stack/workspaces/src/angee
+      - uses: ./stack/workspaces/src/angee/.github/actions/prepare-checks
+        if: ${{ !inputs.uv-enabled }}
+        id: prepare
+        with:
+          slot: ${{ env.PRIMARY_SLOT }}
+          extra: ${{ inputs.consumer-extra }}
+          profile: ${{ inputs.addons-profile }}
+          bridges-ref: ${{ inputs.bridges-ref }}
+          sources: ${{ inputs.consumer-sources }}
+          sources-token: ${{ secrets.ADDON_SOURCES_TOKEN || github.token }}
+          bridges-token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+          angee-version: ${{ inputs.angee-version }}
+          python-version: ${{ inputs.python-version }}
+          roots: ${{ inputs.consumer-roots }}
       - shell: bash
         env:
-          ADDON_HOSTS: ${{ needs.select.outputs.addon-hosts }}
+          UV_ENABLED: ${{ inputs.uv-enabled }}
+          ADDON_HOSTS: ${{ toJSON(fromJSON(needs.select.outputs.plan).hosts.paths) }}
         run: |
+          python=( uv run --locked python )
+          if [ "$UV_ENABLED" = false ]; then
+            python=( "$PWD/stack/.venv/bin/python" )
+            cd "stack/workspaces/src/$PRIMARY_SLOT"
+          fi
           mapfile -t addons < <(jq -r '.[]' <<< "$ADDON_HOSTS")
           status=0
           for addon in "${addons[@]}"; do
             echo "::group::$addon"
-            uv run --locked python -m angee.base.testing.host "$addon" -q --durations=10 || status=1
+            env -u DATABASE_URL "${python[@]}" -m angee.base.testing.host "$addon" -q --durations=10 || status=1
             echo "::endgroup::"
           done
-          exit $status
+          exit "$status"
 
-  # Preserve the required check name and accept only intentional skips.
+  # Preserve the required check name and accept only skips justified by the plan.
   uv:
     if: ${{ always() && inputs.uv-enabled }}
     needs: [python-quality, select, uv-shard, uv-postgres, addon-hosts]
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
-      - run: |
-          echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }} hosts=${{ needs.addon-hosts.result }}"
-          test "${{ needs.python-quality.result }}" = success
-          test "${{ needs.select.result }}" = success
-          # The shards are skipped where select turned them off: the changed paths reach
-          # no Python test.
-          test "${{ needs.uv-shard.result }}" = success || {
-            test "${{ needs.select.outputs.sqlite-mode }}" = empty && test "${{ needs.uv-shard.result }}" = skipped
-          } || exit 1
-          test "${{ needs.uv-postgres.result }}" = success || {
-            test "${{ needs.select.outputs.postgres-groups }}" = '[]' && test "${{ needs.uv-postgres.result }}" = skipped
-          } || exit 1
-          test "${{ needs.addon-hosts.result }}" = success || {
-            test "${{ needs.select.outputs.addon-host-count }}" = 0 && test "${{ needs.addon-hosts.result }}" = skipped
-          } || exit 1
+      - shell: bash
+        env:
+          PLAN: ${{ needs.select.outputs.plan }}
+          SELECT: ${{ needs.select.result }}
+          QUALITY: ${{ needs.python-quality.result }}
+          SQLITE: ${{ needs.uv-shard.result }}
+          SQLITE_GROUPS: ${{ needs.select.outputs.sqlite-groups }}
+          POSTGRES: ${{ needs.uv-postgres.result }}
+          POSTGRES_GROUPS: ${{ needs.select.outputs.postgres-groups }}
+          HOSTS: ${{ needs.addon-hosts.result }}
+        run: |
+          test "$SELECT" = success
+          test "$QUALITY" = success
+          test "$SQLITE" = success || { test "$SQLITE" = skipped && test "$SQLITE_GROUPS" = '[]'; } || exit 1
+          test "$POSTGRES" = success || { test "$POSTGRES" = skipped && test "$POSTGRES_GROUPS" = '[]'; } || exit 1
+          test "$HOSTS" = success || { test "$HOSTS" = skipped && jq -e '.hosts.paths == []' <<< "$PLAN"; } || exit 1
 
   pnpm:
-    if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
+    needs: select
+    if: ${{ inputs.pnpm-enabled && fromJSON(needs.select.outputs.plan).packages.mode != 'empty' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     steps:
@@ -389,34 +593,41 @@ jobs:
           package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r --filter './packages/**' typecheck
-      - run: pnpm -r --filter './packages/**' test
+      - name: Check reached framework packages
+        env:
+          PACKAGES: ${{ toJSON(fromJSON(needs.select.outputs.plan).packages) }}
+        run: |
+          filters=( --filter './packages/**' )
+          if [ "$(jq -r '.mode' <<< "$PACKAGES")" = selected ]; then
+            filters=( --filter '!./src/**' --filter '!./examples/**' )
+            while IFS= read -r directory; do filters+=( --filter "...{./$directory}" ); done < <(
+              jq -r '.paths[]' <<< "$PACKAGES"
+            )
+          fi
+          pnpm -r --fail-if-no-match "${filters[@]}" typecheck
+          pnpm -r --fail-if-no-match "${filters[@]}" test
       - run: pnpm -r --filter './packages/**' --filter '!@angee/storybook' build
       - run: node packages/scripts/check-dist-imports.mjs
       - run: node packages/ui/scripts/check-views-exports.mjs
 
-  # The composed-stack lane dogfoods the two-command install path: install the
-  # released angee CLI, render the in-repo framework-dev stack template,
-  # compose it (native compose + prebuilt schema check + web codegen — no database needed), then
-  # typecheck/test addon fragments (the stack root's runtime/ is the @angee/gql
-  # fixture), and run the optional bridge source tests.
-  # The consolidated checkout supplies packages, src, examples, and
-  # templates. Only the optional full-profile bridges remain external.
-  # A consumer call runs six groups: the first provisions and smokes the host and
-  # checks lint, types and frontend fragments; the other five split the consumer's
-  # Python collection, each on its own PostgreSQL host. The stack job keeps one verdict.
+  # Consumers keep their authored project roots for legacy tests and use native
+  # addon roots for a focused integration. The matrix does not encode test policy.
   stack-shard:
-    name: stack ${{ matrix.group }}/${{ strategy.job-total }}
-    if: ${{ inputs.stack-enabled && inputs.pr-checks-enabled }}
+    name: stack ${{ matrix.kind }} ${{ matrix.group }}/${{ matrix.splits }}
+    needs: select
+    if: ${{ inputs.stack-enabled && needs.select.outputs.stack-matrix != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(inputs.consumer-path != '' && '[1,2,3,4,5,6]' || '[1]') }}
+        include: ${{ fromJSON(needs.select.outputs.stack-matrix) }}
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: >-
+          ${{ (matrix.kind == 'consumer' || fromJSON(needs.select.outputs.plan).stack.mode == 'full' ||
+          (fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
+          fromJSON(needs.select.outputs.plan).packages.mode == 'empty')) && 'pgvector/pgvector:pg17' || '' }}
         env:
           POSTGRES_DB: angee
           POSTGRES_PASSWORD: postgres
@@ -429,8 +640,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      # The checkouts below clean only their own paths; a reused self-hosted runner keeps
-      # the previous job's stack/ beside them, so start from an empty one.
       - name: Start from an empty stack directory
         run: rm -rf stack
       - uses: actions/checkout@v5
@@ -438,192 +647,103 @@ jobs:
           repository: ${{ inputs.framework-repository }}
           ref: ${{ github.repository == 'ang-ee/angee-django' && github.sha || inputs.framework-ref }}
           path: stack/workspaces/src/angee
-      - uses: actions/checkout@v5
-        if: ${{ inputs.addons-profile == 'full' }}
+      - uses: ./stack/workspaces/src/angee/.github/actions/prepare-checks
+        id: prepare
         with:
-          repository: ang-ee/angee-messaging-bridges
-          ref: ${{ github.repository == 'ang-ee/angee-messaging-bridges' && github.sha || inputs.bridges-ref }}
-          path: stack/workspaces/src/angee-messaging-bridges
-          token: ${{ secrets.BRIDGES_TOKEN || github.token }}
-      - name: Check out declared consumer addon sources
-        if: ${{ inputs.consumer-path != '' }}
+          slot: ${{ env.PRIMARY_SLOT }}
+          extra: ${{ inputs.consumer-extra }}
+          profile: ${{ inputs.addons-profile }}
+          bridges-ref: ${{ inputs.bridges-ref }}
+          sources: ${{ inputs.consumer-sources }}
+          sources-token: ${{ secrets.ADDON_SOURCES_TOKEN || github.token }}
+          bridges-token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+          angee-version: ${{ inputs.angee-version }}
+          python-version: ${{ inputs.python-version }}
+          roots: >-
+            ${{ matrix.kind == 'integration' &&
+            fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
+            fromJSON(needs.select.outputs.plan).packages.mode == 'empty' &&
+            toJSON(fromJSON(needs.select.outputs.plan).stack.paths) || inputs.consumer-roots }}
+          add-roots: >-
+            ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'full' &&
+            toJSON(fromJSON(needs.select.outputs.plan).stack.paths) || '[]' }}
+      - name: Fetch the verified comparison base for native pytest
+        if: ${{ env.PRIMARY_SLOT != 'angee' && fromJSON(needs.select.outputs.plan).shared.mode == 'selected' }}
         env:
-          GH_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN || github.token }}
-          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
-          CALLER_REPOSITORY: ${{ github.repository }}
-          CALLER_SHA: ${{ github.sha }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          sources = json.loads(os.environ["CONSUMER_SOURCES"])
-          assert sources, "Consumer checks require declared addon sources"
-          subprocess.run(["gh", "auth", "setup-git"], check=True)
-          for source in sources:
-              slot = source["path"]
-              assert Path(slot).name == slot and slot not in {".", "..", "angee"}, slot
-              target = Path("stack/workspaces/src") / slot
-              repository = source["repository"]
-              ref = os.environ["CALLER_SHA"] if repository == os.environ["CALLER_REPOSITORY"] else source["ref"]
-              subprocess.run(["gh", "repo", "clone", repository, str(target), "--", "--depth=1", "--no-checkout"], check=True)
-              subprocess.run(["git", "-C", str(target), "fetch", "--depth=1", "origin", ref], check=True)
-              subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
-          PY
-      - name: Fetch the caller's pull-request base for test selection
-        if: ${{ github.event_name == 'pull_request' && (inputs.consumer-path != '' || (inputs.addons-profile == 'full' && github.repository == 'ang-ee/angee-messaging-bridges')) }}
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
-          CONSUMER_PATH: ${{ inputs.consumer-path }}
-          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
-          CALLER_REPOSITORY: ${{ github.repository }}
         run: |
-          slot=$CONSUMER_PATH
-          if [ -n "$slot" ]; then
-            source=$(jq -r --arg slot "$slot" '.[] | select(.path == $slot) | .repository' <<< "$CONSUMER_SOURCES")
-            if [ "$source" != "$CALLER_REPOSITORY" ]; then exit 0; fi
-          else
-            slot=angee-messaging-bridges
+          slot="stack/workspaces/src/$PRIMARY_SLOT"
+          if ! git -C "$slot" cat-file -e "$COMPARE_BASE^{commit}"; then
+            git -C "$slot" fetch --depth=1 origin "$COMPARE_BASE"
           fi
-          target="stack/workspaces/src/$slot"
-          if ! git -C "$target" cat-file -e "$BASE^{commit}"; then
-            git -C "$target" fetch --depth=1 origin "$BASE" || echo "::warning::Comparison base unavailable; running full tests"
-          fi
+          test "$(git -C "$slot" rev-parse HEAD)" = "$HEAD_SHA"
           {
-            echo "TEST_BASE=$BASE"
+            echo "TEST_BASE=$COMPARE_BASE"
             echo "TEST_HEAD=$HEAD_SHA"
           } >> "$GITHUB_ENV"
-      # Into the job's own directory: no root, and nothing outlives the job on a reused
-      # self-hosted runner.
-      - name: Install the angee CLI (the public install path)
+      - name: Enable pgvector for provision or PostgreSQL pytest
+        if: >-
+          ${{ matrix.kind == 'consumer' || fromJSON(needs.select.outputs.plan).stack.mode == 'full' ||
+          (fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
+          fromJSON(needs.select.outputs.plan).packages.mode == 'empty') }}
         run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} ANGEE_INSTALL_DIR="$RUNNER_TEMP/bin" sh
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      # uv runs from the stack root, above the framework checkout, where it would not
-      # find the framework's .python-version.
-      - name: Use the framework's Python
-        if: ${{ inputs.python-version == '' }}
-        run: echo "UV_PYTHON=$(cat stack/workspaces/src/angee/.python-version)" >> "$GITHUB_ENV"
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: ${{ inputs.python-version }}
-      # The action empties its destination first, so on runners sharing one home its
-      # default ~/setup-pnpm lets one job delete another's pnpm mid-run.
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 11.1.3
-          dest: ${{ runner.temp }}/setup-pnpm
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "26"
-          # This job caches nothing, but on a reused runner the workspace root can hold
-          # another job's package.json, from whose packageManager v5 would start a cache.
-          package-manager-cache: false
-      - name: Render the stack (local template ref — no registry round-trip)
-        run: >-
-          angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee/templates/stacks/dev"
-          "$GITHUB_WORKSPACE/stack" --force --yes
-          --input project_name=ci-stack
-          --input addons_profile=${{ inputs.addons-profile }}
-      - name: Configure the consumer composition and workspace
-        if: ${{ inputs.consumer-path != '' }}
-        working-directory: stack
-        env:
-          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
-          CONSUMER_ROOTS: ${{ inputs.consumer-roots }}
-        run: |
-          uv run --no-project --with pyyaml python - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-          import yaml
-
-          sources = json.loads(os.environ["CONSUMER_SOURCES"])
-          roots = json.loads(os.environ["CONSUMER_ROOTS"])
-          assert roots, "Consumer checks require explicit installed app roots"
-          path = Path("settings.yaml")
-          settings = yaml.safe_load(path.read_text())
-          settings["INSTALLED_APPS"] = roots
-          path.write_text(yaml.safe_dump(settings, sort_keys=False))
-          path = Path("pnpm-workspace.yaml")
-          workspace = yaml.safe_load(path.read_text())
-          workspace["packages"].extend(
-              "workspaces/src/" + source["path"] + "/src/*/*/web" for source in sources
-          )
-          path.write_text(yaml.safe_dump(workspace, sort_keys=False))
-          # Native uv reads each collection's pyproject and workspace sources.
-          subprocess.run([
-              "uv", "add", "--editable", "--no-workspace",
-              *(str(Path("workspaces/src") / source["path"]) for source in sources),
-          ], check=True)
-          PY
-      - name: Enable Matrix to check every bridge web fragment
-        if: ${{ inputs.addons-profile == 'full' }}
-        working-directory: stack
-        run: |
-          uv run --no-project --with pyyaml python - <<'PY'
-          from pathlib import Path
-          import yaml
-
-          path = Path("settings.yaml")
-          settings = yaml.safe_load(path.read_text())
-          settings["INSTALLED_APPS"].append("angee.messaging_integrate_matrix")
-          path.write_text(yaml.safe_dump(settings, sort_keys=False))
-          PY
-      - name: Export the framework's locked check tools
-        if: ${{ inputs.consumer-path != '' || inputs.addons-profile == 'full' }}
-        working-directory: stack/workspaces/src/angee
-        run: uv export --locked --only-group dev --no-hashes --no-emit-workspace --output-file "$GITHUB_WORKSPACE/check-tools.txt"
-      - name: Resolve check tools with the stack runtime
-        if: ${{ inputs.consumer-path != '' || inputs.addons-profile == 'full' }}
-        working-directory: stack
-        # One environment keeps plugin entry points consistent with imported code.
-        run: uv add --dev --requirements "$GITHUB_WORKSPACE/check-tools.txt" --no-sync
-      - name: Enable pgvector for the host and test databases
-        run: |
-          # The host database already exists; worker databases inherit template1.
           for database in angee template1; do
             docker exec ${{ job.services.postgres.id }} psql -U postgres -d "$database" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm"
           done
-      - name: Compose the runtime and SDL (no database needed)
+          echo "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/angee" >> "$GITHUB_ENV"
+      - name: Compose the runtime
+        if: ${{ matrix.kind == 'consumer' || fromJSON(needs.select.outputs.plan).stack.mode != 'empty' }}
+        working-directory: stack
+        run: .venv/bin/python manage.py compose
+      - name: Verify native migration history and SDL
+        if: ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode != 'empty' }}
         working-directory: stack
         run: |
-          uv sync
-          uv run --no-sync python manage.py compose
-          # Author disposable native history, then verify the native composition:
-          # the authored history must reproduce the composed models exactly.
-          uv run --no-sync python manage.py makemigrations --noinput
-          uv run --no-sync python manage.py makemigrations --check --dry-run
-          uv run --no-sync python manage.py compose --check
-          uv run --no-sync python manage.py schema --check
-      # Only the smoke reads the host database; consumer shards test in pytest-django's own.
+          .venv/bin/python manage.py makemigrations --noinput
+          .venv/bin/python manage.py makemigrations --check --dry-run
+          .venv/bin/python manage.py compose --check
+          .venv/bin/python manage.py shell --verbosity 0 -c '
+          from django.core.management import call_command, get_commands
+
+          if "schema" in get_commands():
+              call_command("schema", check=True)
+          '
+      - name: Migrate the selected composition
+        if: >-
+          ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
+          fromJSON(needs.select.outputs.plan).packages.mode == 'empty' }}
+        working-directory: stack
+        run: |
+          .venv/bin/python manage.py migrate --noinput
+          # Populate the empty test database's permission schema before system checks.
+          .venv/bin/python manage.py rebac --skip-checks sync
       - name: Provision the composed stack
-        if: ${{ matrix.group == 1 }}
+        if: ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'full' }}
         working-directory: stack
-        run: |
-          uv run --no-sync python manage.py provision
+        run: .venv/bin/python manage.py provision
       # Composition escapes the bare source host cannot see: every system check on the
       # composed models, the demo tier loading, and every folded model with a row loading
       # one with only its primary key and saving it again (deferred-column reads,
       # MRO-ordered save overrides). Append-only models refuse edits by contract, so they
       # only load.
       - name: Smoke the composed models
-        if: ${{ matrix.group == 1 }}
+        if: >-
+          ${{ matrix.kind == 'integration' && (fromJSON(needs.select.outputs.plan).stack.mode == 'full' ||
+          (fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
+          fromJSON(needs.select.outputs.plan).packages.mode == 'empty')) }}
         working-directory: stack
         run: |
-          uv run --no-sync python manage.py check --database default
-          uv run --no-sync python manage.py resources load --include-demo
-          uv run --no-sync python manage.py shell -c '
+          .venv/bin/python manage.py check --database default
+          .venv/bin/python manage.py shell --verbosity 0 -c '
           from django.apps import apps
+          from django.core.management import call_command, get_commands
           from rebac import system_context
 
           from angee.base.addons import is_angee_addon
           from angee.base.models.append_only import AppendOnlyModel
+
+          if "resources" in get_commands():
+              call_command("resources", "load", "--include-demo")
 
           failures, loaded = [], 0
           with system_context(reason="ci.composed_model_smoke"):
@@ -639,67 +759,8 @@ jobs:
           print(f"Loaded and saved one row of {loaded} composed models.")
           assert not failures, "\n".join(failures)
           '
-      - name: Lint the consumer with the framework policy
-        if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
-        working-directory: stack
-        env:
-          CONSUMER_PATH: ${{ inputs.consumer-path }}
-        run: uv run --no-sync python -m ruff check "workspaces/src/$CONSUMER_PATH" --no-cache
-      - name: Typecheck the consumer with the framework policy and native typing host
-        if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
-        working-directory: stack
-        env:
-          CONSUMER_PATH: ${{ inputs.consumer-path }}
-          CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
-        run: |
-          uv run --no-sync python - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
-
-          import tomlkit
-          import yaml
-
-          host = Path.cwd().resolve()
-          slot = host / "workspaces/src" / os.environ["CONSUMER_PATH"]
-          framework = host / "workspaces/src/angee"
-          typing_root = host / ".mypy_cache/consumer_typing"
-          typing_root.mkdir(parents=True, exist_ok=True)
-          # Authored isolated settings use the same native configuration owner.
-          (typing_root / "ci_consumer_typing.py").write_text((host / "settings.py").read_text())
-          authored = yaml.safe_load((host / "settings.yaml").read_text())
-          authored["COMPOSE_OUTPUT_DIR"] = str(typing_root / "ci_typing_runtime")
-          authored["COMPOSE_OUTPUT_MODULE"] = "ci_typing_runtime"
-          authored["DATABASES"] = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
-          (typing_root / "settings.yaml").write_text(yaml.safe_dump(authored, sort_keys=False))
-          # Locked angee-django-stubs gives its configured module priority over the env.
-          # Reuse the full policy; change only that native project selection.
-          policy = tomlkit.parse((framework / "pyproject.toml").read_text())
-          policy["tool"]["django-stubs"]["django_settings_module"] = "ci_consumer_typing"
-          config = typing_root / "mypy.toml"
-          config.write_text(tomlkit.dumps(policy))
-          os.environ["ANGEE_PROJECT_DIR"] = str(typing_root)
-          os.environ.pop("DATABASE_URL", None)
-          os.environ.pop("YAMLCONF_CONFFILE", None)
-          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
-              str(typing_root), str(framework), os.environ.get("PYTHONPATH"),
-          )))
-          source_roots = sorted(
-              str(host / "workspaces/src" / source["path"] / "src")
-              for source in json.loads(os.environ["CONSUMER_SOURCES"])
-          )
-          os.environ["MYPYPATH"] = os.pathsep.join(dict.fromkeys(filter(None, (
-              str(typing_root), str(slot / "src"), *source_roots, os.environ.get("MYPYPATH"),
-          ))))
-          subprocess.run([
-              sys.executable, "-m", "mypy", "--config-file", str(config),
-              str(slot / "src"),
-          ], cwd=framework, check=True)
-          PY
       - name: Size the PostgreSQL lock table for consumer test schemas
-        if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
+        if: ${{ matrix.kind == 'consumer' }}
         run: |
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
@@ -709,19 +770,19 @@ jobs:
           port=$(docker inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' ${{ job.services.postgres.id }})
           echo "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:$port/angee" >> "$GITHUB_ENV"
       - name: Run the consumer's PostgreSQL test shard
-        if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
+        if: ${{ matrix.kind == 'consumer' }}
         working-directory: stack
         env:
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
           DJANGO_SETTINGS_MODULE: settings
-          CONSUMER_PATH: ${{ inputs.consumer-path }}
-          CONSUMER_TESTS: ${{ inputs.consumer-tests }}
+          QUALITY_TESTS: ${{ inputs.consumer-quality-tests }}
           CONSUMER_ROOTS: ${{ inputs.consumer-roots }}
-          CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}
-          CONSUMER_SPLITS: ${{ strategy.job-total }}
+          CONSUMER_EXTRA: ${{ inputs.consumer-extra }}
+          CONSUMER_SPLITS: ${{ matrix.splits }}
           CONSUMER_GROUP: ${{ matrix.group }}
+          DONOR: ${{ steps.prepare.outputs.donor }}
         run: |
-          uv run --no-sync python - <<'PY'
+          .venv/bin/python - <<'PY'
           import json
           import os
           import sys
@@ -729,76 +790,143 @@ jobs:
 
           import django
 
-          slot = (Path("workspaces/src") / os.environ["CONSUMER_PATH"]).resolve()
-          paths = json.loads(os.environ["CONSUMER_TESTS"])
-          assert paths, "Consumer checks require explicit test paths"
           host = Path.cwd().resolve()
-          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
-              str(host), os.environ.get("PYTHONPATH"),
-          )))
+          slot = (host / "workspaces/src" / os.environ["PRIMARY_SLOT"]).resolve()
+          os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (str(host), os.environ.get("PYTHONPATH"))))
           os.chdir(slot)
           sys.path[:0] = [str(slot), str(host), str(host / "workspaces/src/angee/scripts")]
           from changed_path_selection import run_selected
 
-          # Populate the authored host before collecting consumer fixture plugins.
-          # Native installed distributions already own addon importability.
           django.setup()
-          plugins = json.loads(os.environ["CONSUMER_PYTEST_PLUGINS"])
-          raise SystemExit(run_selected([
-              "-c", "/dev/null", "--rootdir", str(slot), "--confcutdir", str(slot),
-              "--import-mode=importlib", "--nomigrations", "-o", "python_files=test*.py",
-              # Register pytest-django before the shared django_db_setup override.
-              "-p", "django", "-p", "angee.base.testing.fixtures", "-p", "angee.provenance.testing.fixtures",
-              *(arg for plugin in plugins for arg in ("-p", plugin)),
-              "-p", "no:randomly", "-n", "4", "--dist", "worksteal", "-q",
-              # Group 1 carries the composed checks; the other groups split the collection.
-              "--splits", str(int(os.environ["CONSUMER_SPLITS"]) - 1),
-              "--group", str(int(os.environ["CONSUMER_GROUP"]) - 1),
-              "--splitting-algorithm", "least_duration", "--durations=25",
-              "-o", "faulthandler_timeout=300",
-              *(str(slot / path) for path in paths),
-          ], root=slot, base=os.environ.get("TEST_BASE"), head=os.environ.get("TEST_HEAD"),
-              apps=json.loads(os.environ["CONSUMER_ROOTS"])))
+          args = ["-n", "4", "--dist", "worksteal", "-q", "--durations=25", "-o", "faulthandler_timeout=300"]
+          for test_path in json.loads(os.environ["QUALITY_TESTS"]):
+              args.extend(("--ignore", test_path))
+          splits = os.environ["CONSUMER_SPLITS"]
+          if int(splits) > 1:
+              args.extend((
+                  "--splits", splits, "--group", os.environ["CONSUMER_GROUP"],
+                  "--splitting-algorithm", "least_duration",
+              ))
+          extra = os.environ["CONSUMER_EXTRA"]
+          donor = os.environ["DONOR"]
+          raise SystemExit(run_selected(
+              args, root=slot, base=os.environ.get("TEST_BASE"), head=os.environ.get("TEST_HEAD"),
+              apps=json.loads(os.environ["CONSUMER_ROOTS"]), extra=(extra,) if extra else (),
+              donor=Path(donor) if donor else None,
+          ))
           PY
-      - name: Install the stack JS workspace and generate typed documents
-        if: ${{ matrix.group == 1 }}
-        working-directory: stack
-        run: |
-          if [ ! -f pnpm-lock.yaml ]; then
-            pnpm install --lockfile-only --no-frozen-lockfile
-          fi
-          pnpm install --frozen-lockfile
-          pnpm --config.verify-deps-before-run=false --dir web exec angee-web-codegen --runtime ../runtime --web-root .
-      # The framework's packages job checks its packages hermetically, so the
-      # composition checks fragments only. Each Vitest run sizes its worker pool
-      # to the whole runner, so fragments test one package at a time.
-      - name: Typecheck and test all fragments against the composition
-        if: ${{ matrix.group == 1 }}
+      - name: Identify the composed web projects
+        id: fragments
+        if: ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode != 'empty' }}
         working-directory: stack
         env:
-          CONSUMER_PATH: ${{ inputs.consumer-path }}
+          PLAN: ${{ needs.select.outputs.plan }}
         run: |
-          if [ -n "$CONSUMER_PATH" ]; then
-            fragments="./workspaces/src/$CONSUMER_PATH/src/**"
+          filters=()
+          mode=$(jq -r '.stack.mode' <<< "$PLAN")
+          package_mode=$(jq -r '.packages.mode' <<< "$PLAN")
+          if [ "$mode" = full ] || [ "$package_mode" = full ]; then
+            if [ "$PRIMARY_SLOT" = angee ] || [ "$PRIMARY_SLOT" = angee-messaging-bridges ]; then
+              filters+=( --filter '!./workspaces/src/angee/packages/**' )
+            else
+              filters+=( --filter "./workspaces/src/$PRIMARY_SLOT/src/**" )
+            fi
           else
-            fragments="!./workspaces/src/angee/packages/**"
+            if [ -f runtime/web/manifest.json ]; then
+              roots=$(jq -c '.stack.paths' <<< "$PLAN")
+              while IFS= read -r name; do filters+=( --filter "...$name" ); done < <(
+                jq -r --argjson roots "$roots" '
+                  .addonPackages[] | .app as $app | select($roots | index($app)) | .package
+                ' runtime/web/manifest.json
+              )
+            fi
+            while IFS= read -r directory; do
+              filters+=( --filter "...{./workspaces/src/$PRIMARY_SLOT/$directory}" )
+            done < <(jq -r '.packages.paths[]' <<< "$PLAN")
+            if (("${#filters[@]}")); then filters+=( --filter '!./workspaces/src/angee/packages/**' ); fi
           fi
-          pnpm -r --fail-if-no-match --filter "$fragments" typecheck
-          pnpm -r --fail-if-no-match --workspace-concurrency=1 --filter "$fragments" test
-      - name: Pytest the bridge source contracts
-        if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
+          if (("${#filters[@]}")); then
+            printf '%s\n' "${filters[@]}" > .ci-fragment-filters
+            echo "reached=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: pnpm/action-setup@v5
+        if: steps.fragments.outputs.reached == 'true'
+        with:
+          version: 11.1.3
+          dest: ${{ runner.temp }}/setup-pnpm
+      - uses: actions/setup-node@v5
+        if: steps.fragments.outputs.reached == 'true'
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Check reached fragments against generated documents
+        if: steps.fragments.outputs.reached == 'true'
         working-directory: stack
         run: |
-          uv run --no-sync --project "$GITHUB_WORKSPACE/stack" \
-            --directory "$GITHUB_WORKSPACE/stack/workspaces/src/angee-messaging-bridges" \
-            python "$GITHUB_WORKSPACE/stack/workspaces/src/angee/scripts/changed_path_selection.py" pytest \
-            --base "${TEST_BASE:-}" --head "${TEST_HEAD:-}" -- -q ${{ inputs.pytest-extra-args }}
+          cp "workspaces/src/$PRIMARY_SLOT/.github/ci/pnpm-lock.yaml" pnpm-lock.yaml
+          pnpm install --frozen-lockfile
+          pnpm --config.verify-deps-before-run=false --dir web exec angee-web-codegen --runtime ../runtime --web-root .
+          mapfile -t filters < .ci-fragment-filters
+          pnpm -r --fail-if-no-match "${filters[@]}" typecheck
+          pnpm -r --fail-if-no-match --workspace-concurrency=1 "${filters[@]}" test
+      - name: Pytest the bridge source contracts
+        if: >-
+          ${{ matrix.kind == 'integration' &&
+          ((env.PRIMARY_SLOT == 'angee-messaging-bridges' && fromJSON(needs.select.outputs.plan).shared.mode != 'empty') ||
+           (env.PRIMARY_SLOT == 'angee' && inputs.addons-profile == 'full' && fromJSON(needs.select.outputs.plan).stack.mode != 'empty')) }}
+        working-directory: stack/workspaces/src/angee-messaging-bridges
+        env:
+          DONOR: ${{ steps.prepare.outputs.donor }}
+          QUALITY_TESTS: ${{ inputs.consumer-quality-tests }}
+          STACK_MODE: ${{ fromJSON(needs.select.outputs.plan).stack.mode }}
+          REACHED_ROOTS: ${{ toJSON(fromJSON(needs.select.outputs.plan).stack.paths) }}
+        run: |
+          if [ "$PRIMARY_SLOT" = angee ] && [ "$STACK_MODE" = selected ]; then
+            reached=$("$GITHUB_WORKSPACE/stack/.venv/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-  # Preserve the public check name and fail it for any unsuccessful matrix result.
+          from django_compose.components import inspect_apps
+
+          roots = json.loads(os.environ["REACHED_ROOTS"])
+          entries = inspect_apps(roots, group="angee.addons")["app_entries"] if roots else []
+          print(any(
+              entry["name"] in roots and Path(entry["path"]).is_relative_to(Path.cwd())
+              for entry in entries
+          ))
+          PY
+            )
+            if [ "$reached" = False ]; then
+              echo "No bridge source provider reached."
+              exit 0
+            fi
+          fi
+          args=()
+          ignore=( --ignore "$BRIDGE_SOURCE_GUARD" )
+          if [ -n "$DONOR" ]; then args+=( --donor "$DONOR" ); fi
+          while IFS= read -r test_path; do ignore+=( --ignore "$test_path" ); done < <(jq -r '.[]' <<< "$QUALITY_TESTS")
+          env -u DATABASE_URL "$GITHUB_WORKSPACE/stack/.venv/bin/python" ../angee/scripts/changed_path_selection.py pytest \
+            --base "${TEST_BASE:-}" --head "${TEST_HEAD:-}" "${args[@]}" -- -q "${ignore[@]}" ${{ inputs.pytest-extra-args }}
+
+  # A green aggregate requires the exact plan and each enabled worker's verdict.
   stack:
     if: ${{ always() && inputs.stack-enabled }}
-    needs: [stack-shard]
+    needs: [select, stack-shard, addon-hosts, python-quality]
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
-      - run: test "${{ needs.stack-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.stack-shard.result }}" = skipped; }
+      - shell: bash
+        env:
+          PLAN: ${{ needs.select.outputs.plan }}
+          SELECT: ${{ needs.select.result }}
+          MATRIX: ${{ needs.select.outputs.stack-matrix }}
+          SHARDS: ${{ needs.stack-shard.result }}
+          HOSTS: ${{ needs.addon-hosts.result }}
+          QUALITY: ${{ needs.python-quality.result }}
+          QUALITY_ENABLED: ${{ inputs.consumer-path != '' || inputs.consumer-quality-tests != '[]' }}
+        run: |
+          test "$SELECT" = success
+          test "$SHARDS" = success || { test "$SHARDS" = skipped && test "$MATRIX" = '[]'; } || exit 1
+          test "$HOSTS" = success || { test "$HOSTS" = skipped && jq -e '.hosts.paths == []' <<< "$PLAN"; } || exit 1
+          if [ "$QUALITY_ENABLED" = true ]; then test "$QUALITY" = success; fi
