@@ -144,7 +144,6 @@ export {
   type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
-  lineRowErrorsFromDottedPaths,
   messagesForDottedPath,
   validationErrorMessages,
   validationErrorMap,

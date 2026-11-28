@@ -379,7 +379,7 @@ export function FormViewLines({
   lineFooter,
 }: FormViewLineProps & { surface: FormViewSurface }): React.ReactElement | null {
   const {
-    form, linesActive, linesResource, linesField, formReadOnly, lineRowErrors,
+    form, linesActive, linesResource, linesField, formReadOnly,
     history, startFieldInteraction, commitFieldInteraction,
   } = surface;
   if (!linesActive || !linesResource || !linesField) return null;
@@ -391,7 +391,6 @@ export function FormViewLines({
       lines={linesResource}
       parentRow={surface.displayRecord}
       readOnly={formReadOnly}
-      rowErrors={lineRowErrors}
       primaryFields={linePrimaryFields}
       fields={lineFields}
       supplementalColumns={lineSupplementalColumns}

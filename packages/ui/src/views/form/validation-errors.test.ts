@@ -20,7 +20,6 @@ import {
   formSubmitOutcome,
   invalidFormSubmit,
   jsonSchemaErrorMessage,
-  lineRowErrorsFromDottedPaths,
   markMemberErrors,
   MEMBER_ERRORS,
   messagesForDottedPath,
@@ -100,26 +99,6 @@ describe("markMemberErrors", () => {
     const given = errors();
     expect(markMemberErrors(given, fields)).toBe(given);
     expect(given).toStrictEqual(errors());
-  });
-});
-
-describe("lineRowErrorsFromDottedPaths", () => {
-  test("projects indexed child paths and ignores unrelated or malformed paths", () => {
-    expect(
-      lineRowErrorsFromDottedPaths(
-        {
-          "lines.0.label": ["Required"],
-          "lines.2.quantity": ["Invalid"],
-          "lines.summary": ["Ignored"],
-          title: ["Unrelated"],
-        },
-        "lines",
-      ),
-    ).toEqual([
-      { fieldErrors: { label: ["Required"] }, formErrors: [] },
-      undefined,
-      { fieldErrors: { quantity: ["Invalid"] }, formErrors: [] },
-    ]);
   });
 });
 

@@ -76,7 +76,7 @@ import {
 } from "./form-view-model";
 import { useSaveOperation, type ResourceOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, fieldErrorPaths, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalFocus, type FormSubmitResult,
+  applyFormErrors, fieldErrorPaths, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, useRefusalFocus, type FormSubmitResult,
 } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
@@ -249,7 +249,6 @@ export interface FormViewSaveSurface {
    * under its key (`CREATION_KEY_CONFLICT`); the next save is a new draft. The form's banner words it.
    */
   saveKeyConflict: boolean;
-  serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
   requiredFieldNames: ReadonlySet<string>;
   linesResource: DataResourceLinesMetadata | null;
@@ -637,7 +636,6 @@ export function useFormViewSave({
   React.useEffect(() => {
     syncRecordValues(values);
   }, [lineDraftDirty, syncRecordValues, values]);
-  const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveErrors = formErrorsFromForm(form.formState.errors);
   // The record form never locks its fields: a refusal's focus lands once the answer renders, on
   // the form library's timer.
@@ -1206,7 +1204,6 @@ export function useFormViewSave({
     saveBanner,
     saveConflict,
     saveKeyConflict,
-    serverFieldErrors,
     clearServerFieldError,
     requiredFieldNames,
     linesResource,

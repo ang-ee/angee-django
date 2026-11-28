@@ -94,6 +94,9 @@ export function BoundDescriptorField({
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
   const resolved = resolveField(declared, siblingValues);
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
+  // The control's descriptor is named by its path in the form, as every descriptor is: its own
+  // validation registers there and the form's write rules read it.
+  const descriptor = { ...resolved, name };
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
   // The record form's own descriptor for the path, the one its save reads, carries the mode lock.
   const recordField = { ...(surface.recordField(name) ?? resolved), name };
@@ -101,10 +104,10 @@ export function BoundDescriptorField({
   const repair = surface.repairState(recordField);
 
   return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
-    field={resolved.name} marked={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value)}
+    field={name} marked={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value)}
     readOnly={fieldReadOnly} once={repair.repairing} refusal={repair.refusal}
   ><LabeledDescriptorField
-    field={resolved}
+    field={descriptor}
     loading={repair.loading}
     value={bound.value}
     dialogValues={siblingValues}

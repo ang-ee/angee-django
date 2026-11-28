@@ -898,6 +898,47 @@ live in code docstrings.
   columns in. Not in this change: the server refusing an order object of
   several keys; a declared `order={{…}}` stays an object, read in its written
   key order.
+- `@angee/ui`: **Changed API.** A record form's lines read the form's own
+  errors: a line's cell shows the error the form holds at its path
+  (`lines.1.label`), as a record field does, whether the server refused it or
+  the form's own check failed there. A line's cell holding a draft its widget
+  cannot read, a JSON cell whose text does not parse, now stops Save at that
+  cell: it is marked invalid, says the check's reason ("Enter a valid value.")
+  under it, takes focus, and the lines' pane is selected; nothing is sent until
+  the draft parses. Before, the check held the draft against the column's bare
+  name (`payload`), where no control is, so Save sent nothing and showed
+  nothing, or, on a record with a field of that name, marked and focused that
+  field instead; and the record form handed a line's cells only the server's
+  reasons, projected into a second list. `EditableLines` now names each cell's
+  control by its path in the form, as a rows field names its cells and an
+  object or list field its members, so the form's own check follows the line
+  as lines are added, duplicated, removed or reordered. A server reason under
+  the lines does not: on any such operation after a refused save the form
+  drops every server reason under the lines, as it did before, while the
+  form's own check runs again and its reasons return at each line's new index.
+  Each cell reads its reasons from the form's errors under its line, worded by
+  the same walker of an error tree a record field's reasons go through
+  (`fieldErrorMessages`, narrowed to the cell's path by
+  `messagesForDottedPath`), so a reason of the line itself (`lines.1`) is no
+  cell's, whatever its columns are named, and a reason under a member of a
+  cell's value (`lines.1.payload.inner`) keeps its path, as an object field's
+  member's does; a server reason shows once under its cell, except in a
+  column named `ref`, where that walker never looks (a recorded defect, the
+  same as a record field's member of that name); several under one cell show
+  as one line, as a record field's do, and the reason describes the cell's
+  control (`aria-describedby`); a column with a reason on any line, the
+  server's or the check's, cannot be hidden. A `BoundDescriptorField` with a `scope` named its control
+  by the scope-relative name in the same way; it now names it by its whole
+  path (`settings.payload`), where the check's reason is marked and shown, and
+  its record field mark and relation draft read that path too. **Upgrade:**
+  `EditableLines` takes no `rowErrors`; set a cell's reasons in its form at
+  the cell's path (`setError`, or `useForm`'s `errors`).
+  `lineRowErrorsFromDottedPaths`, `FormViewSurface.lineRowErrors` and the
+  record form's `serverFieldErrors` are removed; read a field's errors from the
+  form (`getFieldState(path).error`, `formState.errors`). Not in this change:
+  a line's own reason (under `lines.1`, no cell) and a reason of the lines as a
+  whole (`lines`) still show nowhere but in the banner's line naming the
+  refused fields.
 - `@angee/ui`: **Changed contract.** A refusal's focus reaches the refused
   field whatever control draws it. In a `MutationDialog` and an
   `ActionFormDialog`, typed or schema-driven, a refused select, combobox, date,

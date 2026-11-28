@@ -2,7 +2,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useForm, type FieldErrors, type UseFormReturn } from "react-hook-form";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type DataResourceLinesMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { describe, expect, test } from "vitest";
@@ -14,7 +14,11 @@ import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets, type WidgetRenderProps } from "../../widgets";
 import { EditableLines } from "./EditableLines";
 import { useFormHistory, type FormHistory } from "./use-form-history";
-import type { ValidationErrors } from "./validation-errors";
+
+/** The first line's quantity refused, as a save's answer leaves it in the form. */
+const QUANTITY_REFUSED: FieldErrors<Record<string, unknown>> = {
+  lines: [{ quantity: { type: "server", message: "Must be positive" } }] as never,
+};
 
 const LINES = {
   field: "lines",
@@ -36,13 +40,14 @@ function Host({
   compact = false,
   readOnly = false,
   empty = false,
-  rowErrors,
+  errors,
 }: {
   inspectContext?: boolean;
   compact?: boolean;
   readOnly?: boolean;
   empty?: boolean;
-  rowErrors?: readonly ValidationErrors[];
+  /** Errors the form holds, as a refused save leaves them (the form library's own `errors` option). */
+  errors?: FieldErrors<Record<string, unknown>>;
   footer?: (rows: readonly Record<string, unknown>[]) => React.ReactNode;
 }): React.ReactElement {
   const form = useForm<Record<string, unknown>>({
@@ -52,6 +57,7 @@ function Host({
         { id: "two", label: "Gadget", quantity: 5, amount_subtotal: "25.00", position: 1 },
       ],
     },
+    errors,
   });
   const contextWidget = {
     read: ({ row, parentRow, field }: WidgetRenderProps) => (
@@ -78,7 +84,6 @@ function Host({
         parentRow={{ company: "Acme" }}
         footer={footer}
         readOnly={readOnly}
-        rowErrors={rowErrors}
         primaryFields={compact ? ["label"] : undefined}
         supplementalColumns={compact ? [{
           key: "subtotal",
@@ -319,10 +324,10 @@ describe("EditableLines", () => {
     expect(screen.queryByRole("button", { name: "Add line" })).toBeNull();
   });
 
-  test("retains invalid cell chrome and messages in the plain presentation", () => {
-    render(<Host rowErrors={[{ fieldErrors: { quantity: ["Must be positive"] }, formErrors: [] }]} />);
+  test("retains invalid cell chrome and messages in the plain presentation", async () => {
+    render(<Host errors={QUANTITY_REFUSED} />);
     const input = screen.getAllByRole("textbox", { name: "Quantity" })[0]!;
-    expect(input.getAttribute("aria-invalid")).toBe("true");
+    await waitFor(() => expect(input.getAttribute("aria-invalid")).toBe("true"));
     expect(input.parentElement?.className).toContain("border-danger");
     expect(screen.getByText("Must be positive")).toBeTruthy();
   });
@@ -349,8 +354,8 @@ describe("EditableLines", () => {
     const view = render(<Host compact />);
     await toggleField("Quantity");
     await toggleField("Quantity");
-    view.rerender(<Host compact rowErrors={[{ fieldErrors: { quantity: ["Must be positive"] }, formErrors: [] }]} />);
-    expect(screen.getByText("Must be positive")).toBeTruthy();
+    view.rerender(<Host compact errors={QUANTITY_REFUSED} />);
+    expect(await screen.findByText("Must be positive")).toBeTruthy();
     expect(screen.getAllByRole("textbox", { name: "Quantity" })[0]!.getAttribute("aria-invalid")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
     expect((await screen.findByRole("menuitemcheckbox", { name: "Quantity" })).getAttribute("aria-disabled")).toBe("true");
