@@ -43,6 +43,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, cast
 
+from celery.exceptions import SoftTimeLimitExceeded
 from mailparser_reply import EmailReplyParser
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
@@ -105,9 +106,9 @@ _RETAINED_HEADERS = ("list-id", "list-unsubscribe", "reply-to", "auto-submitted"
 def parse_message(
     raw: bytes,
     *,
-    mailbox: str,
-    uid: int,
-    uidvalidity: int,
+    mailbox: str = "",
+    uid: int | None = None,
+    uidvalidity: int | None = None,
     flags: tuple[Any, ...] = (),
     internal_date: datetime | None = None,
     own_addresses: frozenset[str] = frozenset(),
@@ -123,8 +124,8 @@ def parse_message(
     oversized message: the size lands in metadata and the body stays empty rather
     than the message being dropped.
 
-    Raises whatever the MIME layer raises on hopeless input — the caller wraps
-    with :func:`fallback_message` so a poison message still lands.
+    Transport facts are optional for archive messages; absent UIDs are never
+    fabricated. :func:`parse_message_or_fallback` isolates poison messages.
     """
 
     message = cast(EmailMessage, message_from_bytes(raw, policy=email_policy.default))
@@ -163,9 +164,9 @@ def parse_message(
 def fallback_message(
     raw: bytes,
     *,
-    mailbox: str,
-    uid: int,
-    uidvalidity: int,
+    mailbox: str = "",
+    uid: int | None = None,
+    uidvalidity: int | None = None,
     flags: tuple[Any, ...] = (),
     internal_date: datetime | None = None,
     error: Exception | None = None,
@@ -198,14 +199,23 @@ def fallback_message(
             content=raw,
         ),
         metadata={
-            "mailbox": mailbox,
-            "uid": uid,
-            "uidvalidity": uidvalidity,
-            "flags": _flag_names(flags),
-            "size": len(raw),
+            **_source_metadata(mailbox, uid, uidvalidity, flags, len(raw)),
             "parse_error": f"{type(error).__name__}: {error}" if error is not None else "unparseable",
         },
     )
+
+
+def parse_message_or_fallback(raw: bytes, **kwargs: Any) -> ParsedMessage:
+    """Retain unparseable mail as raw bytes; worker cancellation always escapes."""
+
+    try:
+        return parse_message(raw, **kwargs)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as error:  # noqa: BLE001 — retain poison mail without swallowing cancellation.
+        source = {key: value for key, value in kwargs.items()
+                  if key in {"mailbox", "uid", "uidvalidity", "flags", "internal_date"}}
+        return fallback_message(raw, **source, error=error)
 
 
 def synthetic_external_id(raw: bytes) -> str:
@@ -447,8 +457,8 @@ def _metadata(
     message: EmailMessage,
     *,
     mailbox: str,
-    uid: int,
-    uidvalidity: int,
+    uid: int | None,
+    uidvalidity: int | None,
     flags: tuple[Any, ...],
     size: int,
 ) -> dict[str, Any]:
@@ -464,14 +474,22 @@ def _metadata(
                 continue
         if values:
             headers[name] = values
-    return {
-        "mailbox": mailbox,
-        "uid": uid,
-        "uidvalidity": uidvalidity,
-        "flags": _flag_names(flags),
-        "size": size,
-        "headers": headers,
-    }
+    return {**_source_metadata(mailbox, uid, uidvalidity, flags, size), "headers": headers}
+
+
+def _source_metadata(
+    mailbox: str, uid: int | None, uidvalidity: int | None, flags: tuple[Any, ...], size: int,
+) -> dict[str, Any]:
+    """Retain only transport facts the source actually supplied."""
+
+    metadata: dict[str, Any] = {"size": size, "flags": _flag_names(flags)}
+    if mailbox:
+        metadata["mailbox"] = mailbox
+    if uid is not None:
+        metadata["uid"] = uid
+    if uidvalidity is not None:
+        metadata["uidvalidity"] = uidvalidity
+    return metadata
 
 
 def _flag_names(flags: tuple[Any, ...]) -> list[str]:

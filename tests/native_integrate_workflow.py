@@ -25,7 +25,14 @@ from angee.workflows.testing.drivers import (
     run_until,
     start_run,
 )
-from angee.workflows_integrate.archive_steps import ArchiveExecute, ArchiveExtractor, ArchiveMappingUnit
+from angee.workflows_integrate.archive_steps import (
+    ArchiveExecute,
+    ArchiveExtractor,
+    ArchiveGate,
+    ArchiveMappingUnit,
+    ArchiveProbeOutput,
+    ArchiveProposal,
+)
 
 
 class TestFileExtractor(ArchiveExtractor):
@@ -147,6 +154,23 @@ class ArchiveWorkflowTests(TransactionTestCase):
             self.assertEqual(result.result, {"target": canonical})
             self.assertEqual(execute.call_args.args[1], canonical)
             context.begin_effect.assert_called_once()
+
+    def test_gate_does_not_offer_a_read_only_target(self):
+        with system_context(reason="archive review reader"):
+            reader = get_user_model().objects.create_user(username="archive-review-reader")
+        self.target.with_actor(self.actor).grant_record_access("viewer", reader)
+        self.assertTrue(self.target.with_actor(reader).has_access("read"))
+        self.assertFalse(self.target.with_actor(reader).has_access("write"))
+        context = SimpleNamespace(
+            subject=self.source, actor=reader, config=SimpleNamespace(assignee=""),
+            input=ArchiveProbeOutput(proposals=[ArchiveProposal(
+                extractor="test_drive", label=TestDriveExtractor.display_label(), target_resource="storage.Drive",
+            )]),
+            ask=Mock(), done=Mock(), fail=Mock(side_effect=lambda message: message),
+        )
+        self.assertIn("No writable archive import target", ArchiveGate().ask(context))
+        context.ask.assert_not_called()
+        context.done.assert_not_called()
 
     def test_file_and_drive_resources_review_then_map(self):
         with actor_context(self.actor):

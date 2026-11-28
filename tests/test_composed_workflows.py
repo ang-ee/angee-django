@@ -16,6 +16,7 @@ from tests.composed_host import run_composed_tests
     pytest.param("angee.workflows_parties", "tests.native_workflows_parties", True, id="parties"),
     pytest.param("angee.workflows_extraction", "tests.native_extraction_workflow", True, id="extraction"),
     pytest.param("angee.workflows_integrate", "tests.native_integrate_workflow", False, id="integrate"),
+    pytest.param("angee.messaging_integrate_imap", "tests.native_messaging_mbox", False, id="mbox"),
 ])
 def test_composed_workflows(
     tmp_path: Path, subtests: pytest.Subtests, app: str | tuple[str, ...], label: str, on_postgresql: bool,

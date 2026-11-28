@@ -209,6 +209,8 @@ function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, 
 export interface TrashActionOptions<TRow extends Row = Row> {
   /** The record's display name in the confirmation copy. */
   name?: (record: TRow) => string;
+  /** Called only after the server accepted moving this record to the trash. */
+  onTrashed?: () => void;
 }
 
 /**
@@ -224,7 +226,7 @@ export function useTrashActions(
   const t = useUiT();
   const { available, trash, restore } = useTrashRecord(resource);
   const flag = resourceLifecycle(resource).trashFlag;
-  const { name } = options;
+  const { name, onTrashed } = options;
   return React.useMemo<readonly ActionDescriptor[]>(() => {
     if (!available || flag === null) return [];
     return [
@@ -236,7 +238,10 @@ export function useTrashActions(
         visibleWhen: (record) => allowsRecordPermission(record, TRASH_PERMISSION, resource) && record[flag] === false,
         run: async (context) => {
           const id = rowPublicId(context.record);
-          if (id && context.record && await trash(id, name?.(context.record))) context.refresh();
+          if (id && context.record && await trash(id, name?.(context.record))) {
+            context.refresh();
+            onTrashed?.();
+          }
         },
       },
       {
@@ -251,7 +256,7 @@ export function useTrashActions(
         },
       },
     ];
-  }, [available, resource, flag, name, restore, t, trash]);
+  }, [available, resource, flag, name, onTrashed, restore, t, trash]);
 }
 
 export interface RemovedDisclosureProps {
