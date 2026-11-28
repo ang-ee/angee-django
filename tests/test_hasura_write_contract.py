@@ -218,15 +218,20 @@ class StampedLineExtras:
     stamp: str | None = strawberry.UNSET
 
 
-_STAMPED_SCHEMAS = GraphQLSchemas([make_addon(schemas={"public": {
-    "query": [_STAMPED.query], "mutation": [_STAMPED.mutation],
-    "types": [StampedDocumentType, StampedLineType, StampTagType, *_STAMPED.types],
-    "type_extensions": [StampedDocumentStamps],
-    "input_extensions": [StampedDocumentInsertExtras, StampedDocumentSetExtras, StampedLineExtras],
-}})])
-# Build once at import, while the throwaway addon's manifest is current; later
-# lookups reuse this cached build.
-_STAMPED_SCHEMA = _STAMPED_SCHEMAS.build("public")
+@pytest.fixture
+def stamped_schemas() -> GraphQLSchemas:
+    """Register the schema addon within the test's addon fixture lifetime."""
+    return GraphQLSchemas([make_addon(schemas={"public": {
+        "query": [_STAMPED.query], "mutation": [_STAMPED.mutation],
+        "types": [StampedDocumentType, StampedLineType, StampTagType, *_STAMPED.types],
+        "type_extensions": [StampedDocumentStamps],
+        "input_extensions": [StampedDocumentInsertExtras, StampedDocumentSetExtras, StampedLineExtras],
+    }})])
+
+
+@pytest.fixture
+def stamped_schema(stamped_schemas: GraphQLSchemas) -> strawberry.Schema:
+    return stamped_schemas.build("public")
 
 
 def _owned_document(title: str) -> tuple[Document, Any]:
@@ -251,10 +256,10 @@ def _titles() -> list[str]:
         return sorted(Document.objects.values_list("title", flat=True))
 
 
-def test_insert_applies_input_extensions_after_the_row_write(db: None) -> None:
+def test_insert_applies_input_extensions_after_the_row_write(db: None, stamped_schema: strawberry.Schema) -> None:
     """The model hook receives values no model field owns, once the row exists."""
 
-    result = result_data(execute_schema(_STAMPED_SCHEMA, """mutation {
+    result = result_data(execute_schema(stamped_schema, """mutation {
       insert_stamped_documents_one(object: {title: "Stamped", stamp: "first"}) { id title }
     }""", user=create_platform_admin("author")))
 
@@ -264,12 +269,12 @@ def test_insert_applies_input_extensions_after_the_row_write(db: None) -> None:
     assert _stamps() == [f"document:first@{document.pk}"]
 
 
-def test_update_applies_input_extensions_after_the_row_write(db: None) -> None:
+def test_update_applies_input_extensions_after_the_row_write(db: None, stamped_schema: strawberry.Schema) -> None:
     """A patch writes its model fields, then hands its extension values to the hook."""
 
     document, owner = _owned_document("Draft")
 
-    result_data(execute_schema(_STAMPED_SCHEMA, f"""mutation {{
+    result_data(execute_schema(stamped_schema, f"""mutation {{
       update_stamped_documents_by_pk(
         pk_columns: {{id: "{document.sqid}"}}, _set: {{title: "Renamed", stamp: "second"}}
       ) {{ title }}
@@ -279,12 +284,12 @@ def test_update_applies_input_extensions_after_the_row_write(db: None) -> None:
     assert _stamps() == [f"document:second@{document.pk}"]
 
 
-def test_save_applies_parent_and_line_input_extensions(db: None) -> None:
+def test_save_applies_parent_and_line_input_extensions(db: None, stamped_schema: strawberry.Schema) -> None:
     """A document save applies an extension-only patch and each child line's values."""
 
     document, owner = _owned_document("Draft")
 
-    result_data(execute_schema(_STAMPED_SCHEMA, f"""mutation {{
+    result_data(execute_schema(stamped_schema, f"""mutation {{
       stamped_documents_save(pk: "{document.sqid}", patch: {{stamp: "patch"}}, lines: [
         {{label: "Line", position: 0, stamp: "line"}}
       ]) {{ lines {{ label }} }}
@@ -296,7 +301,9 @@ def test_save_applies_parent_and_line_input_extensions(db: None) -> None:
 
 
 @pytest.mark.parametrize("operation", ["insert", "update"])
-def test_a_raising_input_extension_rolls_back_the_row_write(db: None, operation: str) -> None:
+def test_a_raising_input_extension_rolls_back_the_row_write(
+    db: None, operation: str, stamped_schema: strawberry.Schema,
+) -> None:
     """The hook shares the row write's transaction, so its failure leaves no write behind."""
 
     document, owner = _owned_document("Kept")
@@ -307,14 +314,16 @@ def test_a_raising_input_extension_rolls_back_the_row_write(db: None, operation:
         '_set: {title: "Rejected", stamp: "reject"}) { id }'
     )
 
-    result = execute_schema(_STAMPED_SCHEMA, f"mutation {{ {write} }}", user=owner)
+    result = execute_schema(stamped_schema, f"mutation {{ {write} }}", user=owner)
 
     assert result.errors is not None
     assert _titles() == ["Kept"]
     assert _stamps() == []
 
 
-def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(db: None) -> None:
+def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(
+    db: None, stamped_schema: strawberry.Schema,
+) -> None:
     """A value that reaches the terminal hook names itself and rolls the insert back."""
 
     author = create_user("author")
@@ -323,7 +332,7 @@ def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(db: None) 
     ):
         AngeeHasuraWriteBackend(Document).create(cast(Any, None), {"title": "Orphaned", "orphan": "value"})
 
-    result = execute_schema(_STAMPED_SCHEMA, """mutation {
+    result = execute_schema(stamped_schema, """mutation {
       insert_stamped_documents_one(object: {title: "Orphaned", orphan: "value"}) { id }
     }""", user=author)
 
@@ -331,10 +340,10 @@ def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(db: None) 
     assert _titles() == []
 
 
-def test_input_extension_fields_are_writable_in_resource_metadata() -> None:
+def test_input_extension_fields_are_writable_in_resource_metadata(stamped_schemas: GraphQLSchemas) -> None:
     """Every field of the final insert/set input is creatable/updatable, extensions included."""
 
-    metadata = next(item for item in _STAMPED_SCHEMAS.resources("public") if item.model is Document)
+    metadata = next(item for item in stamped_schemas.resources("public") if item.model is Document)
     fields = {field.name: field for field in metadata.fields}
 
     assert metadata.create_fields == ("title", "stamp", "stamps", "orphan")
@@ -385,19 +394,21 @@ def test_optional_claim_adapter_preserves_custom_untracked_backend_replay(db: No
     assert len(backend.calls) == 1
 
 
-def test_claimed_create_rolls_back_failed_input_extensions_before_retry(db: None) -> None:
+def test_claimed_create_rolls_back_failed_input_extensions_before_retry(
+    db: None, stamped_schema: strawberry.Schema,
+) -> None:
     """A failed insert consumes neither its key nor its row or input-extension effects."""
 
     author = create_platform_admin("retryable-claim-author")
     query = """mutation($stamp:String!) {
       insert_stamped_documents_one(object:{title:"Retryable", stamp:$stamp}, idempotency_key:"retryable") {id title}
     }"""
-    refused = execute_schema(_STAMPED_SCHEMA, query, {"stamp": "reject"}, user=author)
+    refused = execute_schema(stamped_schema, query, {"stamp": "reject"}, user=author)
     assert refused.errors is not None
     assert _titles() == []
     assert _stamps() == []
-    first = result_data(execute_schema(_STAMPED_SCHEMA, query, {"stamp": "accepted"}, user=author))
-    assert result_data(execute_schema(_STAMPED_SCHEMA, query, {"stamp": "accepted"}, user=author)) == first
+    first = result_data(execute_schema(stamped_schema, query, {"stamp": "accepted"}, user=author))
+    assert result_data(execute_schema(stamped_schema, query, {"stamp": "accepted"}, user=author)) == first
     assert _titles() == ["Retryable"]
     assert len(_stamps()) == 1
 
