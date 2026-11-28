@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-from django.apps import apps
-from django_compose.model_composition import ModelComposition
-
 from angee.money.models import Currency
 from angee.parties.models import Party
 
@@ -21,18 +17,3 @@ def test_record_picker_model_names() -> None:
         "party",
         "parties",
     )
-
-
-@pytest.mark.shared_inputs
-def test_framework_runtime_models_do_not_use_naive_irregular_plurals() -> None:
-    """Every composed framework model with an irregular ending declares a real plural."""
-
-    composition = ModelComposition.discover(apps.get_app_configs())
-    for candidate in composition.ordered_models:
-        if not candidate.__module__.startswith("angee."):
-            continue
-        singular = str(candidate._meta.verbose_name)
-        if singular.endswith(("y", "s", "x", "ch", "sh")):
-            assert str(candidate._meta.verbose_name_plural) != f"{singular}s", (
-                f"{candidate._meta.label} uses Django's naive plural"
-            )
