@@ -957,6 +957,7 @@ def selection_plan(
 
 def main(argv: Sequence[str]) -> int:
     if argv[:1] == ["_collect"]:
+        sys.path.insert(0, str(Path.cwd()))
         probe = Collection()
         with redirect_stdout(sys.stderr):
             if argv[1] == "django":
@@ -982,8 +983,10 @@ def main(argv: Sequence[str]) -> int:
     pytest_args = pytest_args[1:] if pytest_args[:1] == ["--"] else pytest_args
     if options.command != "pytest":
         framework = options.command == "framework"
+        root = options.root.resolve()
+        sys.path.insert(0, str(root))
         plan, groups = selection_plan(
-            options.root.resolve(), options.base, options.head, framework=framework,
+            root, options.base, options.head, framework=framework,
             apps=options.app, extra=options.extra, donor=options.donor, pytest_args=pytest_args,
         )
         data = {name: asdict(selection) for name, selection in plan.items()}
@@ -997,5 +1000,4 @@ def main(argv: Sequence[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path.cwd()))
     raise SystemExit(main(sys.argv[1:]))
