@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import { formSubmitError } from "./validation-errors";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useFieldArray, type Control } from "react-hook-form";
 import type { ComponentProps } from "react";
@@ -12,7 +13,7 @@ import { useList } from "@refinedev/core";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, containersFromChildren, type ComposedContainers } from "../../runtime";
-import { createUiTestProviders } from "../../testing";
+import { createUiTestProviders, recordFocusCalls, type RecordedFocusCall } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { defaultWidgets, type WidgetDefinition, type WidgetRenderProps } from "../../widgets";
 import { CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig } from "./editable-lines";
@@ -56,7 +57,8 @@ const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://lines",
   queryClientConfig: { defaultOptions: { queries: { retry: false }, mutations: { retry: false } } },
 });
-afterEach(() => { cleanup(); clearClients(); });
+let recorder: ReturnType<typeof recordFocusCalls> | undefined;
+afterEach(() => { recorder?.restore(); recorder = undefined; cleanup(); clearClients(); });
 
 async function fixture(options: {
   resourceMetadata?: DataResourceMetadata;
@@ -71,7 +73,7 @@ async function fixture(options: {
   recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
   formProps?: Pick<
     ComponentProps<typeof FormView>,
-    "recordTabs" | "linesTabLabel" | "groups" | "onFieldInteractionStart" | "onFieldInteractionCommit" | "lineFields"
+    "recordTabs" | "linesTabLabel" | "groups" | "onFieldInteractionStart" | "onFieldInteractionCommit" | "lineFields" | "linePrimaryFields"
   >;
   containers?: ComposedContainers;
   /** Widgets registered beside the defaults, for a line field's authored widget. */
@@ -1412,6 +1414,324 @@ test("an own submit owner receives what nextSave reads of an edited, removed and
   expect(f.submit).toHaveBeenCalledOnce();
   expect(f.submit.mock.calls[0]![0]).toEqual(next.data);
   expect(f.submit.mock.calls[0]![1].lines).toEqual(next.lines);
+});
+
+// A line's JSON cell reports whether its draft parses; the form's own check holds an unparsed draft
+// against the cell's path in the form (`lines.<row>.<column>`), where the cell's control is.
+
+/**
+ * The rendered form whose lines carry a JSON column `column`, headed `header`, each line holding
+ * `{ n: <its quantity> }` there. `panes` adds a saved-record tab beside the lines; `recordField`
+ * gives the record a text field of the column's own name, labelled so; `save` answers its saves.
+ */
+async function jsonLinesForm(column: string, header: string, options: {
+  panes?: boolean; recordField?: string; save?: (variables: ResourceSaveVariables) => Promise<Row>;
+} = {}) {
+  const withJson = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    fields: [...(renderedResource.fields ?? []), ...(options.recordField ? [lineField(column, "String")] : [])],
+    linesResource: { ...renderedResource.linesResource!, fields: [...renderedResource.linesResource!.fields!, lineField(column, "JSON")] },
+  });
+  const lines = initialLines.map((row) => ({ ...row, [column]: { n: row.quantity } }));
+  const f = await fixture({ publicView: true, resourceMetadata: withJson, lines, ...(options.save ? { save: options.save } : {}), formProps: {
+    lineFields: [{ name: column, label: header }],
+    ...(options.panes ? { recordTabs: [{ id: "evidence", label: "Evidence", render: () => <p>Evidence pane</p> }] } : {}),
+    ...(options.recordField ? { groups: [{ label: "Main", fields: [{ name: column, label: options.recordField }], actions: [] }] } : {}),
+  } });
+  await screen.findAllByRole("textbox", { name: header });
+  return { ...f, lines, cells: () => screen.getAllByRole("textbox", { name: header }) };
+}
+
+/** Replace a JSON cell's whole draft, as typing it does. */
+function typeDraft(cell: HTMLElement, text: string) {
+  const editor = EditorView.findFromDOM(cell)!;
+  act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } }));
+}
+const draftOf = (cell: HTMLElement) => EditorView.findFromDOM(cell)!.state.doc.toString();
+/** Every path the form holds an error at: each line's cells, and the bare `column`. */
+const erroredPaths = (f: Fixture, column: string) => [
+  ...formLines(f).flatMap((row, index) => Object.keys(row).map((key) => `lines.${index}.${key}`)), column,
+].filter((path) => f.surface().form.getFieldState(path).error !== undefined);
+/** Well past every timer: a focus, a selected pane or a request that would follow a press has come by now. */
+const pastEveryTimer = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+/** Press the real Save, its button holding focus first as a click leaves it, and record every focus call from then on. */
+function pressSave(): RecordedFocusCall[] {
+  const save = screen.getByRole("button", { name: "Save" });
+  save.focus();
+  recorder = recordFocusCalls();
+  fireEvent.click(save);
+  return recorder.calls;
+}
+
+test("an invalid JSON draft in a line's cell stops Save at that cell: the lines' pane is selected, the cell takes focus and draws its danger border, nothing is sent; corrected, the draft goes out", async () => {
+  const f = await jsonLinesForm("payload", "Payload", { panes: true });
+  typeDraft(f.cells()[1]!, '{"n": 21}');
+  typeDraft(f.cells()[1]!, '{"n": 2');
+  fireEvent.click(screen.getByRole("tab", { name: "Evidence" }));
+  expect(await screen.findByText("Evidence pane")).toBeTruthy();
+  const calls = pressSave();
+  await waitFor(() => expect(document.activeElement).toBe(f.cells()[1]));
+  await pastEveryTimer();
+  const cell = f.cells()[1]!;
+  expect(document.activeElement).toBe(cell);
+  // The form library asks its focus at once, while the lines' pane is still hidden, and again on its timer:
+  // the call that lands is on the cell.
+  expect(calls.at(-1)).toEqual({ target: cell, takesFocus: true });
+  expect(screen.getByRole("tab", { name: "Lines" }).getAttribute("aria-selected")).toBe("true");
+  expect(erroredPaths(f, "payload")).toEqual(["lines.1.payload"]);
+  expect(f.surface().form.getFieldState("lines.1.payload").error?.message).toBe("Enter a valid value.");
+  // The cell draws its own unparsed draft: the danger border and the widget's word.
+  const td = cell.closest("td")!;
+  expect(td.querySelector(".border-danger")).not.toBeNull();
+  expect(within(td).getByRole("alert").textContent).toBe("Invalid JSON");
+  expect(requests(f)).toBe(0);
+
+  typeDraft(cell, '{"n": 22}');
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom.mock.calls[0]![0].payload.lines).toEqual([f.lines[0], { ...f.lines[1], payload: { n: 22 } }, f.lines[2]]);
+  // The form dropped the reason with the draft it refused: the cell keeps neither its mark nor the reason.
+  await pastEveryTimer();
+  expect([f.cells()[1]!.getAttribute("aria-invalid"), description(f.cells()[1]!), occurrences(document.body, "Enter a valid value.")])
+    .toEqual([null, null, 0]);
+});
+
+/** How many times `text` occurs in what `node` shows. */
+const occurrences = (node: Element, text: string) => node.textContent!.split(text).length - 1;
+/** What describes a control: the text of the elements its `aria-describedby` names, or null with none. */
+const description = (control: HTMLElement) => control.getAttribute("aria-describedby")?.split(" ")
+  .map((id) => document.getElementById(id)?.textContent ?? "").join(" ") ?? null;
+/** The table cell a line's control sits in, where the line's reasons for it show. */
+const cellOf = (control: HTMLElement) => control.closest("td")!;
+/** A write the server refuses, each path with its reasons. */
+const refusing = (validationErrors: Record<string, string[]>) => async (): Promise<never> => {
+  throw { graphQLErrors: [{ message: "Validation failed.", extensions: { code: "VALIDATION", validationErrors, formErrors: [] } }] };
+};
+
+test("an invalid JSON draft in a line's cell, after Save: the cell is marked invalid, says the check's reason where a line's reasons show, and takes focus", async () => {
+  const f = await jsonLinesForm("payload", "Payload");
+  typeDraft(f.cells()[1]!, '{"n": 21}');
+  typeDraft(f.cells()[1]!, '{"n": 2');
+  const calls = pressSave();
+  await waitFor(() => expect(f.cells()[1]!.getAttribute("aria-invalid")).toBe("true"));
+  await waitFor(() => expect(document.activeElement).toBe(f.cells()[1]));
+  await pastEveryTimer();
+  expect(calls.at(-1)).toEqual({ target: f.cells()[1], takesFocus: true });
+  expect(occurrences(cellOf(f.cells()[1]!), "Enter a valid value.")).toBe(1);
+  expect(occurrences(document.body, "Enter a valid value.")).toBe(1);
+  // The reason describes the cell's control, as a record field's describes its own.
+  expect(description(f.cells()[1]!)).toBe("Enter a valid value.");
+  expect(f.cells().map((cell) => cell.getAttribute("aria-invalid"))).toEqual([null, "true", null]);
+});
+
+test("a server reason under a line's cell shows at that cell exactly once, the cell marked: the banner names the refused field without repeating the reason", async () => {
+  await fixture({ publicView: true, save: refusing({ "lines.1.label": ["This label is taken."] }) });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const bravo = screen.getByDisplayValue("Bravo");
+  await waitFor(() => expect(bravo.getAttribute("aria-invalid")).toBe("true"));
+  expect(occurrences(cellOf(bravo), "This label is taken.")).toBe(1);
+  expect(occurrences(document.body, "This label is taken.")).toBe(1);
+  expect(description(bravo)).toBe("This label is taken.");
+  expect(screen.getAllByLabelText("Label").map((cell) => cell.getAttribute("aria-invalid"))).toEqual([null, "true", null]);
+});
+
+test("two server reasons under one line's cell show as one line saying each reason once, as a record field's do", async () => {
+  await fixture({ publicView: true, save: refusing({ "lines.1.label": ["Too long.", "Not unique."] }) });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const bravo = screen.getByDisplayValue("Bravo");
+  await waitFor(() => expect(bravo.getAttribute("aria-invalid")).toBe("true"));
+  expect([...cellOf(bravo).querySelectorAll("p")].map((line) => line.textContent)).toEqual(["Too long. Not unique."]);
+  expect([occurrences(document.body, "Too long."), occurrences(document.body, "Not unique.")]).toEqual([1, 1]);
+});
+
+test.each([
+  { operation: "adding a line", operate: () => fireEvent.click(screen.getByRole("button", { name: "Add line" })) },
+  { operation: "duplicating the first line", operate: () => fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!) },
+  { operation: "removing the first line", operate: () => fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[0]!) },
+  { operation: "moving the second line above the first", operate: () => fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true }) },
+])("after a save the server refuses under a line's cell, $operation drops the reason: no cell stays marked, described or saying it", async ({ operate }) => {
+  // The form drops every reason under the lines on a row operation, as it did before the lines read
+  // the form's errors; only the form's own check, asked again, follows its line.
+  await fixture({ publicView: true, save: refusing({ "lines.1.label": ["This label is taken."] }) });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.getByDisplayValue("Bravo").getAttribute("aria-invalid")).toBe("true"));
+  await act(async () => { operate(); });
+  await pastEveryTimer();
+  const labels = screen.getAllByLabelText("Label");
+  expect({
+    marked: labels.map((cell) => cell.getAttribute("aria-invalid")),
+    described: labels.map((cell) => description(cell)),
+    said: occurrences(document.body, "This label is taken."),
+  }).toEqual({ marked: labels.map(() => null), described: labels.map(() => null), said: 0 });
+});
+
+test.each(["type", "message", "types"])("a line's own reason (under `lines.1`) beside a line column named `%s`: no cell is marked or says anything, and the column can still be hidden", async (column) => {
+  const withColumn = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: { ...renderedResource.linesResource!, fields: [...renderedResource.linesResource!.fields!, lineField(column, "String")] },
+  });
+  await fixture({
+    publicView: true, resourceMetadata: withColumn, lines: initialLines.map((row) => ({ ...row, [column]: "kept" })),
+    save: refusing({ "lines.1": ["This line repeats another."] }),
+  });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("alert"));
+  await pastEveryTimer();
+  const cells = screen.getAllByLabelText(column[0]!.toUpperCase() + column.slice(1));
+  expect({
+    marked: document.querySelectorAll("[aria-invalid='true']").length,
+    said: cells.map((cell) => cellOf(cell).textContent),
+  }).toEqual({ marked: 0, said: cells.map(() => "") });
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  const item = await screen.findByRole("menuitemcheckbox", { name: column[0]!.toUpperCase() + column.slice(1) });
+  expect(item.getAttribute("aria-disabled")).not.toBe("true");
+});
+
+test.fails("defect: a line cell in a column named `ref` shows no reason the server gave it, since the walker never walks `ref`; it should be marked and say it", async () => {
+  const withRef = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: { ...renderedResource.linesResource!, fields: [...renderedResource.linesResource!.fields!, lineField("ref", "String")] },
+  });
+  const f = await fixture({
+    publicView: true, resourceMetadata: withRef, lines: initialLines.map((row) => ({ ...row, ref: "kept" })),
+    save: refusing({ "lines.1.ref": ["This reference is taken."] }),
+  });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The form holds the server's reason at the cell's path; only the cell does not say it.
+  await waitFor(() => expect(f.surface().form.getFieldState("lines.1.ref").error?.message).toBe("This reference is taken."));
+  const cell = screen.getAllByLabelText("Ref")[1]!;
+  await waitFor(() => expect(cell.getAttribute("aria-invalid")).toBe("true"));
+  expect([occurrences(cellOf(cell), "This reference is taken."), occurrences(document.body, "This reference is taken.")]).toEqual([1, 1]);
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  expect((await screen.findByRole("menuitemcheckbox", { name: "Ref" })).getAttribute("aria-disabled")).toBe("true");
+});
+
+test("a server reason under a member of a JSON cell's value (`lines.1.payload.inner`) shows at that cell with its whole path, marking and describing it, and the column cannot be hidden", async () => {
+  // The path's wording is an object field's member's (`StructuredField`), kept on purpose until
+  // member paths are worded for a person.
+  const f = await jsonLinesForm("payload", "Payload", { save: refusing({ "lines.1.payload.inner": ["Must be a number."] }) });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.cells()[1]!.getAttribute("aria-invalid")).toBe("true"));
+  const said = "lines.1.payload.inner: Must be a number.";
+  expect({
+    marked: f.cells().map((cell) => cell.getAttribute("aria-invalid")),
+    inCell: occurrences(cellOf(f.cells()[1]!), said),
+    onPage: occurrences(document.body, said),
+    described: description(f.cells()[1]!),
+  }).toEqual({ marked: [null, "true", null], inCell: 1, onPage: 1, described: said });
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  expect((await screen.findByRole("menuitemcheckbox", { name: "Payload" })).getAttribute("aria-disabled")).toBe("true");
+});
+
+test("one line's two cells, one refused by the server and one failing the form's own check: each is marked and says its own reason, once", async () => {
+  const f = await jsonLinesForm("payload", "Payload", { save: refusing({ "lines.1.label": ["This label is taken."] }) });
+  // A page's own check of the line's payload, part of the form's check as a widget's is.
+  const unregister = f.surface().form.registerFieldValidation("lines.1.payload", (value) =>
+    (value as { n?: unknown } | undefined)?.n === 99 ? "Payload 99 is held." : undefined);
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const label = screen.getByDisplayValue("Bravo");
+  await waitFor(() => expect(label.getAttribute("aria-invalid")).toBe("true"));
+  // After the refused save the form checks a changed cell again, and leaves the label's reason in place.
+  typeDraft(f.cells()[1]!, '{"n": 99}');
+  const payload = f.cells()[1]!;
+  await waitFor(() => expect(payload.getAttribute("aria-invalid")).toBe("true"));
+  expect({
+    label: [label.getAttribute("aria-invalid"), occurrences(cellOf(label), "This label is taken."), occurrences(cellOf(label), "Payload 99 is held.")],
+    payload: [occurrences(cellOf(payload), "Payload 99 is held."), occurrences(cellOf(payload), "This label is taken.")],
+    page: [occurrences(document.body, "This label is taken."), occurrences(document.body, "Payload 99 is held.")],
+  }).toEqual({ label: ["true", 1, 0], payload: [1, 0], page: [1, 1] });
+  unregister();
+});
+
+test.each([
+  {
+    reason: "the form's own check", save: undefined,
+    refuse: (f: Fixture) => f.surface().form.registerFieldValidation("lines.0.quantity", () => "Quantity is held."),
+  },
+  { reason: "the server", save: refusing({ "lines.0.quantity": ["Quantity is held."] }), refuse: () => () => undefined },
+])("a hidden optional column whose cell fails $reason is revealed with its cell marked and saying the reason, and it cannot be hidden while it does", async ({ save, refuse }) => {
+  const f = await fixture({ publicView: true, ...(save ? { save } : {}), formProps: { linePrimaryFields: ["label"] } });
+  expect(screen.queryByRole("columnheader", { name: /^Quantity/ })).toBeNull();
+  const unregister = refuse(f);
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const quantity = (await screen.findAllByLabelText("Quantity"))[0]!;
+  await waitFor(() => expect(quantity.getAttribute("aria-invalid")).toBe("true"));
+  expect(occurrences(cellOf(quantity), "Quantity is held.")).toBe(1);
+  fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
+  expect((await screen.findByRole("menuitemcheckbox", { name: "Quantity" })).getAttribute("aria-disabled")).toBe("true");
+  unregister();
+});
+
+test("guard: a line's own reason (under `lines.1`, no cell) brings the person to the banner and marks no cell", async () => {
+  await fixture({ publicView: true, save: refusing({ "lines.1": ["This line repeats another."] }) });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("alert"));
+  await pastEveryTimer();
+  expect(screen.getAllByLabelText("Label").map((cell) => cell.getAttribute("aria-invalid"))).toEqual([null, null, null]);
+});
+
+test.fails("defect: a line's own reason (under `lines.1`, no cell) shows nowhere, since the lines have no place for a reason of a whole line and the banner names it only by its path; it should show with its line", async () => {
+  await fixture({ publicView: true, save: refusing({ "lines.1": ["This line repeats another."] }) });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("alert"));
+  await waitFor(() => expect(screen.getByText("This line repeats another.")).toBeTruthy());
+});
+
+test("a line's JSON column named like a record field: the line's invalid draft stops Save at the line's cell, marked and named there, and the record field is neither marked nor focused", async () => {
+  const f = await jsonLinesForm("note", "Line note", { recordField: "Note" });
+  const note = screen.getByRole("textbox", { name: "Note" });
+  typeDraft(f.cells()[1]!, '{"n": 21}');
+  typeDraft(f.cells()[1]!, '{"n": 2');
+  const calls = pressSave();
+  await waitFor(() => expect(document.activeElement).toBe(f.cells()[1]));
+  await pastEveryTimer();
+  expect({
+    errored: erroredPaths(f, "note"),
+    lineInvalid: f.cells()[1]!.getAttribute("aria-invalid"),
+    lineNamed: occurrences(cellOf(f.cells()[1]!), "Enter a valid value."),
+    noteInvalid: note.getAttribute("aria-invalid"),
+    noteNamed: within(note.closest<HTMLElement>("[data-layout]")!).queryByText("Enter a valid value."),
+    noteFocused: calls.some((call) => call.target === note),
+    sent: requests(f),
+  }).toEqual({ errored: ["lines.1.note"], lineInvalid: "true", lineNamed: 1, noteInvalid: null, noteNamed: null, noteFocused: false, sent: 0 });
+});
+
+test.each([
+  { operation: "removing the first line", operate: () => fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[0]!), at: 0 },
+  { operation: "duplicating the first line", operate: () => fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!), at: 2 },
+  { operation: "moving it above the first line", operate: () => fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true }), at: 0 },
+])("an invalid JSON draft in the second line's cell, refused by Save, then $operation: the line keeps its mark and its reason where it now sits, the line that took its old place shows none, and the next Save stops at it again", async ({ operate, at }) => {
+  const f = await jsonLinesForm("payload", "Payload");
+  typeDraft(f.cells()[1]!, '{"n": 21}');
+  typeDraft(f.cells()[1]!, '{"n": 2');
+  pressSave();
+  await waitFor(() => expect(f.cells()[1]!.getAttribute("aria-invalid")).toBe("true"));
+  await act(async () => { operate(); });
+  expect(draftOf(f.cells()[at]!)).toBe('{"n": 2');
+  await waitFor(() => expect(f.cells()[at]!.getAttribute("aria-invalid")).toBe("true"));
+  await pastEveryTimer();
+  const marks = () => f.cells().map((cell) => [cell.getAttribute("aria-invalid"), occurrences(cellOf(cell), "Enter a valid value.")]);
+  const onlyAt = f.cells().map((_, index) => index === at ? ["true", 1] : [null, 0]);
+  expect(marks()).toEqual(onlyAt);
+
+  const calls = pressSave();
+  await waitFor(() => expect(document.activeElement).toBe(f.cells()[at]));
+  await pastEveryTimer();
+  expect(calls.at(-1)).toEqual({ target: f.cells()[at], takesFocus: true });
+  expect(calls.some((call) => call.target === f.cells()[1])).toBe(false);
+  expect(erroredPaths(f, "payload")).toEqual([`lines.${at}.payload`]);
+  expect(marks()).toEqual(onlyAt);
+  expect(requests(f)).toBe(0);
 });
 
 /** The saved model's own native list, mounted beside the form as a list beside an open record is. */
