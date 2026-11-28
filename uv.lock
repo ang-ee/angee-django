@@ -234,6 +234,18 @@ postgres = [
 ]
 
 [package.dev-dependencies]
+checks = [
+    { name = "angee-django-stubs", extra = ["compatible-mypy"] },
+    { name = "angee-mypy" },
+    { name = "grimp" },
+    { name = "iniconfig" },
+    { name = "pytest" },
+    { name = "pytest-django" },
+    { name = "pytest-split" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "tomlkit" },
+]
 dev = [
     { name = "angee-base", extra = ["testing"] },
     { name = "angee-django-stubs", extra = ["compatible-mypy"] },
@@ -352,6 +364,18 @@ requires-dist = [
 provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
+checks = [
+    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
+    { name = "angee-mypy", specifier = "==2.1.0" },
+    { name = "grimp", specifier = ">=3.19" },
+    { name = "iniconfig", specifier = ">=2.3" },
+    { name = "pytest", specifier = ">=9" },
+    { name = "pytest-django", specifier = ">=4.8" },
+    { name = "pytest-split", specifier = ">=0.11" },
+    { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "ruff", specifier = ">=0.15.12" },
+    { name = "tomlkit", specifier = ">=0.13" },
+]
 dev = [
     { name = "angee-base", extras = ["testing"], editable = "src/angee/base" },
     { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
@@ -955,6 +979,9 @@ dependencies = [
     { name = "angee-base" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
+    { name = "angee-messaging" },
+    { name = "angee-messaging-templates" },
+    { name = "angee-parties" },
     { name = "angee-web" },
     { name = "django-compose" },
 ]
@@ -964,6 +991,9 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-messaging-templates", editable = "src/angee/messaging_templates" },
+    { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
 ]
@@ -1264,7 +1294,9 @@ dependencies = [
     { name = "angee-integrate" },
     { name = "angee-messaging" },
     { name = "angee-parties" },
+    { name = "angee-storage" },
     { name = "angee-web" },
+    { name = "angee-workflows-integrate" },
     { name = "django-compose" },
     { name = "imapclient" },
     { name = "mail-parser-reply" },
@@ -1275,7 +1307,9 @@ requires-dist = [
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-storage", editable = "src/angee/storage" },
     { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-workflows-integrate", editable = "src/angee/workflows_integrate" },
     { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
     { name = "imapclient", specifier = ">=3.1.0" },
     { name = "mail-parser-reply", specifier = ">=1.36" },

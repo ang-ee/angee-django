@@ -10,7 +10,7 @@ import { fileAttachedToGroup } from "./FileAttachedToPane";
 import { recordFilesGroup } from "./RecordFilesPane";
 import { FileRecordPreview, filePreviewPageFromSearch } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
-import { ChangeFileVisibilityAction, fileForm } from "./views/file-form";
+import { ChangeFileVisibilityAction, DownloadFileAction, fileForm } from "./views/file-form";
 import { folderForm } from "./views/folder-form";
 
 const STORAGE_ID = "storage";
@@ -41,6 +41,12 @@ const storage = defineBaseAddon({
   menus: storageMenu,
   forms: { "storage.File": fileForm, "storage.Folder": folderForm },
   containers: {
+    "storage.File#actions": {
+      "storage.download": {
+        requiredFields: ["url", "filename", "is_trashed"],
+        content: <DownloadFileAction />,
+      },
+    },
     "storage.File#actions-menu": {
       "storage.change-visibility": {
         requiredFields: ["permissions", "visibility"],

@@ -9,6 +9,7 @@ establish.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 ADDON_TEMPLATE = ROOT / "templates" / "addons" / "web"
 REPOSITORY_TEMPLATE = ROOT / "templates" / "addons" / "repository"
+PROJECT_TEMPLATE = ROOT / "templates" / "projects" / "web"
 WEB_DIR = "{% if include_web %}web{% endif %}"
 TESTING_DIR = '{% if test_host == "bare" %}testing{% endif %}'
 TESTS_DIR = '{% if test_host == "composed" %}tests{% endif %}'
@@ -123,7 +125,11 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
     copier = yaml.safe_load((REPOSITORY_TEMPLATE / "copier.yml").read_text(encoding="utf-8"))
     assert copier["_angee"]["kind"] == "addon"
     assert copier["_preserve_symlinks"] is True
-    assert _template_files(REPOSITORY_TEMPLATE) == {"AGENTS.md", "CLAUDE.md", "src/{{ addon_namespace }}/.gitkeep"}
+    namespace_config = "src/{{ addon_namespace }}/tsconfig.base.json"
+    assert _template_files(REPOSITORY_TEMPLATE) == {"AGENTS.md", "CLAUDE.md", namespace_config}
+    assert json.loads((REPOSITORY_TEMPLATE / "template" / namespace_config).read_text()) == {
+        "extends": "../../../angee/src/angee/tsconfig.base.json",
+    }
     claude = REPOSITORY_TEMPLATE / "template" / "CLAUDE.md"
     assert claude.is_symlink() and claude.readlink() == Path("AGENTS.md")
 
@@ -158,6 +164,13 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
     for name in ("angee-permissions", "angee-resources", "angee-pages"):
         assert f"[`{name}`]({skill.format(name=name)})" in instructions
     assert "`testing/models.py`, fragment" not in instructions
+
+
+def test_project_namespace_reuses_its_web_compiler_policy() -> None:
+    source = PROJECT_TEMPLATE / "template/src/{{ addon_namespace }}/tsconfig.base.json.jinja"
+    config = json.loads(source.read_text().replace("{{ web_path }}", "frontend"))
+
+    assert config == {"extends": "../../frontend/tsconfig.json", "compilerOptions": {"types": []}}
 
 
 def _render_addon(tmp_path: Path, *, include_web: bool, test_host: str) -> Path:
@@ -259,6 +272,10 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
     if include_web:
         assert '"contacts.Contact",' in (target / "web/src/index.tsx").read_text(encoding="utf-8")
+        assert json.loads((target / "web/tsconfig.json").read_text()) == {
+            "extends": "../../tsconfig.base.json",
+            "include": ["src"],
+        }
 
 
 BOOT_SCRIPT = """

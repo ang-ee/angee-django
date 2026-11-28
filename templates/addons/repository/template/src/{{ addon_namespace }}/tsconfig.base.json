@@ -1,0 +1,3 @@
+{
+  "extends": "../../../angee/src/angee/tsconfig.base.json"
+}

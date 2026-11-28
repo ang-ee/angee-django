@@ -270,9 +270,13 @@ hosts when their shared imports cannot be accounted for.
 Disposable PostgreSQL test database names include the resolved host directory
 and source database, with space for pytest-django's worker suffixes.
 
-Installing a new framework addon still changes the workspace manifests and
-typically the lockfile. The first PR therefore selects the full shared suite.
-Subsequent test-only edits can select just the declared addon host.
+A new addon goes through native package installation and the lockfile update
+before CI selects it. Selection proves that the previous installed records and
+their consumers are unchanged before limiting an additive change to its addon
+host and reached contracts. Linking the addon into a project's
+`INSTALLED_APPS` is a separate change to that host. CI discovers declared
+standalone suites from installed addons and excludes them from shared pytest
+collection before it runs them on their own hosts.
 
 ### Source-addon Test Models
 
@@ -585,122 +589,68 @@ database, and these commands do not create one.
 
 ## What CI Actually Runs
 
-[CI](../.github/workflows/ci.yml) calls
-[reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
-pushes to `main`. A pull request's merge gate includes the static tier, the SQLite
-tests, PostgreSQL contracts and addon hosts its changed paths reach, the
-packages, and the composed stack with its smoke. A pull request tests its
-merge commit, the tree `main` gets. A push to `main` runs the static tier,
-the whole SQLite suite, every addon host, and the whole PostgreSQL lane.
-The packages and the composed stack hold while `main` has not moved
-since the pull request's run started; merge only then, or run it again. Both events
-also run CI's `guards` job: gitleaks over the whole history, and no tracked
-`.work/` path. A new push to a pull request cancels the run it supersedes, and a new
-push to `main` cancels `main`'s run still in progress, whose tree the new one
-contains; pull requests and `main` never cancel each other's runs. Every job runs
-where the reusable workflow's
-`runs-on` input says: CI passes the `CI_RUNS_ON` repository or organization
-variable, a JSON `runs-on` value such as `["self-hosted", "angee-local"]`, and
-GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork always
-runs on GitHub-hosted runners. This repository leaves it unset: GitHub-hosted
-runners cost a public repository nothing, and self-hosted runners shared between
-repositories queue a pull request's jobs behind each other's. The organization's free
-plan allows 20 GitHub-hosted jobs concurrently. The framework workflow can
-expand to 20 jobs for a full-fallback pull request, with at most 17 eligible to
-run at once. The selector precedes the test shards and the two aggregate checks
-wait for their jobs. The shared SQLite, PostgreSQL, and addon-host jobs skip
-empty selections. A narrower PostgreSQL selection can use fewer groups. A
-private consumer can set `CI_RUNS_ON` to its self-hosted runners.
-The current tiers are:
+The [CI workflow](../.github/workflows/ci.yml) compares each pull request's
+exact base with its checked merge commit and each push to `main` with that
+event's `before` commit. A pull request can supersede its previous run. Every
+push keeps its own run because its change range can differ from the next push's.
+Use **Run workflow** for a full check in the same workflow. The framework's
+`guards` job scans history with gitleaks and rejects tracked `.work/` paths.
 
-- **Static** (the `python-quality` job): Ruff over the source tree, mypy over
-  addons, `lint-imports` over the declared import contracts, and the tests that
-  read source and docs without Django: the [patch guard](../tests/test_patch_targets.py),
-  the [documentation and methodology tests](#agent-methodology-and-documentation)
-  and the [runtime image contract](../tests/test_runtime_image.py), using the locked
-  framework environment.
-- **SQLite:** six shards that pytest-split cuts into contiguous chunks of equal
-  stored time from the committed [durations](../.test_durations), so each test
-  file stays in one or two shards. Each shard runs `-n auto --dist loadfile` with
-  a 60-minute limit and prints its 25 slowest test durations, with migrations
-  enabled and `DATABASE_URL` unset. The composed-host tests run here, one node per
-  composed profile: each composes and boots once and reports every test it ran as
-  a subtest, and the heaviest (the examples profile, about 560 stored seconds)
-  sets the floor of its shard. The `select` job uses the exact pull request
-  base and checked merge commit to plan SQLite paths, PostgreSQL coverage and
-  addon hosts. [Changed-path selection](../scripts/changed_path_selection.py)
-  combines the installed compiler app graph with test helper imports, literal
-  Django app lookups and pytest's own collection. A source change reaches its
-  addon's tests and reverse consumers. Installing a prerequisite does not
-  select the prerequisite's own suite. Templates retain their existing Python
-  readers. A pytest `shared_inputs` mark declares that a test reads across the
-  composed host or repository, as the all-installed examples profile does.
-  Register the mark in pytest configuration or the root conftest. Consumer
-  contract readers can also use it for frontend and test-support changes.
+The [selector](../scripts/changed_path_selection.py) provides the shared pytest,
+addon host, package and stack selections. Each reports `full`, `selected` or
+`empty` with a reason. Native installed app dependencies and pytest collection
+own Python reachability, including reverse consumers, explicit global readers
+and imported test helpers. Prerequisites are available to the affected tests
+through composition. Their own suites run when reached. Unknown coverage,
+unavailable comparison, removed inputs and changed common declarations keep
+the relevant checks broad. A native additive lock proof can keep a new addon
+local even when adding its workspace membership changes the manifests.
 
-  The selector reports `full`, `selected` or `empty` with a reason. Missing
-  comparison or graph information, deletions and moves, runner or dependency
-  declarations, and lockfiles select the full applicable suite. Changes to
-  shared inputs such as settings, test plugins, permission declarations,
-  GraphQL documents and fixture data can broaden the legacy shared host.
-  Addon frontend inputs reach their owning Python contracts, reverse consumers
-  and declared shared readers.
-  Changes limited to prose, schema-independent frontend packages or tests in
-  an isolated addon can leave both shared SQLite and PostgreSQL empty.
-- **PostgreSQL:** on `main`, in six groups of its own beside the
-  SQLite shards, assigned by pytest-split's `least_duration` algorithm over the
-  [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
-  limit, the named PostgreSQL contract [selection](../.github/postgres-selection.txt) runs with
-  `-n 4 --dist loadfile --nomigrations` and prints its 25
-  slowest test durations; each group writes JUnit output and checks that it did
-  not skip tests. On a push to `main` each group splits by its own copy of the
-  map, which pytest-split's store then overwrites with the durations of exactly
-  the tests the group ran, and a green group keeps that file and its JUnit report
-  as its `postgres-durations-<group>` artifact for 14 days; CI never writes the
-  committed map. Its PostgreSQL 17 service includes pgvector and enables `vector`
-  in `template1` before any test database is created. Its server runs with
-  `max_locks_per_transaction = 256`, since
-  each worker creates every table in one transaction. A pull request runs the same
-  job over the selection's entries its changed paths reach, in as many groups
-  as their stored time needs ([`postgres_selection.py`](../scripts/postgres_selection.py)).
-  Changes to installed addon inputs, permissions, and the profile's named test
-  modules reach the planner profile in [`test_composed_examples.py`](../tests/test_composed_examples.py).
-  The test harness writes its composed host directly,
-  so project templates reach the tests that render them. An empty PostgreSQL
-  selection skips the job. A PostgreSQL-only test runs in
-  CI only once the selection lists it. The `uv` job passes only when the static
-  tier, the selection, every SQLite shard that started, every PostgreSQL group and
-  the addon hosts pass, so callers keep one check name.
-- **Addon hosts** (the `addon hosts` job) run selected [isolated addon
-  suites](#isolated-addon-test-hosts) on SQLite. One job runs the selected suites
-  and is skipped when the selector returns no addon paths. Main runs all
-  declared addon hosts. CI caches generated artifacts by lockfile and source
-  hashes, and the compiler verifies a restored host with `compose --if-stale`.
-- **Packages:** framework package typecheck/test/build and export/distribution
-  checks.
-- **Composed stack:** compose the host, check generated documents
-  and addon fragments (framework packages stay with the packages job; fragments
-  test one package at a time), smoke the composed models, and run the bridges repository's
-  pytest suite with its
-  native SQLite source-test settings and collection policy. A bridge pull request
-  selects from the bridge checkout diff. A framework-triggered bridge run runs
-  the whole bridge suite. The consumer PostgreSQL steps select test files after
-  installing and composing their declared host. They keep the same app roster,
-  test roots, pytest plugins and bounded shards on selected runs. Bridge tests use the
-  composed stack's runtime dependencies plus the framework's locked check tools,
-  as the consumer lane does. The tools export omits workspace members already
-  supplied by the composed host. Bridge packages declare dependencies in their own
-  `pyproject.toml`; native lockfiles own resolved versions. The suite's package
-  metadata guard checks that the collection requirements match its workspace
-  member distributions.
-  The composition smoke catches escapes the bare source host cannot compose. Before
-  provision, `makemigrations --check` proves the authored native history reproduces
-  the composed models and `schema --check` compares the SDL. After provision, the
-  first execution job runs the full `manage.py check --database default`, loads the
-  demo tier, and loads one row of every composed model with only its primary key and
-  saves it again (append-only models only load).
-  Framework composed-host tests create their own temporary hosts in the SQLite
-  suite; the stack job does not repeat that framework suite.
+The reusable workflow's `runs-on` input accepts the `CI_RUNS_ON` JSON value.
+The framework defaults to `ubuntu-latest`, and forks use GitHub-hosted runners.
+A full fallback expands to 20 framework jobs. At most 17 are eligible
+concurrently, including the static tier and guards, because shard dispatch waits
+for selection and the two aggregate checks wait for their workers. This leaves
+room within the organization's 20 concurrent GitHub-hosted jobs.
+
+- **Static:** `python-quality` runs the framework's Ruff, mypy, import contracts,
+  and source-only contract tests. Consumer lint, typing and declared source-only
+  tests run in the same role even when composed or shared test selections are
+  empty. These source-only tests are excluded from shared pytest invocations.
+- **SQLite:** only the reached shared tests start jobs. The native pytest-split
+  timings determine the number of shards, up to six on a full run. Each uses
+  `-n auto --dist loadfile`, with migrations enabled and `DATABASE_URL` unset.
+  A reached composed profile boots once and reports its tests as subtests.
+  The [composed examples](../tests/test_composed_examples.py) profile selects
+  its native Notes and Nexus roots and their prerequisites. Global emitted
+  registry contracts run without provisioning a database.
+- **PostgreSQL:** [declared contracts](../.github/postgres-selection.txt) are
+  intersected with the shared selection. Each group uses pytest-split's
+  `least_duration` timings and runs with `-n 4 --dist loadfile --nomigrations`.
+  Each group writes JUnit and requires executed tests with no skips. The
+  PostgreSQL 17 service enables pgvector on test databases and raises
+  `max_locks_per_transaction` to 256 for one-transaction schema creation.
+  The framework `uv` verdict requires selection, quality and every reached
+  SQLite, PostgreSQL and isolated addon job to succeed.
+- **Addon hosts:** one job runs the selected [standalone suites](#isolated-addon-test-hosts)
+  once, including a new consumer addon outside the legacy project's activation
+  roots. Framework hosts reuse generated artifacts only when the compiler's
+  native `compose --if-stale` verification accepts them.
+- **Packages:** CI skips the framework package workspace when the plan finds no
+  affected package. Reached packages and their pnpm dependents run typecheck and
+  tests. The owning distribution checks use the required built package cohort.
+- **Composition:** a selected stack job composes the reached addon roots or the
+  authored profile needed for changed package consumers, verifies native
+  migrations and the installed SDL command, and uses the generated web manifest and pnpm's reverse
+  filters for affected fragment checks. A selected addon closure migrates its
+  disposable database, syncs permissions, runs system checks, loads installed
+  resource tiers including demo data, and exercises deferred reads and saves
+  of composed models.
+  A mixed resource and framework package change uses the full profile and
+  includes the reached resource roots before loading demo data.
+  The full profile provisions its database before running the same smoke check.
+  A selected bridge source run can use its native
+  SQLite settings without stack composition, provisioning or Node setup.
 
 A test missing from the durations still runs: pytest-split gives it the average
 duration and places it in exactly one shard. Ties in the assignment fall back
@@ -718,9 +668,9 @@ keep when it merges into the existing map:
 env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --store-durations --clean-durations
 ```
 
-Refresh the PostgreSQL map from a green push run on `main`, never from a local
-run, whose host load would become the map's; a run a newer push cancelled lacks
-some groups' artifacts, so take the newest green one. The
+Refresh the PostgreSQL map from a green full run on `main`. Run the workflow
+manually on `main` when no recent push required full coverage. Only full runs
+on that branch retain the complete group timings. The
 [refresh](../scripts/postgres_durations.py) fetches the run's six
 `postgres-durations-<group>` artifacts with `gh run download`, or reads a
 directory of them, and merges their measured entries into the map: a measured
@@ -763,48 +713,66 @@ an `NPM_TOKEN` secret ([Changesets](../.changeset/README.md)).
 Executable jobs in the reusable workflow own timeouts; GitHub's reusable-workflow
 caller syntax does not accept `timeout-minutes`.
 
-Consumer repositories call the same reusable checks with `uv-enabled: false`,
-`pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
-`consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
-`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
-The caller revision replaces its source ref; dependency revisions remain explicit.
-A consumer call runs six `stack-shard` jobs. Each renders and composes its own
-host and resolves native distribution requirements. Group 1 provisions the host
-database, smokes it and runs the composed checks below. Groups 2–6 split the
-full declared Python collection five ways with native pytest-split
-`least_duration` assignment, so no shard carries both the checks and a test
-share inside the 60-minute job limit. Without stored consumer timings, the plugin
-balances test counts with equal weights. The test shards collect the declared
-Python paths with `python_files=test*.py` on PostgreSQL and never read the host
-database.
-Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
-consumer intake modules can use every worker. Each worker loads the configured
-host through its authored `settings` module; pytest-django owns its separate test
-database. The pgvector service enables `vector` in both the existing host database
-and `template1` before provisioning, so consumer test databases inherit it with
-`--nomigrations`. Pytest emits a thread dump after five minutes in one test protocol,
-including setup and teardown, without changing its outcome. Shared test plugins
-must defer model imports until Django's app registry is populated. Check tools
-come from the framework lockfile.
+Consumer repositories use the same reusable checks. The caller supplies its
+source slots, any authored composition roots, its optional native uv
+`consumer-extra`, and source-only tests for the quality job. Native pytest
+configuration and conftests own collection and plugin setup. The caller commit
+replaces its declared source ref for the run.
 
-Group 1 runs consumer Ruff/mypy and, after host SDL/codegen, the consumer's web
-fragment typechecks and tests; it runs no consumer Python tests. Mypy resolves composition targets through the
-native source roots of all declared `consumer-sources`, including sibling
-dependencies. Optional full-profile bridge tests also run only in group 1.
-Calls without a consumer use one execution job. The `stack` aggregate
-passes only when every execution job succeeds, preserving one check name for
-callers. The framework and other consumers retain their own caller lanes.
+The [preparation action](../.github/actions/prepare-checks/action.yml) installs
+the caller's exact PEP 751 export from its native uv lock. A consumer keeps
+its locked records and gets the framework runtime requested by the rendered
+project plus the framework's locked `checks` group for missing packages.
+The mixed framework profile likewise uses the pinned bridge lock for
+bridge-only packages. Native `uv pip check` verifies the complete environment
+before composition. The consumer selector uses that same donor export to check
+whether an addition preserves all existing effective records.
 
-The optional `ADDON_SOURCES_TOKEN` secret must read every private source declared
-by a caller; the default GitHub token only reads the calling repository. Configure
-that secret in each consumer repository before expecting private cross-repository
-checkout to pass. `BRIDGES_TOKEN` retains its separate full-profile purpose.
+ARP's PostgreSQL tests keep the authored composition roots and a native
+pytest-django test database. One selected test group or up to five full groups
+use four xdist workers. They compose their test host before pytest. An affected
+integration job separately verifies migrations and SDL. Bridge source tests use
+the bridge repository's pytest settings, including when the full framework
+profile composes the external bridge addons. The `stack` aggregate checks the
+plan and every required integration, shared-test, isolated-host and consumer
+quality verdict.
 
-Browser e2e is manual; neither `pnpm -r test` nor the current GitHub workflows run
-it. Vulture remains a prescribed local review, outside CI.
-State local evidence and CI evidence separately. When
-changing CI, reconcile this section and link to the actual job instead of
-promising planned coverage as though it already exists.
+Private source access requires an `ADDON_SOURCES_TOKEN` with read permission
+for each declared source. `BRIDGES_TOKEN` supplies bridge access where needed.
+Browser E2E and Vulture remain local checks. Report local and remote evidence
+separately.
+
+### Refresh The Rendered CI Workspace Lock
+
+Each caller's `.github/ci/pnpm-lock.yaml` belongs to its rendered CI workspace.
+CI copies it to the stack root and uses a frozen install. Update it when the
+rendered project or its workspace package requirements change. The framework
+and the bridges also retain the locks for their standalone workspaces.
+
+In a disposable directory, recreate the caller's declared source slots,
+framework ref and addons profile. From its stack root, render the same
+`ci-stack` project and run the preparation action's script with the caller's
+source inputs. ARP uses `--extra testing` and its declared source slots and
+activation roots. Framework and bridge CI use the full profile:
+
+```sh
+framework="$PWD/workspaces/src/angee"
+angee stack init "$framework/templates/stacks/dev" "$PWD" --force --yes \
+  --input project_name=ci-stack --input "addons_profile=$profile"
+UV_PYTHON_PREFERENCE=only-managed UV_PYTHON="$(cat "$framework/.python-version")" \
+  python3 "$framework/.github/actions/prepare-checks/prepare.py" "$slot" --profile "$profile" \
+  --extra "${extra:-}" --roots "$roots" --sources "$sources"
+cp "workspaces/src/$slot/.github/ci/pnpm-lock.yaml" pnpm-lock.yaml
+CI=1 pnpm install --lockfile-only --no-frozen-lockfile
+CI=1 pnpm install --lockfile-only --frozen-lockfile
+cp pnpm-lock.yaml "workspaces/src/$slot/.github/ci/pnpm-lock.yaml"
+```
+
+Use the caller's exact reusable workflow inputs for `slot`, `profile`,
+`extra`, `roots` and `sources`. `roots` and `sources` default to JSON `[]`.
+Commit the native output with the owning source change. A new web addon can
+stay narrow when its native lock changes add only the importers it owns and
+preserve every previous package resolution.
 
 ### Consumer CI Publication
 

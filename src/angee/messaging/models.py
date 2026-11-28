@@ -2261,7 +2261,8 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
     address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
     """The address the caller handed for this recipient, as its recipient rule cleaned it
-    (``MessageManager.clean_recipient``) and as the transport carries it: a spelling of the handle's address
+    (``MessageManager.clean_recipient``), which the transport carries (one it cannot is refused before anything
+    is written, ``email.require_carried``): a spelling of the handle's address
     or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``): the bound for every writer,
     of which system mail alone records a merged handle's address, so it goes there while the row is on the
     survivor (``MessageManager._land_addressees``); the reader (:attr:`envelope_address`) refuses a system
@@ -2302,8 +2303,9 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         A recorded address of a handle merged into this row's handle is read once to confirm it. A recorded address
         that neither names (the merge it was written under reverted, a row written past :meth:`save`), or that carries
         surrounding space, is read as its message's channel says. On the system channel (``Channel.system_only``,
-        asked only here, one read of the channel) the whole message is refused, an ``IntegrationError`` settled as
-        its stored delivery reason, so system mail is exact or not sent and never reaches the kept handle's mailbox.
+        asked only here, one read of the channel), and for a message whose channel is gone, which the reader cannot
+        tell from system mail, the whole message is refused, an ``IntegrationError`` settled as its stored delivery
+        reason, so system mail is exact or not sent and never reaches the kept handle's mailbox.
         A person's row, which records only spellings of its own handle and follows the handle, is mailed at its
         handle's ``value`` with a warning naming the row. Mail never goes where its handle's merges do not name.
         """
@@ -2311,7 +2313,7 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         handle = self.handle
         if self.address and not self._names_its_handle():
             channel = self.message.channel
-            if channel is not None and channel.system_only:
+            if channel is None or channel.system_only:
                 raise IntegrationError("A recipient of this message no longer names the address it was written for.")
             logger.warning("Recipient %s holds an address its handle does not name; it is mailed at the handle's own.",
                            self.pk)
@@ -2330,7 +2332,9 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
 
         Its own spelling and the writer's :attr:`addressed_handle` are checked in memory: that handle spells the address
         and redirects to this row's handle, as a fold leaves every handle it merged. Otherwise the handle owner reads
-        the handles merged into this one, once.
+        the handles merged into the survivor of this row's handle, once: the handle itself while it is live, else its
+        survivor (``canonical``, read only then), since merging the row's handle away re-points every handle merged
+        into it at that survivor.
         """
 
         address, handle, owner = self.address, self.handle, self.addressed_handle
@@ -2340,7 +2344,8 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
             return True
         if owner is not None and owner.merged_into_id == handle.pk and owner.is_spelling_of(address):
             return True
-        return bool(handle.is_spelling_of(address, merged=True))
+        survivor = handle if handle.merged_into_id is None else handle.canonical()
+        return bool(survivor.is_spelling_of(address, merged=True))
 
     def _require_its_address(self) -> None:
         if self.address and not self._names_its_handle():

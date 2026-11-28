@@ -1,8 +1,8 @@
 """Tests for the integrate console GraphQL resource and action surfaces.
 
 The integrate console references iam types (``IntegrationType.credential`` /
-``account`` / ``owner``), so these tests build one ``console`` schema folding both
-the iam and integrate addon ``console`` parts — the same shape the composer
+``account`` / ``owner``), so these tests build one ``console`` schema folding the
+GraphQL, IAM and integration addon parts — the same shape the composer
 assembles at runtime — and run over the concrete iam + integrate test tables.
 
 Harness note: source-addon tests use the concrete IAM user model, so ``owner:
@@ -35,6 +35,7 @@ from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.fields import create_only_selectors
 from angee.base.models.identity import public_id_for
+from angee.graphql import records as graphql_records
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
@@ -2602,17 +2603,17 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
 
 
 def _schema() -> Any:
-    """Build the merged iam + integrate ``console`` schema for these tests."""
+    """Build the merged console schema for these tests."""
 
     return _schemas().build("console")
 
 
 def _schemas() -> GraphQLSchemas:
-    """Return the merged iam + integrate schema owner for these tests."""
+    """Return the owner of the merged integration console schema."""
 
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
-        for module in (iam_schema, integrate_schema, integrate_vcs_schema)
+        for module in (graphql_records, iam_schema, integrate_schema, integrate_vcs_schema)
     ]
     return GraphQLSchemas(addons)
 
