@@ -1,10 +1,12 @@
 """Implementation metadata projects defaults into the form's public value domain."""
 
 import pytest
+from django.apps import apps
 from rebac import system_context
 
+from angee.graphql.impl import ConsoleImplChoicesQuery
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate_github.backend import GitHubBackend
 from angee.messaging.testing.models import Channel  # noqa: F401 -- register the channel metadata owner
 from tests.conftest import Vendor, addon_schema, create_platform_admin, create_user
@@ -23,6 +25,13 @@ def choices(model, actor):
       impl_choices(model: $model, field: "backendClass") { key defaults }
     }""", {"model": model}, user=actor)
     return result_data(result)["impl_choices"]
+
+
+def test_graphql_addon_contributes_implementation_choices_to_the_console() -> None:
+    schemas = GraphQLSchemas([apps.get_app_config("graphql")])
+
+    assert "impl_choices(model: String!, field: String!): [ImplChoice!]!" in schemas.build("console").as_str()
+    assert ConsoleImplChoicesQuery not in schemas.parts["public"].query
 
 
 @pytest.mark.parametrize("model,key", [

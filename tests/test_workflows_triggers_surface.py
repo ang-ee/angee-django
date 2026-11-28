@@ -20,9 +20,9 @@ from rebac import (
 )
 
 from angee.graphql.data.resource_fields import _field_enum_values
+from angee.graphql.impl import ConsoleImplChoicesQuery
 from angee.graphql.impl import impl_choices as graphql_impl_choices
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
 from angee.workflows import schema as workflow_schema
