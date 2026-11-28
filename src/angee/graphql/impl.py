@@ -88,12 +88,11 @@ def require_impl_choices_admitted(info: strawberry.Info, model: str | type[model
 def impl_choices(model: str, field: str) -> list[ImplChoice]:
     """Return choices for a ``model.field`` ImplClassField.
 
-    The reusable resolver behind the impl-picker query. The framework stays
-    auth-agnostic; the query owner asks :func:`impl_choices_admitted` before
-    calling it. Rowless callers authorize through their own record before
+    The console query checks :func:`impl_choices_admitted` before calling this
+    projection. Rowless callers authorize through their own record before
     requesting registry metadata. Relation defaults use readable public
-    identities; unavailable suggestions are omitted without changing
-    implementation-owned materialization defaults.
+    identities. Unavailable suggestions are omitted while implementation-owned
+    materialization defaults remain intact.
     """
 
     django_model = _model_for_label(model)
@@ -102,6 +101,18 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     for choice in choices:
         choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
+
+
+@strawberry.type
+class ConsoleImplChoicesQuery:
+    """Implementation metadata for an actor the model's create flow admits."""
+
+    @strawberry.field
+    def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
+        """Return the admitted actor's registry choices for the model field."""
+
+        require_impl_choices_admitted(info, model, field)
+        return impl_choices(model, field)
 
 
 def repair_impl_choices(

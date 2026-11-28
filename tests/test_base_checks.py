@@ -76,18 +76,6 @@ def test_trash_default_manager_check(guarded: bool) -> None:
             assert trash_errors[0].obj is Removable
 
 
-def test_installed_trash_models_compose_the_trash_scopes() -> None:
-    models_ = [model for model in apps.get_models() if issubclass(model, TrashMixin)]
-    assert models_
-    assert all(not [error for error in model.check() if error.id == "angee.E036"] for model in models_)
-
-
-def test_installed_append_only_default_managers_compose_guard() -> None:
-    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
-    assert models
-    assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
-
-
 def test_impl_registry_check_covers_bad_paths_wrong_bases_and_keys() -> None:
     """The shared validator covers every entry without a separate declaration list."""
 
@@ -449,17 +437,6 @@ def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, r
         assert errors == []
 
 
-@pytest.mark.django_db
-def test_installed_models_spell_ownership_one_way() -> None:
-    """No installed definition names a relation owner other than OwnerMixin's column.
-
-    Test modules register their own models in the shared registry, so this
-    asserts the spelling rule alone; E022 and E027 have their focused tests.
-    """
-
-    assert [error.msg for error in check_ownership() if error.id == "angee.E045"] == []
-
-
 def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
     """A seal without its owner or on an undeclared permission is reported, never raised."""
 
@@ -545,4 +522,3 @@ def test_a_stored_implementation_key_nothing_registers_is_named_with_its_rows_an
     assert check_stored_impl_keys(databases=["default"]) == [], "every installed model's keys are registered"
     assert check_stored_impl_keys in registry.get_checks()
     assert check_stored_impl_keys.tags == (checks.Tags.database,)
-

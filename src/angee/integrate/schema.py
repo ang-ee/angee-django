@@ -56,8 +56,7 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.impl import ImplChoice, require_impl_choices_admitted
-from angee.graphql.impl import impl_choices as resolve_impl_choices
+from angee.graphql.impl import ConsoleImplChoicesQuery as ConsoleImplChoicesQuery
 from angee.graphql.node import AngeeNode
 from angee.graphql.related_counts import RelatedCount
 from angee.graphql.schema import AngeeSchema
@@ -124,17 +123,6 @@ _OPEN_FAILURE_LINKS = Prefetch(
     queryset=RecordLink.objects.with_open_failures(include_source=True),
     to_attr="open_failure_links",
 )
-
-
-@strawberry.type
-class ConsoleImplChoicesQuery:
-    """Administrator metadata with explicit model-owned author access."""
-
-    @strawberry.field
-    def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
-        """Return registry choices to an actor the create flow's admission admits (``impl_choices_admitted``)."""
-        require_impl_choices_admitted(info, model, field)
-        return resolve_impl_choices(model, field)
 
 
 strawberry.enum(IntegrationCreateMode)
@@ -2141,11 +2129,7 @@ schemas = {
     },
     "console": {
         "extensions": [OAuthRegistrationExtension],
-        # Concrete impl-picker lookups (VcsBridge.backend_class /
-        # OAuthClient.provider_type) live here; a generic framework query contributed
-        # where its models do.
         "query": [
-            ConsoleImplChoicesQuery,
             ConsoleIntegrationCapabilitiesQuery,
             _OAUTH_CLIENT_RESOURCE.query,
             _EXTERNAL_ACCOUNT_RESOURCE.query,

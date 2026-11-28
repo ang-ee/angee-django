@@ -1299,6 +1299,15 @@ live in code docstrings.
   textarea or button directly inside them and the data-attribute read-only
   path does. The public token-name list (`@angee/ui/tokens`) leaves out
   Tailwind's own `--tw-*` variables, so it is unchanged.
+- **Testing.** Framework and consumer pull requests select pytest files from
+  their checked checkout. The selector uses native app dependencies and retains
+  shared test inputs, profile readers and conservative fallbacks. Framework addons
+  can declare an isolated host with an addon-local `pytest.ini`.
+  `python -m angee.base.testing.host angee.<addon>` emits concrete models for the
+  addon's native closure and runs its tests with native pytest discovery. Uom has
+  moved to this host, and its test-only concrete model copies are removed.
+  `angee.iam.testing.create_user` owns the shared user helper and
+  `tests.conftest` re-exports it. See [checks](docs/checks.md#what-ci-actually-runs).
 - `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
   answers for `user`. It checked the ambient REBAC actor instead, so asking about
   someone else returned the current actor's answer, and asking outside any actor

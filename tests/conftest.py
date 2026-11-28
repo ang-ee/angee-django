@@ -30,6 +30,7 @@ from angee.checklists.testing import models as checklists_models  # noqa: F401 -
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.iam.testing import create_user as create_user
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.iam_messaging.testing import models as iam_messaging_models  # noqa: F401 -- register sign-in links
@@ -667,7 +668,6 @@ from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.resources.testing.models import Resource  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
-from angee.uom.testing import models as uom_models  # noqa: E402, F401
 from angee.webforms.testing import models as webforms_models  # noqa: E402, F401
 from tests import proposals_models  # noqa: E402, F401
 
@@ -809,12 +809,6 @@ class Quota(AbstractQuota):
         app_label = "posts"
         db_table = "test_posts_quota"
         rebac_resource_type = "posts/quota"
-
-
-def create_user(username: str) -> Any:
-    """Create one plain test user."""
-
-    return get_user_model().objects.create_user(username=username, password=username)
 
 
 def vault_for(owner: Any, *, name: str = "Research") -> Any:

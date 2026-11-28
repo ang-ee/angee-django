@@ -9,6 +9,7 @@ establish.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -23,9 +24,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 ADDON_TEMPLATE = ROOT / "templates" / "addons" / "web"
 REPOSITORY_TEMPLATE = ROOT / "templates" / "addons" / "repository"
+PROJECT_TEMPLATE = ROOT / "templates" / "projects" / "web"
 WEB_DIR = "{% if include_web %}web{% endif %}"
 TESTING_DIR = '{% if test_host == "bare" %}testing{% endif %}'
 TESTS_DIR = '{% if test_host == "composed" %}tests{% endif %}'
+COMPOSED_PYTEST = '{% if test_host == "composed" %}pytest.ini{% endif %}'
 BARE_TEST = '{% if test_host == "bare" %}test_{{ addon_id }}.py{% endif %}'
 
 ADDON_FILES = {
@@ -36,14 +39,13 @@ ADDON_FILES = {
     "schema.py",
     "resources/demo/010_{{ addon_id }}.{{ model_name | lower }}.yaml",
 }
-# A consumer addon (`test_host=composed`) keeps its tests inside the addon: it
-# reads its runtime model through `apps.get_model`, registers nothing, and
-# consumer CI collects the package in place.
+# Composed tests use emitted models and addon-local pytest collection.
 COMPOSED_FILES = {
+    COMPOSED_PYTEST,
     f"{TESTS_DIR}/__init__.py",
     TESTS_DIR + "/test_{{ addon_id }}.py",
 }
-# A framework addon (`test_host=bare`) renders the concrete test model the bare
+# The legacy `test_host=bare` option renders the concrete test model the bare
 # host registers, and its test at the addon root: pytest `testpaths` collects
 # only the repository `tests`, so adoption moves the module there.
 TESTING_FILES = {
@@ -123,7 +125,11 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
     copier = yaml.safe_load((REPOSITORY_TEMPLATE / "copier.yml").read_text(encoding="utf-8"))
     assert copier["_angee"]["kind"] == "addon"
     assert copier["_preserve_symlinks"] is True
-    assert _template_files(REPOSITORY_TEMPLATE) == {"AGENTS.md", "CLAUDE.md", "src/{{ addon_namespace }}/.gitkeep"}
+    namespace_config = "src/{{ addon_namespace }}/tsconfig.base.json"
+    assert _template_files(REPOSITORY_TEMPLATE) == {"AGENTS.md", "CLAUDE.md", namespace_config}
+    assert json.loads((REPOSITORY_TEMPLATE / "template" / namespace_config).read_text()) == {
+        "extends": "../../../angee/src/angee/tsconfig.base.json",
+    }
     claude = REPOSITORY_TEMPLATE / "template" / "CLAUDE.md"
     assert claude.is_symlink() and claude.readlink() == Path("AGENTS.md")
 
@@ -158,6 +164,13 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
     for name in ("angee-permissions", "angee-resources", "angee-pages"):
         assert f"[`{name}`]({skill.format(name=name)})" in instructions
     assert "`testing/models.py`, fragment" not in instructions
+
+
+def test_project_namespace_reuses_its_web_compiler_policy() -> None:
+    source = PROJECT_TEMPLATE / "template/src/{{ addon_namespace }}/tsconfig.base.json.jinja"
+    config = json.loads(source.read_text().replace("{{ web_path }}", "frontend"))
+
+    assert config == {"extends": "../../frontend/tsconfig.json", "compilerOptions": {"types": []}}
 
 
 def _render_addon(tmp_path: Path, *, include_web: bool, test_host: str) -> Path:
@@ -218,7 +231,11 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
             name.replace(TESTING_DIR, "testing").replace(BARE_TEST, "test_contacts.py") for name in TESTING_FILES
         }
     else:
-        expected |= {name.replace(TESTS_DIR, "tests").replace("{{ addon_id }}", "contacts") for name in COMPOSED_FILES}
+        expected.add("pytest.ini")
+        expected |= {
+            name.replace(TESTS_DIR, "tests").replace("{{ addon_id }}", "contacts")
+            for name in COMPOSED_FILES - {COMPOSED_PYTEST}
+        }
     if include_web:
         expected |= {name.replace(WEB_DIR, "web").replace("{{ model_name }}", "Contact") for name in WEB_FILES}
     assert rendered == expected
@@ -239,8 +256,7 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
     else:
         test_module = (target / "tests/test_contacts.py").read_text(encoding="utf-8")
         assert 'Contact = apps.get_model("contacts", "Contact")' in test_module
-        assert 'call_command("rebac", "sync", verbosity=0)' in test_module
-        assert "TransactionTestCase" in test_module
+        assert "class ContactVisibilityTests(TestCase)" in test_module
         assert "testing" not in test_module
 
     manifest = tomllib.loads((target / "pyproject.toml").read_text(encoding="utf-8"))
@@ -256,6 +272,10 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
     if include_web:
         assert '"contacts.Contact",' in (target / "web/src/index.tsx").read_text(encoding="utf-8")
+        assert json.loads((target / "web/tsconfig.json").read_text()) == {
+            "extends": "../../tsconfig.base.json",
+            "include": ["src"],
+        }
 
 
 BOOT_SCRIPT = """

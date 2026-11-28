@@ -100,7 +100,20 @@ dependencies = [
 postgres = ["psycopg[binary,pool]>=3.2"]
 
 [dependency-groups]
+checks = [
+    "grimp>=3.19",
+    "iniconfig>=2.3",
+    "angee-django-stubs[compatible-mypy]==6.1.2.post3",
+    "angee-mypy==2.1.0",
+    "pytest>=9",
+    "pytest-django>=4.8",
+    "pytest-xdist>=3.6",
+    "ruff>=0.15.12",
+    "pytest-split>=0.11",
+    "tomlkit>=0.13",
+]
 dev = [
+    {include-group = "checks"},
     "angee-base[testing]==3.0.0",
     "daphne>=4.0",
     "django-zed-rebac[caveats]>=0.38.0,<0.39",
@@ -109,17 +122,9 @@ dev = [
     "html5lib>=1.1,<2",
     "import-linter>=2.1",
     "psycopg[binary,pool]>=3.2",
-    "angee-django-stubs[compatible-mypy]==6.1.2.post3",
-    "angee-mypy==2.1.0",
     "angee-server[profiling]==3.0.0",
-    "pytest>=9",
-    "pytest-django>=4.8",
     "pytest-randomly>=3.16",
-    "pytest-xdist>=3.6",
-    "ruff>=0.15.12",
     "vulture>=2.16",
-    "pytest-split>=0.11",
-    "tomlkit>=0.13",
     "example-notes==3.0.0",
     "example-theme==3.0.0",
     "tests-blankchoices==3.0.0",
@@ -232,6 +237,7 @@ bypass-selection = true
 only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 
 [tool.pytest.ini_options]
+markers = ["shared_inputs: reads inputs across the composed host or repository"]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
@@ -257,6 +263,8 @@ exclude = [
   # Django-authored migrations live here. The composer owns its shape; lint
   # the abstract sources instead.
   "**/runtime",
+  # Addon test hosts (angee.base.testing.host) are emitted output too.
+  ".test-hosts",
   # Materialized addon migration sources are pinned by digest and immutable.
   # Addon migration templates (compose_migrations/) are source and stay checked.
   "**/runtime_migrations",
@@ -387,6 +395,7 @@ allow_indirect_imports = true
 source_modules = ["angee.**"]
 forbidden_modules = ["tests", "angee.*.testing", "angee.*.testing.**", "html5lib"]
 ignore_imports = [
+  "angee.*.tests.** -> angee.*.testing",
   "angee.*.tests.** -> angee.*.testing.**",
   "angee.*.tests.** -> tests",
   "angee.*.testing -> angee.*.testing.**",

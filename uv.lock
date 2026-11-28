@@ -234,6 +234,18 @@ postgres = [
 ]
 
 [package.dev-dependencies]
+checks = [
+    { name = "angee-django-stubs", extra = ["compatible-mypy"] },
+    { name = "angee-mypy" },
+    { name = "grimp" },
+    { name = "iniconfig" },
+    { name = "pytest" },
+    { name = "pytest-django" },
+    { name = "pytest-split" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "tomlkit" },
+]
 dev = [
     { name = "angee-base", extra = ["testing"] },
     { name = "angee-django-stubs", extra = ["compatible-mypy"] },
@@ -244,9 +256,11 @@ dev = [
     { name = "example-notes" },
     { name = "example-theme" },
     { name = "faker" },
+    { name = "grimp" },
     { name = "html5lib" },
     { name = "hypothesis" },
     { name = "import-linter" },
+    { name = "iniconfig" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pytest" },
     { name = "pytest-django" },
@@ -350,6 +364,18 @@ requires-dist = [
 provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
+checks = [
+    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
+    { name = "angee-mypy", specifier = "==2.1.0" },
+    { name = "grimp", specifier = ">=3.19" },
+    { name = "iniconfig", specifier = ">=2.3" },
+    { name = "pytest", specifier = ">=9" },
+    { name = "pytest-django", specifier = ">=4.8" },
+    { name = "pytest-split", specifier = ">=0.11" },
+    { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "ruff", specifier = ">=0.15.12" },
+    { name = "tomlkit", specifier = ">=0.13" },
+]
 dev = [
     { name = "angee-base", extras = ["testing"], editable = "src/angee/base" },
     { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
@@ -360,9 +386,11 @@ dev = [
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
+    { name = "grimp", specifier = ">=3.19" },
     { name = "html5lib", specifier = ">=1.1,<2" },
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "import-linter", specifier = ">=2.1" },
+    { name = "iniconfig", specifier = ">=2.3" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=9" },
     { name = "pytest-django", specifier = ">=4.8" },

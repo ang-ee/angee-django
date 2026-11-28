@@ -11,12 +11,11 @@ _angee:
     `pyproject.toml`, one abstract source model on `AngeeDataModel` with its
     field-backed ownership gate in `permissions.zed`, the console resource in
     `schema.py`, a demo resource row and one per-actor visibility test. The test
-    runs on the host `test_host` selects: `composed` (the default, a consumer
-    addon reading its runtime model through `apps.get_model` from its own
-    `tests/` package) or `bare` (a framework addon: the concrete
-    `testing/models.py` the bare test host registers, plus `test_<label>.py` at
-    the addon root to move into the framework repository's `tests/`, the only
-    path its pytest collects). With `include_web` it adds the frontend package:
+    runs on the host `test_host` selects. The default `composed` mode reads the
+    emitted model through `apps.get_model` and supplies addon-local pytest
+    configuration and tests. The explicit `bare` mode supports the legacy
+    shared host with a concrete `testing/models.py` and a test module to adopt
+    into the shared suite. With `include_web` it adds the frontend package:
     `defineBaseAddon`, `resourcePageRoutes` on the canonical `<label>.<Model>`
     resource label, namespace-relative i18n via `createNamespaceT`,
     `expectValidBaseAddon` tests, and the shared package/tsconfig/vitest wiring.
@@ -54,7 +53,7 @@ test_host:
   choices:
     - composed
     - bare
-  help: Host the rendered test runs on — composed (consumer addon, apps.get_model on the composed host, test under the addon's tests/) or bare (framework addon, concrete testing/models.py registered in the bare test host, test_<label>.py to move into the repository's tests/).
+  help: Choose composed for emitted models and addon-local pytest collection, or bare for the legacy shared registry.
 
 include_web:
   type: bool
