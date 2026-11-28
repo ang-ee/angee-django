@@ -25,7 +25,7 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import TRANSPORT_MAILER_ALIAS
-from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, carries_address
+from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, require_carried
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part
 from angee.messaging_integrate_imap.parser import parse_message
 from tests.conftest import Vendor, make_integration
@@ -206,7 +206,9 @@ def test_a_default_sender_the_transport_cannot_carry_is_refused_before_any_mail_
             backend.default_sender()
         assert [error.code for error in refused.value.error_dict["channel"]] == ["cannot_carry"]
     assert not SystemChannelBackend.system_mail_configured()
-    assert not carries_address("jörg@example.test") and carries_address("ada@exämple.test")
+    require_carried("ada@exämple.test", key="channel")
+    with pytest.raises(ValidationError):
+        require_carried("jörg@example.test", key="channel")
 
 
 @override_settings(MAILERS=NO_TRANSPORT)

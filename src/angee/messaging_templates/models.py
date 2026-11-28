@@ -76,7 +76,14 @@ from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.brandkit.models import BrandKit
 from angee.graphql.capabilities import held_permissions
-from angee.messaging_templates.engine import NO_BRAND_KIT, NOT_A_TEMPLATE, NOT_EFFECTIVE, clean_link
+from angee.messaging_templates.engine import (
+    NO_BRAND_KIT,
+    NOT_A_TEMPLATE,
+    NOT_EFFECTIVE,
+    RefusalSource,
+    clean_link,
+    refusal_item,
+)
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
@@ -728,7 +735,12 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         written before a refusal. The audit rows commit or roll back with the
         caller's transaction, and ``reason`` is recorded in them alone, never on
         the message. Each call records one message and hands it to delivery once,
-        when the outermost transaction commits; it is returned unbound.
+        when the outermost transaction commits; it is returned unbound. What a
+        sender owes the values and how it reads a refusal is the README's "A
+        send's refusals": set every key the template reads, null for an item that
+        has no value there (a key left out is the template's fault, a null this
+        item's), and read whose fault a refusal is with
+        :func:`~angee.messaging_templates.engine.refusal_sources`.
 
         What the caller's values become, on the system channel: a new thread
         titled with the rendered subject, kept in the thread's history; the
@@ -1282,9 +1294,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         """
 
         if not self.handler.carries_message_fields:
-            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code=NOT_A_TEMPLATE)
+            return refusal_item(NOT_A_TEMPLATE_MESSAGE, NOT_A_TEMPLATE, RefusalSource.TEMPLATE)
         if not self.is_effective:
-            return ValidationError(NOT_EFFECTIVE_MESSAGE, code=NOT_EFFECTIVE)
+            return refusal_item(NOT_EFFECTIVE_MESSAGE, NOT_EFFECTIVE, RefusalSource.TEMPLATE)
         return None
 
     def _row_fact(self, name: str) -> bool:
@@ -1454,7 +1466,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         alone, each item with its code (``invalid_values``, ``values_too_large``,
         ``message_template_refused``, ``value_not_linkable``, ``value_not_printed``, ``render_budget``,
         ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
-        (:func:`~angee.messaging_templates.walker.refusals_only`).
+        (:class:`~angee.messaging_templates.walker.refusals_only`).
 
         ``must_print`` is an iterable of the declared paths the mail is sent for
         (a bare string is a ``TypeError``), held as
@@ -1497,7 +1509,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         copy's validation), ``render_error`` when the row, as saved or as the
         patch would save it, does not render with its sample. Only a
         ``ValidationError`` leaves any of them
-        (:func:`~angee.messaging_templates.walker.refusals_only`). Every local of
+        (:class:`~angee.messaging_templates.walker.refusals_only`). Every local of
         this frame and of each it calls (:meth:`_patched` among them) is Django's
         ``sensitive_variables``: a report of a failure that propagates shows no
         sample or patch.
@@ -1558,7 +1570,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if kit is None:
             kit = apps.get_model("brandkit", "BrandKit").objects.default()
         if kit is None:
-            raise ValidationError(NO_BRAND_KIT_MESSAGE, code=NO_BRAND_KIT)
+            raise refusal_item(NO_BRAND_KIT_MESSAGE, NO_BRAND_KIT, RefusalSource.DEPLOYMENT)
         return cast(BrandKit, kit)
 
     @classmethod

@@ -223,6 +223,34 @@ live in code docstrings.
   of reading the setting; the callers that read it today move onto it in their
   own changes.
 
+- `angee.messaging_templates`: **A send's refusal says whose fault it is, and quotes no value.**
+  Every refusal item a send returns from this addon carries `params["source"]`
+  (`REFUSAL_SOURCE`), one of `RefusalSource` (`deployment`, `template`, `values`,
+  `unknown`), set where it is raised; both are exported from the engine beside
+  `SEND_CODES`, with `refusal_sources(error)`, which reads a refusal's sources, keyed
+  or not, and gives none for messaging's own refusals. `subject_too_long` and
+  `render_budget` are `values`: a subject or budget exceeded on every item of a run is
+  a template that is too long. A path the row requires is `values` when this item's
+  values hold null for it or above it, and `template` only when the values do not set
+  it; an empty string or list is not missing. No refusal holds the exception it replaces
+  (`render_failed`, values that are not JSON, a lone surrogate) as its `__cause__` or its
+  `__context__`, so a caller that logs one with its traceback prints neither; `refusals_only`
+  swallows the failure and its entry raises `guard.refused()` after the block. A
+  `ValidationError` that a filter, a tag or a loader raises inside a render with no source
+  is refused as `render_failed` (`unknown`), so every one a render raises carries a source.
+  A value of the wrong shape covers the required paths under it, in that list item alone. No refusal's
+  words or `params` quote a value, nor a key of the values the row does not declare
+  (`A value is over 10000 characters.`). **Changed words, which
+  no caller should match:** `render_failed` names the exception's type only
+  (`The message template did not render: it raised RuntimeError.`), no longer its
+  text; a date that is not one says what was given by kind and length (`it is
+  text of 12 characters`, `it is a number`, `it is true or false`), no longer the
+  value; `value_not_linkable` no longer names a link's host (`its host is neither a
+  domain name of two labels or more, the last a name, with an optional port, nor this
+  deployment's public origin`); values that are not JSON name the error's type. A
+  value of the wrong shape is refused with each path the row requires that is not
+  under it, never a path under it.
+
 - `angee.messaging_templates`: **A sender reads the send codes and the limits from the engine.**
   `SEND_CODES` holds the eleven codes `send_as_system` can return from this addon, built
   from their constants, and a test fails when a raise site names a code outside it or
@@ -356,10 +384,6 @@ live in code docstrings.
     delivery through `MAILERS={"default": ...}` override `transport`. With
     messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
     say mail can be sent: ask `Channel.objects.system_mail_configured()`.
-    The emailed sign-in link (`angee.iam_messaging`) still asks the default
-    mailer, so a host with no transport offers a link whose send raises and
-    stamps nothing, and a recorded link whose delivery later fails is stamped as
-    sent.
   - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
     wherever messaging is installed, contributed by messaging's autoconfig. It
     records each email (a password reset, `sendtestemail`, a link an addon mails)
@@ -378,9 +402,9 @@ live in code docstrings.
     `ChannelManager.system_mail_configured()` answers whether system mail can be
     sent, as the backend the registry binds to the system key decides.
     `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
-    recipient rule, which reads nothing. `carries_address(address)`
+    recipient rule, which reads nothing. `require_carried(address, key=...)`
     (`angee.messaging.email`) is the one rule for what the transport can carry,
-    and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
+    refusing `cannot_carry`. With `DEBUG` off, an
     error report hides every local of the system write's frames, and of the
     shared writer's, the delivery path's and the operator's retry and
     acknowledge frames for any mail. A transport's error never leaves the delivery task: when recording its
@@ -496,9 +520,25 @@ live in code docstrings.
   system channel's message is refused whole, settled failed with "A recipient of
   this message no longer names the address it was written for.", so system mail
   is exact or not sent, and the release does not hand it off again; a person's
-  row is mailed at the handle's value with a warning naming the row. An address the
-  transport cannot carry as given (`carries_address`) records nothing and is
-  mailed at the handle's value, as before. `HandleManager.find_identity_owners`
+  row is mailed at the handle's value with a warning naming the row; a message
+  whose channel is gone is refused the same way. `require_carried` now also
+  refuses a domain that is no host name in its IDNA form, or longer than
+  `Handle.DOMAIN_NAME_LIMIT` (253 characters), and a person's compose applies
+  it whole, as system mail and the sender rule do: a person's recipient, a
+  system mail's and a sender the transport cannot carry are refused
+  `cannot_carry` ("… its part before the @ is outside ASCII." or "… its domain
+  is not a host name.") before anything is written. Only an address no compose
+  was handed fails at delivery with that reason: a recipient a reply inherits
+  from its parent, the kept handle a person's address was merged into, and a
+  row written before the rule. `carries_address` is removed: `require_carried`
+  is the one rule. Before, a person's compose to an address whose part before the `@` is outside
+  ASCII was written and its delivery refused; of the 19 non-ASCII spaces right
+  after the `@`, 14 reached the wire as a mailbox with a space in it, one
+  (U+1680) failed at delivery with "The email could not be rendered.", and 4
+  were refused at compose as `invalid`; a space at the end of an entry was, and
+  is, stripped by the recipient rule and the backend, and the mail goes to the
+  address it pads.
+  `HandleManager.find_identity_owners`
   returns the row owning each identity before its merge redirect;
   `find_identities` is it resolved to each survivor. From is written as the
   channel configures it (`AnymailEmailChannelBackend.outbound_sender`: its
@@ -1102,6 +1142,60 @@ live in code docstrings.
   takes it, and it names the field but no longer repeats its reason.
   Nor a raised domain error reading "Request failed." or its code; inline
   action forms are the entry at the top of this section.
+- `angee.iam_messaging`: **Changed behaviour.** The emailed sign-in link is mailed
+  from a message template, as system mail. The addon ships the template
+  `iam_messaging.sign_in_link` in English and Spanish (`install` resources, in the
+  template library's `base` layout), and `SignInLinkManager.issue` picks the row
+  for the person's languages and sends it through
+  `MessageTemplate.objects.send_as_system` under the reason
+  `iam_messaging.sign_in_link.send`: recorded on messaging's system channel and
+  queued in the action's transaction, then the link is stored with `sent_at`.
+  Nothing is written before the last refusal, and the token is held by no
+  on-commit callback: the hard-coded English body, `SIGN_IN_LINK_SUBJECT` and the
+  send after commit (`SignInLink.send`) are removed, and `SignInLinkManager.issue`
+  returns the link alone; it sends and saves in one atomic block of its own, and
+  asks the send to show the link (`must_print=["link"]`), so a template override
+  that drops the link from either body, or shows it only under a condition false
+  for the person, is refused in band (`link_not_shown`, "…edit or delete the
+  deployment's version of the template, or of a block or part it includes."),
+  nothing written, the earlier link still current, and a warning names the
+  template, its language, its row's public id and the refusal's code. Every other
+  refusal of the render is answered the same way in the addon's words
+  (`link_not_rendered`, "…could not be rendered for this mail…"), never the
+  render's, which can quote a value, and no default brand kit in words of its own
+  (`brand_kit_missing`, "This deployment has no default brand kit…"); the system
+  channel's and compose's refusals pass as they are. The action answers "Sign-in
+  link queued for the account's email." (it said "sent"), and so do the
+  cooldown's refusal and the log: its mail's delivery is the recorded message's
+  to show on the system channel. A missing template's refusal names no command
+  ("This deployment has not installed the sign-in link's email template; its
+  operator loads its resources (provision does)."). Whether an account's address can
+  receive its link is messaging's `Message.objects.clean_system_recipient`, no
+  longer Django's `validate_email`: an administrator sees the account's own
+  refusal for an address outside ASCII before the @ (as before) and now also for
+  one messaging refuses that Django admits (a quoted local part with an escaped space),
+  which used to be offered and refused at the send in messaging's words. The mail
+  goes to the account's own spelling of its address, which the recipient row
+  records, whatever spelling or merge its handle has, or is not sent at all
+  when a merge it was written under is reverted before its delivery.
+  `SignInLinkManager.issue` and `redeem` and the backend's `authenticate` hide
+  their locals from an error report (bare `sensitive_variables`); the mutations
+  carry no mark, since the schema logs their unexpected errors with no
+  traceback. The addon now requires `angee-messaging`,
+  `angee-messaging-templates` and `angee-parties`, so a host that enables it
+  enables them and what they require, the brand kit among it. A link is offered
+  where base's `configured_public_origin()` gives an origin and
+  `Channel.objects.system_mail_configured()` holds (messaging's System mail), no
+  longer wherever a default mailer exists, and its refusal names no setting;
+  a system channel missing or paused, or the template missing, is refused in band
+  with nothing written (`SYSTEM_CHANNEL_MISSING`, `OUTBOUND_EMAIL_CHANNEL_MISSING`,
+  `template_missing`). `sent_at` means recorded and queued: a link whose delivery
+  later fails, or drops mid-send and stays uncertain, still replaces the link
+  before it. The fragment's comment now says the action's holders read the
+  recorded link on the system channel (revision 3). **Upgrade:** provision loads
+  the template rows (the `install` tier of `resources load`) and syncs the
+  fragment at revision 3; links are offered once system mail is configured
+  (messaging's README, System mail). No migration.
 - `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
   Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
   `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
@@ -1485,7 +1579,7 @@ live in code docstrings.
     and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
     and, with the addon, its initial migration. After migrating, the host
     provisions, which syncs the permissions: IAM's schema at revision 32 and,
-    with the addon, its fragment at revision 2.
+    with the addon, its fragment at revision 3.
   - Until the rows are gone, both commands refuse, on django-compose
     0.1.0.dev14, which the framework requires since the composer upgrade below:
     - `makemigrations`, on the databases of the environment that authors the
@@ -1635,9 +1729,10 @@ live in code docstrings.
   numbers the rule reads only as their digits (`Handle.is_fallback_key`:
   `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
   only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2: this rule,
-  with two amendments made before any release carries it, a domain whose spelling would
-  be longer than a domain name can be kept as typed, and an email local part lower-cased
-  but for a non-ASCII character whose lower case would be ASCII or of another length. A consumer rule
+  with three amendments made before any release carries it, a domain whose spelling would
+  be longer than a domain name can be kept as typed, an email local part lower-cased
+  but for a non-ASCII character whose lower case would be ASCII or of another length,
+  and an address and its domain trimmed of ASCII whitespace only. A consumer rule
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
@@ -1728,7 +1823,7 @@ live in code docstrings.
     `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
     One matching organization is suggested at `0.4` as before. Each further
     organization costs one suggestion's statements.
-  - **The handle rule's two amendments.** The domain-spelling rule keeps as typed
+  - **The handle rule's three amendments.** The domain-spelling rule keeps as typed
     a name whose spelling would be longer than a domain name can be
     (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
     `URLValidator` bounds a host name). A name of ligatures that each read as many
@@ -1742,10 +1837,14 @@ live in code docstrings.
     handle, and `İ` stays `İ`, while `JOSÉ@` and `josé@`, `MÜLLER@` and
     `müller@` stay one handle each and the Angstrom and Ohm signs still fold onto
     `å` and `ω`. The kept characters are computed from `str.lower`, and a test
-    pins today's two. An address is trimmed of ASCII whitespace only
-    (`Handle.ADDRESS_WHITESPACE`): a value beginning with a no-break or another
-    non-ASCII space is no address (`Handle.is_email_address`), and its spelling key
-    keeps the space, so it is never another address's handle. The spelling key,
+    pins today's two. An address and its domain are trimmed of ASCII whitespace
+    only (`Handle.ADDRESS_WHITESPACE`, the one rule on both sides of the `@`): a
+    value padded with a no-break or another non-ASCII space, at either end of the
+    local part or of the domain, keeps the space in its spelling key and is a handle
+    of its own, never the plain address's. Before the `@` it is no address
+    (`Handle.is_email_address`); after it, it is one exactly when Django's domain
+    rule reads the space as a letter (U+00A1 to U+FFFF), and an organization's domain
+    padded so keys apart from the plain one too. The spelling key,
     and through it the person-matching key and `Handle.is_spelling_of`, read a
     local part only through `normalize_local_part`.
   - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,
