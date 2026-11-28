@@ -60,7 +60,7 @@ def prepare(stack: Path, slot: str, extra: str, mixed_bridges: bool) -> Path | N
     framework = sources / "angee"
     caller = sources / slot
     python = stack / ".venv" / "bin" / "python"
-    uv("venv", "--managed-python", "--python", os.environ["UV_PYTHON"], python.parents[1], cwd=stack)
+    uv("venv", "--python", os.environ["UV_PYTHON"], python.parents[1], cwd=stack)
     # uv writes directory records relative to the exported project. Leave each
     # native export there so its editable source identities remain intact.
     primary = caller / "pylock.ci-caller.toml"

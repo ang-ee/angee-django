@@ -759,7 +759,7 @@ activation roots. Framework and bridge CI use the full profile:
 framework="$PWD/workspaces/src/angee"
 angee stack init "$framework/templates/stacks/dev" "$PWD" --force --yes \
   --input project_name=ci-stack --input "addons_profile=$profile"
-UV_PYTHON="$(cat "$framework/.python-version")" \
+UV_PYTHON_PREFERENCE=only-managed UV_PYTHON="$(cat "$framework/.python-version")" \
   python3 "$framework/.github/actions/prepare-checks/prepare.py" "$slot" --profile "$profile" \
   --extra "${extra:-}" --roots "$roots" --sources "$sources"
 cp "workspaces/src/$slot/.github/ci/pnpm-lock.yaml" pnpm-lock.yaml
