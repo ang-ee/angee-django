@@ -64,16 +64,26 @@ runs:
         from pathlib import Path
 
         subprocess.run(["gh", "auth", "setup-git"], check=True)
+        base = os.environ.get("COMPARE_BASE", "")
         for source in json.loads(os.environ["CONSUMER_SOURCES"]):
             slot = source["path"]
             assert Path(slot).name == slot and slot not in {".", "..", "angee"}, slot
             destination = Path("stack/workspaces/src") / slot
-            ref = os.environ["CALLER_SHA"] if source["repository"] == os.environ["CALLER_REPOSITORY"] else source["ref"]
+            caller = source["repository"] == os.environ["CALLER_REPOSITORY"]
+            ref = os.environ["CALLER_SHA"] if caller else source["ref"]
             subprocess.run([
                 "gh", "repo", "clone", source["repository"], str(destination), "--", "--depth=1", "--no-checkout",
             ], check=True)
-            subprocess.run(["git", "-C", str(destination), "fetch", "--depth=1", "origin", ref], check=True)
-            subprocess.run(["git", "-C", str(destination), "checkout", "--detach", "FETCH_HEAD"], check=True)
+            git = ["git", "-C", str(destination)]
+            subprocess.run([*git, "fetch", "--depth=1", "origin", ref], check=True)
+            subprocess.run([*git, "checkout", "--detach", "FETCH_HEAD"], check=True)
+            if caller and base.strip("0"):
+                # Fetch the exact base while this step still has the private source token.
+                exists = subprocess.run(
+                    [*git, "cat-file", "-e", f"{base}^{{commit}}"], stderr=subprocess.DEVNULL,
+                ).returncode == 0
+                if not exists:
+                    subprocess.run([*git, "fetch", "--depth=1", "origin", base], check=False)
         PY
     - name: Install the stack renderer
       shell: bash

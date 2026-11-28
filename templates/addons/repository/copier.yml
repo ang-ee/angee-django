@@ -11,9 +11,9 @@ _angee:
     Root of a consumer addon repository: the source slot a stack materializes
     beside the framework checkout (arpee is one). Renders the root `AGENTS.md`
     (consumer scope rules, the builder role, the skill route and where checks
-    are owned), its `CLAUDE.md` link, and the empty `src/<namespace>/`
-    package that `templates/addons/web` renders addons into. The operator does
-    not render addon templates; render with Copier.
+    are owned), its `CLAUDE.md` link, and the `src/<namespace>/` directory with
+    a TypeScript config that extends the sibling framework's fragment policy.
+    Render addons into that namespace with `templates/addons/web` and Copier.
 
 addon_namespace:
   type: str
