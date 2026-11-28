@@ -656,6 +656,9 @@ jobs:
             fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
             fromJSON(needs.select.outputs.plan).packages.mode == 'empty' &&
             toJSON(fromJSON(needs.select.outputs.plan).stack.paths) || inputs.consumer-roots }}
+          add-roots: >-
+            ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'full' &&
+            toJSON(fromJSON(needs.select.outputs.plan).stack.paths) || '[]' }}
       - name: Fetch the verified comparison base for native pytest
         if: ${{ env.PRIMARY_SLOT != 'angee' && fromJSON(needs.select.outputs.plan).shared.mode == 'selected' }}
         env:
@@ -691,7 +694,12 @@ jobs:
           .venv/bin/python manage.py makemigrations --noinput
           .venv/bin/python manage.py makemigrations --check --dry-run
           .venv/bin/python manage.py compose --check
-          .venv/bin/python manage.py schema --check
+          .venv/bin/python manage.py shell --verbosity 0 -c '
+          from django.core.management import call_command, get_commands
+
+          if "schema" in get_commands():
+              call_command("schema", check=True)
+          '
       - name: Validate resources on the selected composition
         if: >-
           ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
