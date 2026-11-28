@@ -461,6 +461,25 @@ def test_exact_diff_handles_missing_baselines_and_deletions(tmp_path: Path) -> N
     assert "removed" in changed_paths(tmp_path, base, commit(tmp_path))[1]
 
 
+def test_plan_finds_the_caller_test_package_from_outside_its_root(tmp_path: Path) -> None:
+    root = tmp_path / "consumer"
+    tests = root / "tests"
+    tests.mkdir(parents=True)
+    (tests / "__init__.py").touch()
+    module = tests / "test_caller_contract.py"
+    module.write_text("def test_contract(): pass\n")
+    git(root, "init")
+    base = commit(root)
+    module.write_text("def test_contract(): assert True\n")
+    head = commit(root)
+
+    run = subprocess.run(
+        [sys.executable, str(SCRIPT), "plan", "--root", "consumer", "--base", base, "--head", head],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
+    assert json.loads(run.stdout)["shared"]["mode"] == "selected"
+
+
 def test_cli_preserves_pytest_patterns_and_skips_an_intentionally_empty_selection(tmp_path: Path) -> None:
     git(tmp_path, "init")
     (tmp_path / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
