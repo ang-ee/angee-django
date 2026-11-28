@@ -71,7 +71,9 @@ def test_documented_pnpm_recipes_use_existing_scripts_and_safe_slot_invocation()
     # The script object is literal JSON; Jinja owns other parts of this template.
     host_scripts, _ = json.JSONDecoder().raw_decode(web.read_text().split('"scripts":', 1)[1].lstrip())
     snippets = re.findall(r"`([^`\n]*\bpnpm [^`\n]*)`", prose(guide))
-    snippets += [line for block in re.findall(r"```sh\n(.*?)\n```", guide, re.DOTALL) for line in block.splitlines()]
+    for block in re.findall(r"```sh\n(.*?)\n```", guide, re.DOTALL):
+        # The shell removes backslash-newline pairs before tokenizing a command.
+        snippets.extend(block.replace("\\\n", "").splitlines())
     checked = set()
     executed = set()
     for snippet in snippets:
