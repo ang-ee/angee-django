@@ -10,7 +10,6 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -30,7 +29,6 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
     ForeignKeyReference,
-    MergeContractMixin,
     MergePolicy,
     references,
 )
@@ -539,13 +537,8 @@ def test_a_collision_no_field_set_describes_refuses_the_merge() -> None:
     assert _tagged_parties(mobil) != []
 
 
-@pytest.mark.shared_inputs
 def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Edges and plain pointing rows (a message's reactions) declare their identity alike."""
-
-    pointing = [model for model in apps.get_models() if issubclass(model, MergeContractMixin)]
-    assert {Recipient, Reaction} <= set(pointing)
-    assert not [error for model in pointing for error in model.check() if error.id == "angee.E037"]
+    """Edges and plain pointing rows reject identity without a declared unique set."""
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
     assert [error.id for error in CustomColumnEdge.check() if error.id == "angee.E037"] == ["angee.E037"]

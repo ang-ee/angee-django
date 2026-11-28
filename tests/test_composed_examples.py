@@ -1,4 +1,4 @@
-"""The example consumer's own tests, notes ownership and console budgets on a host composing every addon."""
+"""The Notes consumer's own tests, ownership and console budgets on its native app closure."""
 
 from pathlib import Path
 
@@ -6,12 +6,10 @@ import pytest
 
 from tests.composed_host import run_composed_tests
 
-pytestmark = pytest.mark.shared_inputs
-
 
 def test_composed_examples(tmp_path: Path, subtests: pytest.Subtests) -> None:
     run_composed_tests(
-        tmp_path, subtests, app=None,
+        tmp_path, subtests, app=("example.notes", "angee.nexus"),
         sqlite=(
             "example.notes.tests",
             "angee.projects.tests.test_query_budgets",

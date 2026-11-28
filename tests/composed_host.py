@@ -62,16 +62,15 @@ def run_composed_tests(
     tmp_path: Path,
     subtests: pytest.Subtests,
     *,
-    app: str | tuple[str, ...] | None,
+    app: str | tuple[str, ...],
     sqlite: tuple[str, ...] = (),
     postgresql: tuple[str, ...] = (),
     addon_dirs: tuple[Path, ...] = (),
 ) -> None:
     """Compose and boot one host profile, run its labels once and report each test as a subtest.
 
-    ``app`` names the root apps the profile composes with their dependency closure;
-    ``None`` composes every installed addon, examples included. pytest's selected
-    database picks the labels: ``postgresql`` runs on the PostgreSQL ``DATABASE_URL``
+    ``app`` names the root apps the profile composes with their dependency closure.
+    pytest's selected database picks the labels: ``postgresql`` runs on the PostgreSQL ``DATABASE_URL``
     when pytest runs on PostgreSQL, ``sqlite`` on in-memory SQLite otherwise, and a
     profile with no labels for that database skips. Every test the host ran is one
     subtest named by its Django test id, so a failure names its behaviour.
@@ -87,7 +86,7 @@ def run_composed_tests(
     report = tmp_path / "composed-tests.json"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
-    roots = () if app is None else (app,) if isinstance(app, str) else app
+    roots = (app,) if isinstance(app, str) else app
     result = subprocess.run(
         [
             sys.executable,
@@ -171,8 +170,6 @@ def boot(
     os.environ.update(host_env)
     host.compose(host_root, host_env, if_stale=False, timeout=COMPOSED_TEST_TIMEOUT)
     django.setup()
-    if root_apps is None:
-        importlib.import_module("tests.statement_models")
 
 
 def resource_values() -> dict[str, Any]:

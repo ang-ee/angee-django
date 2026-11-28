@@ -45,11 +45,11 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 1. **Map the set before writing.** Backend: the domain contract of each owner (step 4), the decision table and enforcement points (step 5), resource load, GraphQL roots and budget, one module per shipped seam (steps, commands, MCP tools). Web: `index.test.ts`, page declarations, `.native.test.tsx` provider tests, widgets, stories; browser: a Page Object and specs. Name modules `test_<concern>.py` and tests `test_<behavior>`. Before adding a test, find the owner test of the same contract: one rule is proved once, at its owner, not again at every layer above it. **Owner rule:** one concern per module so focused selection and discovery agree ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 
-2. **Choose the test host.** A new framework addon declares its own
+2. **Choose the test host.** A new framework or consumer addon declares its own
    [isolated addon test host](../../../docs/checks.md#isolated-addon-test-hosts)
    with native `pytest.ini`; its local fixtures live in `tests/conftest.py` and
-   read emitted models through the app registry. A consumer addon runs in its
-   project's existing composed or bare test host. For existing framework bare-host
+   read emitted models through the app registry. Existing consumer tests run in
+   their authored project host. For existing framework bare-host
    tests, keep using the concrete test models that are already registered through
    their [owning test apps](../../../docs/checks.md#source-addon-test-models).
    Django owns model registration and pytest-django owns test database setup.
