@@ -204,10 +204,13 @@ def test_native_shared_args_exclude_standalone_suite_even_when_explicit(addon_re
 def test_isolated_test_helper_can_reach_a_legacy_consumer_before_collection(addon_repo) -> None:
     root, graph, _ = addon_repo
     test = Path("fixture_addons/leaf/tests/test_contract.py")
+    (root / "fixture_addons/mixed/pytest.ini").unlink()
     suites = isolated_suites(root, graph.owners)
     shared, _ = select(root, [test], [], graph, isolated=suites, preflight=True)
     assert shared.mode == "empty"
-    (root / "tests/test_registry.py").write_text("from fixture_addons.leaf.tests import test_contract\n")
+    (root / "fixture_addons/mixed/tests/test_contract.py").write_text(
+        "from fixture_addons.leaf.tests import test_contract\n"
+    )
     shared, hosts = select(root, [test], [], graph, isolated=suites, preflight=True)
     assert shared.mode == "selected"
     assert hosts.paths == ("fixture_addons.leaf",)
