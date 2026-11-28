@@ -18,7 +18,7 @@ from angee.provenance.evidence import FactAuthority
 from angee.workflows.context import StepContext
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
-from angee.workflows.steps import Settlement, Step, StepMode
+from angee.workflows.steps import NextPage, Settlement, Step, StepMode
 
 
 class ArchiveProposal(BaseModel):
@@ -60,7 +60,11 @@ class ArchiveGateConfig(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ArchiveExecutionReporter:
-    """Expose only the engine heartbeat to long-running extractors."""
+    """Expose the heartbeat and native context for resumable archive IO.
+
+    Paged extractors read ``context.state`` and return ``context.next_page(...)``;
+    the workflow engine retains their checkpoint and owns retries and fencing.
+    """
 
     context: StepContext
 
@@ -76,14 +80,18 @@ class ArchiveExtractor(ImplBase, ABC):
 
     target_resource: ClassVar[str] = ""
     subject_resource: ClassVar[str] = "storage.File"
+    target_filters: ClassVar[dict[str, Any]] = {}
+    """Django predicates narrowing writable targets, rechecked before execution."""
+    target_instructions: ClassVar[str] = ""
+    """User-facing recovery instructions when no writable target is eligible."""
 
     @abstractmethod
     def recognizes(self, subject: Any) -> bool:
         """Boundedly recognize the subject, returning exactly a bool."""
 
     @abstractmethod
-    def execute(self, subject: Any, target_pk: str, reporter: ArchiveExecutionReporter) -> JsonValue:
-        """Idempotently ingest the reviewed target and return JSON journal facts."""
+    def execute(self, subject: Any, target_pk: str, reporter: ArchiveExecutionReporter) -> JsonValue | NextPage:
+        """Ingest the reviewed target; return journal facts or a native continuation."""
 
     @classmethod
     def registered_classes(cls) -> tuple[type[ArchiveExtractor], ...]:
@@ -177,9 +185,18 @@ class ArchiveGate(DecisionStep[ArchiveProbeOutput, list[ArchiveMappingUnit], Arc
         resource = _validate_proposals(proposals)
         if resource is None:
             return ctx.done([], outcome="unsupported")
-        targets = list(apps.get_model(resource).objects.with_actor(ctx.actor).for_write().order_by("pk"))
+        targets_query = apps.get_model(resource).objects.with_actor(ctx.actor).with_action("write").for_write()
+        for proposal in proposals:
+            targets_query = targets_query.filter(**ArchiveExtractor.resolve_class(proposal.extractor).target_filters)
+        targets = list(targets_query.order_by("pk"))
         if not targets:
-            return ctx.done([], outcome="unsupported")
+            instructions = dict.fromkeys(
+                ArchiveExtractor.resolve_class(proposal.extractor).target_instructions for proposal in proposals
+            )
+            return ctx.fail(" ".join([
+                "No writable archive import target is available.",
+                *(instruction for instruction in instructions if instruction),
+            ]))
         mappings = {
             public_id_of(target): [
                 ArchiveMappingUnit(extractor=item.extractor, target=public_id_of(target)).model_dump()
@@ -247,11 +264,17 @@ class ArchiveExecute(Step[ArchiveMappingUnit, ArchiveExecutionOutput, None]):
         if extractor.subject_resource != subject._meta.label:
             raise ValidationError("Archive extractor does not accept this storage container.")
         target = ctx.load(apps.get_model(extractor.target_resource), unit.target, permission="write")
+        if not type(target)._base_manager.filter(pk=target.pk, **extractor.target_filters).exists():
+            raise ValidationError(
+                "The selected target no longer accepts this archive. Check its configuration and state.",
+            )
         target_id = public_id_of(target)
         ctx.heartbeat()
         ctx.begin_effect()
         result = extractor().execute(subject, target_id, ArchiveExecutionReporter(ctx))
         ctx.record(target, "Imported archive target")
+        if isinstance(result, NextPage):
+            return result
         return ctx.done(
             ArchiveExecutionOutput(extractor=unit.extractor, target=target_id, result=result), outcome="completed"
         )

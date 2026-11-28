@@ -18,7 +18,6 @@ export const enStorageMessages: Record<string, string> = {
   "drives.emptyTitle": "No drives",
   "drives.emptyDescription": "No drives are available to you.",
   "file.notFoundTitle": "File not found",
-  "file.notFoundDescription": "This file is no longer available.",
   "preview.unsupported": "No inline preview for this file type.",
   // Rich renderer (PDF / media / HEIC) loading and error surfaces.
   "preview.label": "Preview",
@@ -58,9 +57,6 @@ export const enStorageMessages: Record<string, string> = {
   "new.folder": "Folder",
   "new.upload": "Upload",
   "file.eyebrow": "File",
-  "file.facts": "{type} · {size} · uploaded {date} by {by}",
-  "file.factsAnonymous": "{type} · {size} · uploaded {date}",
-  "file.inTrash": "In trash",
   "newFolder.placeholder": "Folder name",
   "newFolder.nameLabel": "New folder name",
   "newFolder.create": "Create",
@@ -92,8 +88,6 @@ export const enStorageMessages: Record<string, string> = {
   // File detail toolbar.
   "file.rename": "Rename",
   "file.download": "Download",
-  "file.restore": "Restore",
-  "file.trash": "Move to trash",
 
   // File detail record form — section + field labels.
   "file.details": "Details",

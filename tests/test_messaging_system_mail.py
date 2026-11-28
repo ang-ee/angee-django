@@ -34,6 +34,7 @@ from kombu.exceptions import OperationalError
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
+from angee.base.models.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
 from angee.messaging.constants import (
@@ -42,14 +43,14 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_MAILER_BACKEND,
 )
-from angee.messaging.email import SystemChannelBackend, SystemMailer
+from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, SystemMailer, require_carried
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
 from tests.conftest import Vendor, create_platform_admin, make_integration
 from tests.messaging_campaign import make_user
-from tests.test_messaging_compose import _merge_as_contact_administrator
+from tests.test_messaging_compose import PADDED_DOMAINS, _domain, _merge_as_contact_administrator
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -522,6 +523,56 @@ def test_a_system_mail_to_a_merged_handles_address_reads_only_its_redirect_more(
     assert counts["client@example.test"] - counts["mine@example.net"] == 2, counts
 
 
+@pytest.mark.parametrize("domain", PADDED_DOMAINS)
+def test_a_system_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_on_the_wire(
+    system_mailer: Any, domain: str,
+) -> None:
+    """The system recipient rule refuses what the transport cannot carry before anything is recorded; a space it
+    strips from the entry's end leaves the cleaned address, which is what is recorded and sent."""
+
+    entry, rows = f"kate@{domain}", _rows()
+    try:
+        message = Message.objects.compose_as_system(
+            reason="tests.messaging.system_mail.carry", to=[entry], subject="Hi", text="Hi.",
+        )
+    except ValidationError as refused:
+        assert [error.code for error in refused.error_dict["to"]] in (["invalid"], ["cannot_carry"])
+        assert _rows() == rows
+        assert mail.outbox == []
+        return
+    ((_handle, recorded),) = _given(message)
+    assert recorded == entry.strip()
+    require_carried(recorded, key="to")
+    assert _deliver(message).to == [recorded]
+
+
+@pytest.mark.parametrize(("length", "carried"), [(253, True), (254, False)], ids=["253", "254"])
+def test_a_system_mail_and_a_sender_whose_domain_is_longer_than_a_domain_name_may_be_are_refused(
+    system_mailer: Any, length: int, carried: bool,
+) -> None:
+    """``Handle.DOMAIN_NAME_LIMIT``, through ``compose_as_system`` and the sender rule: a domain of 253 characters is
+    carried and sent, one of 254 refused ``cannot_carry`` before anything is written."""
+
+    address, rows = f"k@{_domain(length)}", _rows()
+    sender = AnymailEmailChannelBackend(SimpleNamespace(config={"from_email": f"Desk <{address}>"}))
+    if not carried:
+        with pytest.raises(ValidationError) as refused:
+            Message.objects.compose_as_system(
+                reason="tests.messaging.system_mail.long_domain", to=[address], subject="Hi", text="Hi.",
+            )
+        assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+        with pytest.raises(ValidationError) as refused:
+            sender.outbound_sender()
+        assert [error.code for error in refused.value.error_dict["channel"]] == ["cannot_carry"]
+        assert _rows() == rows
+        return
+    assert sender.outbound_sender() == ("Desk", address)
+    message = Message.objects.compose_as_system(
+        reason="tests.messaging.system_mail.long_domain", to=[address], subject="Hi", text="Hi.",
+    )
+    assert _deliver(message).to == [address]
+
+
 def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_recorded_sender(
     system_mailer: Any, settings: Any,
 ) -> None:
@@ -597,6 +648,53 @@ def test_a_sign_in_mail_written_while_its_address_was_merged_is_refused_after_th
     again = _system_mail(system_mailer, "compose-as-system", "account@example.test")
     assert _given(again) == [(merged.pk, "account@example.test")]
     assert _deliver(again).to == ["account@example.test"]
+
+
+@pytest.mark.parametrize("merger", ["contact-administrator", "platform-administrator"])
+def test_a_system_mail_whose_kept_handle_is_merged_again_before_delivery_is_delivered_to_its_address(
+    system_mailer: Any, merger: str,
+) -> None:
+    """The account's address was merged into another when the mail was written; that handle is then merged into a
+    third, by a contact administrator or a platform administrator. The fold re-points the account's redirect at the
+    third, the survivor of the row's handle, whose merges still hold the address: the mail goes there."""
+
+    with system_context(reason="tests.messaging.system_mail.merged_again"):
+        account, kept, outer = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("account@example.test", "kept@example.net", "outer@example.org")
+        )
+    _merge_as_contact_administrator(kept, account)
+    message = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(message) == [(kept.pk, "account@example.test")]
+    if merger == "contact-administrator":
+        _merge_as_contact_administrator(outer, kept)
+    else:
+        administrator = create_platform_admin("system-mail-second-merger")
+        with actor_context(administrator):
+            Handle._base_manager.get(pk=outer.pk).with_actor(administrator).merge(records=[public_id_of(kept)])
+    with system_context(reason="tests.messaging.system_mail.merged_again"):
+        assert Handle._base_manager.get(pk=account.pk).merged_into_id == outer.pk
+    assert _deliver(message).to == ["account@example.test"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_system_mail_written_on_a_twice_merged_handle_is_refused_after_the_outer_merge_is_reverted(
+    system_mailer: Any,
+) -> None:
+    """The account's address, merged into one handle and that one into a third, is written on the third's row; the
+    outer merge is reverted, so the third's merges no longer hold it: the mail is refused, never sent to the third."""
+
+    with system_context(reason="tests.messaging.system_mail.merged_again"):
+        account, kept, outer = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("account@example.test", "kept@example.net", "outer@example.org")
+        )
+    _merge_as_contact_administrator(kept, account)
+    _merge_as_contact_administrator(outer, kept)
+    message = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(message) == [(outer.pk, "account@example.test")]
+    _revert_merge(kept)
+    _not_sent(message)
 
 
 @pytest.mark.django_db(transaction=True)

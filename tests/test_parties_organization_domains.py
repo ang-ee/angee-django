@@ -214,6 +214,26 @@ def test_a_domain_that_would_read_longer_than_a_domain_name_is_kept_as_typed_by_
     assert _found(ligatures) == {organization.pk}
 
 
+def test_a_domain_padded_with_a_non_ascii_space_keys_apart_and_the_repair_rekeys_one_the_earlier_rule_joined(
+    owner: Any,
+) -> None:
+    """A domain is trimmed of ASCII whitespace only: one padded with a non-ASCII space keys apart from the plain one.
+    A row keyed by the earlier rule, which trimmed it, as the plain domain is the one row the repair writes."""
+
+    padded = "example.test" + chr(0x2003)
+    plain = _organization(owner, "example.test", name="Plain")
+    spaced = _organization(owner, padded, name="Padded")
+    assert _stored(spaced) == (padded, "example.test ")
+    assert _found("example.test") == {plain.pk}
+    with system_context(reason="tests.parties.organization_domains"):
+        Organization._base_manager.filter(pk=spaced.pk).update(domain_key="example.test")
+    assert _found("example.test") == {plain.pk, spaced.pk}
+
+    assert _repair() == KeyRepair(saved=1)
+    assert _found("example.test") == {plain.pk}
+    assert _found(padded) == {spaced.pk}
+
+
 def test_a_save_of_the_key_alone_keys_the_domain_the_row_stores(owner: Any) -> None:
     """A partial save naming the key without the domain never keys a domain changed in memory and not saved."""
 

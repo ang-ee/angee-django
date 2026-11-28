@@ -38,7 +38,7 @@ class SignInLinkBackend(BaseBackend):
     ``SignInLinkManager.redeem`` owns every check.
     """
 
-    @sensitive_variables("sign_in_token")
+    @sensitive_variables()
     def authenticate(  # type: ignore[override]
         self,
         request: Any,

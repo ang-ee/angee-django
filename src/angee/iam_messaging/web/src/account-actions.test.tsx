@@ -26,7 +26,7 @@ describe("Send sign-in link follows the row's server projection", () => {
   });
 
   test("emails the open account through the console mutation, never returning the link", async () => {
-    mocks.issue.mockResolvedValue({ ok: true, message: "Sign-in link sent to the account's email." });
+    mocks.issue.mockResolvedValue({ ok: true, message: "Sign-in link queued for the account's email." });
     const { result } = renderHook(useIssueSignInLinkAction);
     expect(mocks.options).toHaveBeenCalledWith("issue_user_sign_in_link", { invalidateModels: ["iam.User"] });
     await act(async () => {
