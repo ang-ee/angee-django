@@ -2,7 +2,7 @@
 
 ``MessageManager.compose_as_system`` writes system mail as named system work and
 consults no send right: the caller's own permission decided the send. So each
-production module under ``src`` and ``examples`` that refers to it is a key of ``CALLERS``,
+module under ``src`` and ``examples`` that refers to it is a key of ``CALLERS``,
 mapped to that permission; a new caller adds its module and says what decides it.
 The private writer both writers share, ``MessageManager._write_outgoing``, writes
 with no grant consulted when given no actor, so only its own file refers to it
@@ -65,12 +65,11 @@ SHARED_STEP_CALLERS: frozenset[Path] = frozenset({Path("src/angee/messaging_temp
 
 @cache
 def _caller_sources() -> Mapping[Path, ast.Module]:
-    """Read source modules outside the addons' packaged tests."""
+    """Parse every Python file under ``src`` and ``examples``."""
 
     return {
         path.relative_to(ROOT): ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for top in ("src", "examples") for path in sorted((ROOT / top).rglob("*.py"))
-        if "tests" not in path.relative_to(ROOT).parts
     }
 
 
@@ -134,7 +133,7 @@ def test_a_mention_in_prose_or_the_owners_definition_is_no_reference() -> None:
 
 
 def test_only_the_listed_modules_call_the_system_send_or_its_shared_step() -> None:
-    """List every production caller of ``send_as_system`` and ``_render_and_record``.
+    """List every caller of ``send_as_system`` and ``_render_and_record`` under ``src`` and ``examples``.
 
     Messaging allows the template addon to call its writer. Each template sender owns its permission decision.
     """
