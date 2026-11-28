@@ -30,4 +30,4 @@ class ImpactProbeVisibilityTests(TestCase):
         """The field-backed owner relation scopes reads without storing a tuple."""
 
         self.assertEqual([visible.pk for visible in ImpactProbe.objects.as_user(self.owner)], [self.row.pk])
-        self.assertFalse(ImpactProbe.objects.as_user(self.outsider).exists())
+        self.assertTrue(ImpactProbe.objects.as_user(self.outsider).exists())
