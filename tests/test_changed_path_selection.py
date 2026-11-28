@@ -4,9 +4,21 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from scripts.changed_path_selection import AppGraph, addon_graph, changed_paths, collected, isolated_suites, select
+from scripts import changed_path_selection
+from scripts.changed_path_selection import (
+    AppGraph,
+    additive_addons,
+    addon_graph,
+    changed_paths,
+    collected,
+    isolated_suites,
+    select,
+    shared_pytest_args,
+    web_plan,
+)
 from scripts.postgres_selection import entries, groups, kept
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +40,7 @@ def commit(root: Path) -> str:
 @pytest.fixture(scope="module")
 def framework():
     graph = addon_graph(ROOT, ())
-    paths, shared = collected(ROOT, ())
+    paths, shared, _ = collected(ROOT, ())
     return graph, tuple(paths), shared
 
 
@@ -72,21 +84,19 @@ def test_addon_frontend_edit_reaches_its_python_reader(framework) -> None:
     shared, _ = select(ROOT, [action], paths, graph, legacy=True, shared_tests=profiles)
     assert shared.mode == "selected"
     assert "tests/test_messaging_imap.py" in shared.paths
-    assert "tests/test_composed_examples.py" in shared.paths
+    assert "tests/test_composed_examples.py" not in shared.paths
 
 
 def test_calendar_change_reaches_global_composition_readers(framework) -> None:
     graph, paths, profiles = framework
     change = Path("src/angee/calendar/models.py")
     shared, _ = select(ROOT, [change], paths, graph, legacy=True, shared_tests=profiles)
-    assert {
-        "tests/test_base_checks.py", "tests/test_composition.py", "tests/test_fields.py",
-        "tests/test_merge.py", "tests/test_model_names.py", "tests/test_resource_fixtures.py",
-    } <= set(shared.paths)
+    assert "tests/test_registry_contracts.py" in shared.paths
+    assert "tests/test_composed_examples.py" not in shared.paths
 
 
 @pytest.mark.parametrize(("change", "mode"), [
-    ("src/angee/calendar/models.py", "selected"),
+    ("examples/src/example/notes/schema.py", "selected"),
     ("src/angee/storage/permissions.zed", "full"),
     ("tests/native_graphql_document_budgets.py", "selected"),
     ("examples/src/example/notes/tests/test_workflow_steps.py", "selected"),
@@ -167,6 +177,150 @@ def test_test_helper_reaches_mixed_importer_without_a_runtime_edge(addon_repo) -
     shared, _ = select(root, [Path("fixture_addons/leaf/testing.py")], paths, graph)
     assert "fixture_addons/mixed/tests/test_contract.py" in shared.paths
     assert "fixture_addons/base/tests/test_contract.py" not in shared.paths
+
+
+def test_owned_resource_and_inactive_permissions_select_actual_readers(addon_repo) -> None:
+    root, graph, paths = addon_repo
+    owner = Path("fixture_addons/leaf")
+    for change in (owner / "resources/demo/010_record.yaml", owner / "permissions.extends.zed"):
+        shared, _ = select(root, [change], paths, graph, shared_apps=frozenset())
+        assert shared.mode == "selected"
+        assert "tests/test_registry.py" in shared.paths
+        assert "fixture_addons/base/tests/test_contract.py" not in shared.paths
+    shared, _ = select(
+        root, [owner / "permissions.extends.zed"], paths, graph, shared_apps=frozenset({"fixture_addons.leaf"}),
+    )
+    assert shared.mode == "full"
+
+
+def test_native_shared_args_exclude_standalone_suite_even_when_explicit(addon_repo) -> None:
+    root, graph, _ = addon_repo
+    addon = Path("fixture_addons/leaf")
+    tests = addon / "tests"
+    args = shared_pytest_args(root, ["tests", str(tests / "test_contract.py")], {addon: graph.owners[addon]})
+    assert args == ["tests", "--ignore", str(root / tests)]
+
+
+def test_isolated_test_helper_can_reach_a_legacy_consumer_before_collection(addon_repo) -> None:
+    root, graph, _ = addon_repo
+    test = Path("fixture_addons/leaf/tests/test_contract.py")
+    (root / "fixture_addons/mixed/pytest.ini").unlink()
+    suites = isolated_suites(root, graph.owners)
+    shared, _ = select(root, [test], [], graph, isolated=suites, preflight=True)
+    assert shared.mode == "empty"
+    (root / "fixture_addons/mixed/tests/test_contract.py").write_text(
+        "from fixture_addons.leaf.tests import test_contract\n"
+    )
+    shared, hosts = select(root, [test], [], graph, isolated=suites, preflight=True)
+    assert shared.mode == "selected"
+    assert hosts.paths == ("fixture_addons.leaf",)
+
+
+def test_package_edit_reaches_native_reverse_fragments(tmp_path, monkeypatch) -> None:
+    library = Path("packages/library")
+    consumer = Path("src/angee/consumer")
+    web = consumer / "web"
+    monkeypatch.setattr(changed_path_selection, "pnpm_projects", lambda root, projects=(): {library, web})
+    graph = AppGraph({consumer: "angee.consumer"}, {}, {})
+    packages, stack = web_plan(
+        tmp_path, [library / "src/index.ts"], graph, {},
+        base=None, fallback="", additions={}, graph_fallback="",
+    )
+    assert packages.paths == (library.as_posix(),)
+    assert stack.paths == ("angee.consumer",)
+
+
+def test_new_resource_owner_needs_only_its_composed_closure(addon_repo, monkeypatch) -> None:
+    root, graph, _ = addon_repo
+    directory = Path("fixture_addons/leaf")
+    addon = graph.owners[directory]
+    monkeypatch.setattr(
+        "angee.base.addons.addon_facts", lambda name, capability, index: {"demo": []} if name == addon else {},
+    )
+    packages, stack = web_plan(
+        root, [directory / "resources/demo/010_record.yaml"], graph, {},
+        base=None, fallback="", additions={directory: addon}, graph_fallback="",
+    )
+    assert packages.mode == "empty"
+    assert stack.paths == (addon,)
+
+
+@pytest.mark.parametrize("existing_drift", [False, True])
+def test_additive_rendered_lock_reaches_only_new_stack_project(tmp_path, existing_drift) -> None:
+    git(tmp_path, "init")
+    lock = Path(".github/ci/pnpm-lock.yaml")
+    (tmp_path / lock).parent.mkdir(parents=True)
+    (tmp_path / lock).write_text("importers:\n  .: {}\n")
+    base = commit(tmp_path)
+    addon = Path("src/arp/new")
+    web = addon / "web"
+    (tmp_path / web).mkdir(parents=True)
+    project = web / "package.json"
+    (tmp_path / project).write_text("{}\n")
+    existing = "{ changed: true }" if existing_drift else "{}"
+    importer = Path("workspaces/src") / tmp_path.name / web
+    (tmp_path / lock).write_text(f"importers:\n  .: {existing}\n  {importer.as_posix()}: {{}}\n")
+    additions = {addon: "arp.new"}
+    packages, stack = web_plan(
+        tmp_path, [lock, project], AppGraph(additions, {}, {}), additions,
+        base=base, fallback="", additions=additions, graph_fallback="",
+    )
+    assert packages.mode == "empty"
+    assert stack.mode == ("full" if existing_drift else "selected")
+    assert stack.paths == (() if existing_drift else ("arp.new",))
+
+
+@pytest.mark.parametrize("delta", ["local", "plugin", "prior changed", "unattributed"])
+def test_additive_workspace_requires_native_attribution(tmp_path, monkeypatch, delta) -> None:
+    git(tmp_path, "init")
+    manifest = tmp_path / "pyproject.toml"
+    definition = """
+[project]
+dependencies = {requirements}
+[tool.uv.sources]
+{sources}
+[tool.uv.workspace]
+members = {members}
+"""
+    manifest.write_text(definition.format(requirements="[]", sources="", members="[]"))
+    base = commit(tmp_path)
+    owner = Path("src/demo/new")
+    (tmp_path / owner / "tests").mkdir(parents=True)
+    (tmp_path / owner / "tests/__init__.py").touch()
+    (tmp_path / owner / "pytest.ini").write_text("[pytest]\ntestpaths = tests\n")
+    (tmp_path / owner / "pyproject.toml").touch()
+    manifest.write_text(definition.format(
+        requirements='["demo-new==1"]', sources="demo-new = { workspace = true }", members='["src/demo/new"]',
+    ))
+    commit(tmp_path)
+    distribution = SimpleNamespace(version="1", entry_points=SimpleNamespace(select=lambda **kwargs: ()))
+    monkeypatch.setattr("django_compose.components.installed_components", lambda group: SimpleNamespace(
+        providers={"demo.new": "demo-new"}, distributions={"demo-new": distribution},
+    ))
+    packages = [{"name": "prior", "version": "1"}]
+    new = {"name": "demo-new", "directory": {"path": owner.as_posix(), "editable": True}}
+    plugin = {"name": "new-plugin"}
+
+    def export(root, extra, *, prune=()):
+        if root != tmp_path:
+            return {"packages": packages.copy()}
+        if prune:
+            assert prune == ("demo-new",)
+            return {"packages": [*packages, plugin] if delta == "unattributed" else packages.copy()}
+        prior = [{"name": "prior", "version": "2"}] if delta == "prior changed" else packages
+        return {"packages": [*prior, new, *([plugin] if delta == "plugin" else [])]}
+
+    monkeypatch.setattr(changed_path_selection, "uv_export", export)
+    monkeypatch.setattr(changed_path_selection.metadata, "distribution", lambda name: SimpleNamespace(
+        entry_points=SimpleNamespace(select=lambda group: (True,) if group == "pytest11" else ()), files=(),
+    ))
+    suites = {owner: "demo.new"}
+    graph = AppGraph(suites, {}, {})
+    result = additive_addons(
+        tmp_path, base, [Path("pyproject.toml"), owner / "pyproject.toml"], graph, suites,
+        apps=(), extra=(), donor=None,
+    )
+    assert result == (suites if delta == "local" else {})
 
 
 def test_migration_template_namespace_does_not_break_the_native_module_graph(addon_repo) -> None:
