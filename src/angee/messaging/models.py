@@ -2218,7 +2218,7 @@ class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
 
 
 class Recipient(AuditMixin, AngeeDataModel, concrete=True):
-    """A handle a message is addressed to, in one envelope role: the queryable recipient row.
+    """One mailbox of a handle a message is addressed to, in one envelope role: the queryable recipient row.
 
     The raw To/Cc/Bcc stays in ``Message.metadata`` as the lossless source; this is
     its queryable projection, so the inbox can group and filter by recipient. The
@@ -2228,7 +2228,8 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     handle it names; readers resolve ``handle`` through the handle's merge redirect.
     ``address`` is the spelling a writer was handed for the handle, which the
     message is mailed at (:attr:`envelope_address`); readers and search still go by
-    the handle.
+    the handle, so a system mail to two addresses merged into one handle lists that
+    handle twice in its role, a row for each address.
     """
 
     merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
@@ -2282,11 +2283,13 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         ordering = ("role", "sqid")
         rebac_resource_type = "messaging/recipient"
         constraints = (
-            # One row per envelope fact; the write path dedupes a repeated
-            # address, the constraint keeps a concurrent rebuild honest.
+            # One row per mailbox of a handle in a role. The writer
+            # (``MessageManager._write_recipients``) owns the dedup by spelling, so
+            # two spellings of one address are one row; this is the backstop on the
+            # exact text, keeping a concurrent rebuild honest.
             models.UniqueConstraint(
-                fields=("message", "handle", "role"),
-                name="uq_recipient_message_handle_role",
+                fields=("message", "handle", "role", "address"),
+                name="uq_recipient_message_handle_role_address",
             ),
         )
 

@@ -30,8 +30,8 @@ fold. The pair rule principal is granted read and write on threads and messages
 like the parties statement sources.
 
 Whom a message is addressed to is one concept at two levels. As addresses it is
-the message's `Recipient` rows, one per handle and envelope role (`to`, `cc`,
-`bcc`) beside its one sender, `Message.sender`; as accounts it is chatter's direct
+the message's `Recipient` rows, one per mailbox of a handle and envelope role
+(`to`, `cc`, `bcc`) beside its one sender, `Message.sender`; as accounts it is chatter's direct
 addressees, `recipient_user_ids` when a comment is posted and
 `suggested_recipients` when one is composed. A project whose migration history
 still has messaging's `Participant` copies the template
@@ -86,7 +86,10 @@ follows the merge to the kept handle's value, which is what a merge is for and
 why only a contact administrator may merge two addresses; system mail
 (`compose_as_system`, so `send_mail`) records the address on the kept
 handle's row and goes exactly there, so a merge never redirects an account's
-or a workflow's mail. A person's compose in another spelling of the kept
+or a workflow's mail: two such addresses in one role are two rows on the kept
+handle, each mailed at its own, while two spellings of one address are one row
+(`Handle.spelling_key_of`), and a reader of the message sees the kept handle
+twice in that role. A person's compose in another spelling of the kept
 handle's own address is mailed as typed. An address no transport here can
 carry (`require_carried`: one whose part before the `@` is outside ASCII, as no
 transport here speaks SMTPUTF8, or whose domain is no host name in its IDNA
@@ -455,7 +458,7 @@ is that backend's own contract, which callers do not name. The sender rule is
 takes, plus `require_carried`: a sender whose part before the `@` is outside
 ASCII is refused, as no transport here speaks SMTPUTF8, and so is one whose
 domain is no host name in its IDNA form. A recipient's rule is
-`Message.objects.clean_system_recipient(entry, key=...)`, the same two, which
+`Message.objects.clean_sendable_recipient(entry, key=...)`, the same two, which
 every compose applies to each recipient it is handed and a caller asks before
 offering a send; both read nothing. A system mail is mailed exactly at the address its
 caller gave, after that rule, which its recipient row records, on whichever

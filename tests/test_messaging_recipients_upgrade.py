@@ -221,8 +221,14 @@ def test_the_template_renames_the_rows_moves_their_senders_and_reverses(caplog: 
             _RECIPIENTS,
         )
         (written,) = MigrationAutodetector(after, ProjectState.from_apps(apps)).changes(graph=_history())["messaging"]
-        # The bare test host names its own table; a composed host keeps the renamed default.
-        assert [(type(operation).__name__, operation.name_lower) for operation in written.operations] == [
+        # The bare test host names its own table; a composed host keeps the renamed default. The template keeps its
+        # bytes, so the host's next native migration moves the constraint to the mailbox's.
+        assert [
+            (type(operation).__name__, getattr(operation, "constraint", operation).name.lower())
+            for operation in written.operations
+        ] == [
+            ("RemoveConstraint", "uq_recipient_message_handle_role"),
+            ("AddConstraint", "uq_recipient_message_handle_role_address"),
             ("AlterModelTable", "recipient"),
         ]
 

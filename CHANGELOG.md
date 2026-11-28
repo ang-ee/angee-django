@@ -401,8 +401,8 @@ live in code docstrings.
     (`DEFAULT_FROM_EMAIL`) from settings alone, and
     `ChannelManager.system_mail_configured()` answers whether system mail can be
     sent, as the backend the registry binds to the system key decides.
-    `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
-    recipient rule, which reads nothing. `require_carried(address, key=...)`
+    `MessageManager.clean_sendable_recipient(entry, key=...)` is the recipient
+    rule every compose applies, which reads nothing. `require_carried(address, key=...)`
     (`angee.messaging.email`) is the one rule for what the transport can carry,
     refusing `cannot_carry`. With `DEBUG` off, an
     error report hides every local of the system write's frames, and of the
@@ -531,7 +531,10 @@ live in code docstrings.
   was handed fails at delivery with that reason: a recipient a reply inherits
   from its parent, the kept handle a person's address was merged into, and a
   row written before the rule. `carries_address` is removed: `require_carried`
-  is the one rule. Before, a person's compose to an address whose part before the `@` is outside
+  is the one rule. `MessageManager.clean_system_recipient` is renamed
+  `clean_sendable_recipient`, with no alias, as it is the rule of every
+  compose, a person's too: a caller of `clean_system_recipient` changes the
+  name. Before, a person's compose to an address whose part before the `@` is outside
   ASCII was written and its delivery refused; of the 19 non-ASCII spaces right
   after the `@`, 14 reached the wire as a mailbox with a space in it, one
   (U+1680) failed at delivery with "The email could not be rendered.", and 4
@@ -557,6 +560,41 @@ live in code docstrings.
     queued before it are mailed at their handle's spelling, as they would have
     been. Reversing it drops the column, which loses the given spellings and
     nothing else: the messages are then mailed at their handles' spellings.
+
+- `angee.messaging`: **Changed behaviour. A recipient row is one mailbox of one
+  handle in one role.** A system mail (`compose_as_system`, so `send_mail`) to
+  two addresses merged into one handle, in one role, wrote one row on the kept
+  handle, recorded the first address and mailed only it; the second was neither
+  recorded nor failed. Now each is a row of its own on the kept handle,
+  recording its address, and the mail goes to both, once each. The writer
+  (`MessageManager._write_recipients`) keys a row by its handle, its role and
+  its address's spelling (`Handle.spelling_key_of`), so two spellings of one
+  address are still one row recording the first one handed, and a handed
+  address still wins over the same handle inherited without one. A person's
+  mail is unchanged: an address merged into the kept handle records nothing, so
+  two typed addresses on one handle are one row and one mail to the kept
+  address. A reader of such a system mail sees the kept handle twice in that
+  role (the message's recipients, its Participants pane). Delivery stays all or
+  nothing: when one of the merges is reverted before delivery, the whole message
+  is refused with "A recipient of this message no longer names the address it
+  was written for.", and neither address is mailed. The constraint follows the
+  key: `uq_recipient_message_handle_role` becomes
+  `uq_recipient_message_handle_role_address`, on `(message, handle, role,
+  address)`, the backstop on the exact text.
+  - **Upgrade:** after compose, run `uv run --no-sync python manage.py
+    makemigrations messaging` and commit it: a `RemoveConstraint` and an
+    `AddConstraint`, on PostgreSQL `ALTER TABLE "messaging_recipient" DROP
+    CONSTRAINT "uq_recipient_message_handle_role";` and `ALTER TABLE
+    "messaging_recipient" ADD CONSTRAINT
+    "uq_recipient_message_handle_role_address" UNIQUE ("message_id",
+    "handle_id", "role", "address");`. They run in one transaction that holds
+    an `ACCESS EXCLUSIVE` lock on the recipients table, so its reads and writes
+    wait while the new unique index is built, for a time that grows with the
+    table. No existing row can violate it: it is wider than the constraint it
+    replaces. A host whose history still has `Participant` copies
+    `participants_to_recipients.py` unchanged, which ends at the old
+    constraint, and the same `makemigrations` writes this change after it.
+    Reversing it fails while a message has two rows of one handle in one role.
 
 - `@angee/ui`, projects, workflows, messaging: **Changed contract.** An inline
   action form says a refused field's reason at that field and brings the person
@@ -1170,7 +1208,7 @@ live in code docstrings.
   to show on the system channel. A missing template's refusal names no command
   ("This deployment has not installed the sign-in link's email template; its
   operator loads its resources (provision does)."). Whether an account's address can
-  receive its link is messaging's `Message.objects.clean_system_recipient`, no
+  receive its link is messaging's `Message.objects.clean_sendable_recipient`, no
   longer Django's `validate_email`: an administrator sees the account's own
   refusal for an address outside ASCII before the @ (as before) and now also for
   one messaging refuses that Django admits (a quoted local part with an escaped space),
