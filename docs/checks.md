@@ -642,13 +642,14 @@ room within the organization's 20 concurrent GitHub-hosted jobs.
 - **Composition:** a selected stack job composes the reached addon roots or the
   authored profile needed for changed package consumers, verifies native
   migrations and the installed SDL command, and uses the generated web manifest and pnpm's reverse
-  filters for affected fragment checks. A selected addon closure validates its
-  resource tiers through the native loader on its disposable migrated database.
+  filters for affected fragment checks. A selected addon closure migrates its
+  disposable database, syncs permissions, runs system checks, loads installed
+  resource tiers including demo data, and exercises deferred reads and saves
+  of composed models.
   A mixed resource and framework package change uses the full profile and
   includes the reached resource roots before loading demo data.
-  The full profile additionally provisions
-  its database, runs system checks, loads demo data and exercises deferred reads
-  and saves of composed models. A selected bridge source run can use its native
+  The full profile provisions its database before running the same smoke check.
+  A selected bridge source run can use its native
   SQLite settings without stack composition, provisioning or Node setup.
 
 A test missing from the durations still runs: pytest-split gives it the average

@@ -284,10 +284,15 @@ jobs:
         with:
           node-version: "26"
           package-manager-cache: false
-      - name: Check the pinned bridge source boundary
-        if: ${{ inputs.uv-enabled && inputs.stack-enabled && inputs.addons-profile == 'full' }}
+      - name: Check the bridge source boundary
+        if: >-
+          ${{ env.PRIMARY_SLOT == 'angee-messaging-bridges' ||
+          (inputs.uv-enabled && inputs.stack-enabled && inputs.addons-profile == 'full') }}
         working-directory: stack/workspaces/src/angee-messaging-bridges
-        run: >-
+        run: |
+          if [ "$PRIMARY_SLOT" = angee-messaging-bridges ]; then
+            "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m ruff check . --no-cache
+          fi
           "$GITHUB_WORKSPACE/stack/.venv/bin/python" -m pytest -q -p no:django --noconftest "$BRIDGE_SOURCE_GUARD"
       - id: select
         shell: bash
@@ -317,7 +322,7 @@ jobs:
           if [ "$UV_ENABLED" = true ]; then
             for test_path in $FRAMEWORK_QUALITY_TESTS; do args+=( --ignore "$test_path" ); done
             for node in $FRAMEWORK_QUALITY_NODES; do args+=( --deselect "$node" ); done
-            plan=$(cd "$slot" && "${python[@]}" scripts/changed_path_selection.py framework "${compare[@]}" -- "${args[@]}")
+            plan=$(cd "$slot" && env -u DATABASE_URL "${python[@]}" scripts/changed_path_selection.py framework "${compare[@]}" -- "${args[@]}")
             postgres=( scripts/postgres_selection.py )
             if [ "$(jq -r '.shared.mode' <<< "$plan")" = full ]; then postgres+=( --all ); fi
             reached=$(jq -r '.shared.paths[]' <<< "$plan")
@@ -328,6 +333,9 @@ jobs:
             while IFS= read -r app; do args+=( --app "$app" ); done < <(jq -r '.[]' <<< "$ROOTS")
             ignore=()
             while IFS= read -r test_path; do ignore+=( --ignore "$test_path" ); done < <(jq -r '.[]' <<< "$QUALITY_TESTS")
+            if [ "$PRIMARY_SLOT" = angee-messaging-bridges ]; then
+              ignore+=( --ignore "$BRIDGE_SOURCE_GUARD" )
+            fi
             plan=$("${python[@]}" stack/workspaces/src/angee/scripts/changed_path_selection.py \
               plan --root "$slot" "${compare[@]}" "${args[@]}" -- "${ignore[@]}")
             postgres_tests=
@@ -378,7 +386,7 @@ jobs:
           for test_path in $FRAMEWORK_QUALITY_TESTS; do args+=( --ignore "$test_path" ); done
           for node in $FRAMEWORK_QUALITY_NODES; do args+=( --deselect "$node" ); done
           if [ "$SPLITS" -gt 1 ]; then args+=( --splits "$SPLITS" --group "$GROUP" ); fi
-          uv run --locked pytest -q -n auto --dist loadfile --durations=25 \
+          env -u DATABASE_URL uv run --locked pytest -q -n auto --dist loadfile --durations=25 \
             ${{ inputs.pytest-extra-args }} "${args[@]}" "${tests[@]}" \
             || { [ $? -eq 5 ] && [ "$MODE" = selected ] && [ "$SPLITS" -gt 1 ]; }
 
@@ -532,7 +540,7 @@ jobs:
           status=0
           for addon in "${addons[@]}"; do
             echo "::group::$addon"
-            "${python[@]}" -m angee.base.testing.host "$addon" -q --durations=10 || status=1
+            env -u DATABASE_URL "${python[@]}" -m angee.base.testing.host "$addon" -q --durations=10 || status=1
             echo "::endgroup::"
           done
           exit "$status"
@@ -700,21 +708,15 @@ jobs:
           if "schema" in get_commands():
               call_command("schema", check=True)
           '
-      - name: Validate resources on the selected composition
+      - name: Migrate the selected composition
         if: >-
           ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
           fromJSON(needs.select.outputs.plan).packages.mode == 'empty' }}
         working-directory: stack
         run: |
-          resources=$(.venv/bin/python manage.py shell --verbosity 0 -c \
-            'from django.apps import apps; print(apps.is_installed("angee.resources"))')
-          if [ "$resources" = False ]; then exit 0; fi
-          test "$resources" = True
           .venv/bin/python manage.py migrate --noinput
           # Populate the empty test database's permission schema before system checks.
           .venv/bin/python manage.py rebac --skip-checks sync
-          .venv/bin/python manage.py check --database default
-          .venv/bin/python manage.py resources validate --include-demo
       - name: Provision the composed stack
         if: ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'full' }}
         working-directory: stack
@@ -725,17 +727,23 @@ jobs:
       # MRO-ordered save overrides). Append-only models refuse edits by contract, so they
       # only load.
       - name: Smoke the composed models
-        if: ${{ matrix.kind == 'integration' && fromJSON(needs.select.outputs.plan).stack.mode == 'full' }}
+        if: >-
+          ${{ matrix.kind == 'integration' && (fromJSON(needs.select.outputs.plan).stack.mode == 'full' ||
+          (fromJSON(needs.select.outputs.plan).stack.mode == 'selected' &&
+          fromJSON(needs.select.outputs.plan).packages.mode == 'empty')) }}
         working-directory: stack
         run: |
           .venv/bin/python manage.py check --database default
-          .venv/bin/python manage.py resources load --include-demo
-          .venv/bin/python manage.py shell -c '
+          .venv/bin/python manage.py shell --verbosity 0 -c '
           from django.apps import apps
+          from django.core.management import call_command, get_commands
           from rebac import system_context
 
           from angee.base.addons import is_angee_addon
           from angee.base.models.append_only import AppendOnlyModel
+
+          if "resources" in get_commands():
+              call_command("resources", "load", "--include-demo")
 
           failures, loaded = [], 0
           with system_context(reason="ci.composed_model_smoke"):
@@ -895,9 +903,8 @@ jobs:
             fi
           fi
           args=()
-          ignore=()
+          ignore=( --ignore "$BRIDGE_SOURCE_GUARD" )
           if [ -n "$DONOR" ]; then args+=( --donor "$DONOR" ); fi
-          if [ "$PRIMARY_SLOT" = angee ]; then ignore+=( --ignore "$BRIDGE_SOURCE_GUARD" ); fi
           while IFS= read -r test_path; do ignore+=( --ignore "$test_path" ); done < <(jq -r '.[]' <<< "$QUALITY_TESTS")
           env -u DATABASE_URL "$GITHUB_WORKSPACE/stack/.venv/bin/python" ../angee/scripts/changed_path_selection.py pytest \
             --base "${TEST_BASE:-}" --head "${TEST_HEAD:-}" "${args[@]}" -- -q "${ignore[@]}" ${{ inputs.pytest-extra-args }}
