@@ -98,7 +98,10 @@ _RESOURCE = hasura_model_resource(
     id_column="sqid",
 )
 
-def _resource_schema(resource: Any) -> strawberry.Schema:
+
+def _resource_schema(
+    resource: Any, nodes: tuple[type, ...] = (DocumentType, DocumentLineType),
+) -> strawberry.Schema:
     return GraphQLSchemas(
         [
             SchemaAddon(
@@ -106,7 +109,7 @@ def _resource_schema(resource: Any) -> strawberry.Schema:
                     "public": {
                         "query": [resource.query],
                         "mutation": [resource.mutation],
-                        "types": [DocumentType, DocumentLineType, *resource.types],
+                        "types": [*nodes, *resource.types],
                     }
                 }
             )
@@ -114,7 +117,9 @@ def _resource_schema(resource: Any) -> strawberry.Schema:
     ).build("public")
 
 
-_SCHEMA = _resource_schema(_RESOURCE)
+@pytest.fixture
+def document_schema() -> strawberry.Schema:
+    return _resource_schema(_RESOURCE)
 
 # A second resource whose lines expose the ``product`` relation as a public id, so
 # the write must decode it under the caller's actor (the finding #5 handle).
@@ -138,7 +143,9 @@ _RESOURCE_WITH_PRODUCT = hasura_model_resource(
     id_column="sqid",
 )
 
-_SCHEMA_WITH_PRODUCT = _resource_schema(_RESOURCE_WITH_PRODUCT)
+@pytest.fixture
+def product_schema() -> strawberry.Schema:
+    return _resource_schema(_RESOURCE_WITH_PRODUCT)
 
 # A third resource whose lines expose an enum child (``kind``) and an M2M child
 # (``tags``): the F6 line-metadata reconstruction must project both (an enum's
@@ -165,7 +172,9 @@ _RESOURCE_RICH = hasura_model_resource(
     id_column="sqid",
 )
 
-_SCHEMA_RICH = _resource_schema(_RESOURCE_RICH)
+@pytest.fixture
+def rich_schema() -> strawberry.Schema:
+    return _resource_schema(_RESOURCE_RICH)
 
 
 def _grant(document: Document, relation: str, user: Any) -> None:
@@ -208,12 +217,12 @@ mutation($pk: ID!, $patch: documents_set_input, $lines: [documents_lines_insert_
 """
 
 
-def test_nested_insert_writes_parent_and_lines_atomically(db):
+def test_nested_insert_writes_parent_and_lines_atomically(db, document_schema):
     """One insert mutation persists the document and its child lines."""
 
     actor = create_platform_admin("author")
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _INSERT,
         {
             "object": {
@@ -236,12 +245,12 @@ def test_nested_insert_writes_parent_and_lines_atomically(db):
     assert rows == [("Widget", 2, 0), ("Gadget", 5, 1)]
 
 
-def test_nested_insert_does_not_return_an_unreadable_created_row(db):
+def test_nested_insert_does_not_return_an_unreadable_created_row(db, document_schema):
     """Create authority grants neither read nor write, yet the creation admits its nested lines."""
 
     actor = create_user("unreadable-author")
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _INSERT,
         {
             "object": {
@@ -264,12 +273,12 @@ def test_nested_insert_does_not_return_an_unreadable_created_row(db):
     assert not document.has_access("write")
 
 
-def test_nested_insert_rolls_back_parent_on_line_failure(db):
+def test_nested_insert_rolls_back_parent_on_line_failure(db, document_schema):
     """A child validation failure rolls the whole nested insert back."""
 
     actor = create_user("author")
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _INSERT,
         {
             "object": {
@@ -290,7 +299,7 @@ def test_nested_insert_rolls_back_parent_on_line_failure(db):
         assert not DocumentLine.objects.filter(label="ok").exists()
 
 
-def test_save_diffs_lines_create_update_delete_in_one_transaction(db):
+def test_save_diffs_lines_create_update_delete_in_one_transaction(db, document_schema):
     """``_save`` creates/updates/deletes children and patches the parent atomically."""
 
     owner = create_user("owner")
@@ -301,7 +310,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(db):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {
             "pk": doc.public_id,
@@ -326,7 +335,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(db):
         assert not DocumentLine.objects.filter(pk=drop.pk).exists()
 
 
-def test_removing_a_line_other_records_use_is_a_public_refusal(db):
+def test_removing_a_line_other_records_use_is_a_public_refusal(db, document_schema):
     """A protected line is kept and the caller learns why, never an internal error."""
 
     owner = create_user("owner")
@@ -338,7 +347,7 @@ def test_removing_a_line_other_records_use_is_a_public_refusal(db):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {"pk": doc.public_id, "patch": {"note": "confirmed"},
          "lines": [{"id": keep.public_id, "label": "Keep", "quantity": 1, "position": 0}]},
@@ -354,7 +363,7 @@ def test_removing_a_line_other_records_use_is_a_public_refusal(db):
         assert DocumentLine.objects.filter(pk=used.pk).exists()
 
 
-def test_save_without_lines_leaves_children_untouched(db):
+def test_save_without_lines_leaves_children_untouched(db, document_schema):
     """Omitting ``lines`` is a parent-only save; the children are left alone."""
 
     owner = create_user("owner")
@@ -364,7 +373,7 @@ def test_save_without_lines_leaves_children_untouched(db):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {"pk": doc.public_id, "patch": {"note": "confirmed"}},
         user=owner,
@@ -376,7 +385,7 @@ def test_save_without_lines_leaves_children_untouched(db):
         assert doc.lines.count() == 1
 
 
-def test_save_denies_actor_without_write_on_parent(db):
+def test_save_denies_actor_without_write_on_parent(db, document_schema):
     """An actor with no write on the parent is denied — the row is never found."""
 
     owner = create_user("owner")
@@ -387,7 +396,7 @@ def test_save_denies_actor_without_write_on_parent(db):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {
             "pk": doc.public_id,
@@ -404,7 +413,7 @@ def test_save_denies_actor_without_write_on_parent(db):
     assert line.label == "Line" and line.quantity == 1
 
 
-def test_save_denies_reader_without_write_even_with_empty_patch(db):
+def test_save_denies_reader_without_write_even_with_empty_patch(db, document_schema):
     """A reader (read, no write) is denied a lines-only save — the write-gate hole.
 
     The ``reader`` grant makes ``read`` and ``write`` diverge, so the parent row
@@ -427,7 +436,7 @@ def test_save_denies_reader_without_write_even_with_empty_patch(db):
         assert Document.objects.filter(pk=doc.pk).exists()
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {
             "pk": doc.public_id,
@@ -445,7 +454,7 @@ def test_save_denies_reader_without_write_even_with_empty_patch(db):
         assert doc.lines.count() == 1
 
 
-def test_save_rejects_line_ids_not_on_the_parent(db):
+def test_save_rejects_line_ids_not_on_the_parent(db, document_schema):
     """A line id absent from the parent's stored set is rejected wholesale.
 
     Enforces the completeness contract server-side: a stale/foreign/truncated
@@ -462,7 +471,7 @@ def test_save_rejects_line_ids_not_on_the_parent(db):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {
             "pk": doc.public_id,
@@ -482,7 +491,7 @@ def test_save_rejects_line_ids_not_on_the_parent(db):
     assert foreign.label == "Foreign"
 
 
-def test_save_fetches_kept_lines_without_per_row_growth(db):
+def test_save_fetches_kept_lines_without_per_row_growth(db, document_schema):
     """The kept-child fetch is batched: its query cost does not grow per row (no N+1)."""
 
     owner = create_user("owner")
@@ -501,7 +510,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(db):
             for index, line in enumerate(kept)
         ]
         with CaptureQueriesContext(connection) as captured:
-            result = execute_schema(_SCHEMA, _SAVE, {"pk": doc.public_id, "lines": lines}, user=owner)
+            result = execute_schema(document_schema, _SAVE, {"pk": doc.public_id, "lines": lines}, user=owner)
         result_data(result)
         return sum(
             1
@@ -514,7 +523,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(db):
     assert child_selects_for(2) == child_selects_for(5)
 
 
-def test_save_locks_the_parent_row_before_diffing_lines(db, monkeypatch):
+def test_save_locks_the_parent_row_before_diffing_lines(db, monkeypatch, document_schema):
     """The child diff runs under a parent-row lock (serializes concurrent saves).
 
     A true cross-delete race needs two Postgres connections; Django emits no
@@ -538,7 +547,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(db, monkeypatch):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA,
+        document_schema,
         _SAVE,
         {"pk": doc.public_id, "lines": [{"id": line.public_id, "label": "Line", "quantity": 2, "position": 0}]},
         user=owner,
@@ -549,7 +558,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(db, monkeypatch):
     assert all(paths == ("self",) for paths in document_locks)
 
 
-def test_save_decodes_line_relation_under_the_callers_actor(db):
+def test_save_decodes_line_relation_under_the_callers_actor(db, product_schema):
     """A line referencing a product the caller cannot read is rejected before elevation.
 
     The relation decode runs under the caller's actor (phase 1), so an invisible
@@ -574,7 +583,7 @@ def test_save_decodes_line_relation_under_the_callers_actor(db):
     """
 
     denied = execute_schema(
-        _SCHEMA_WITH_PRODUCT,
+        product_schema,
         _SAVE_PROD,
         {
             "pk": doc.public_id,
@@ -587,7 +596,7 @@ def test_save_decodes_line_relation_under_the_callers_actor(db):
         assert doc.lines.count() == 0
 
     ok = execute_schema(
-        _SCHEMA_WITH_PRODUCT,
+        product_schema,
         _SAVE_PROD,
         {
             "pk": doc.public_id,
@@ -695,10 +704,10 @@ def test_lines_writable_non_column_fails_the_build():
         )
 
 
-def test_lines_resource_metadata_is_emitted():
+def test_lines_resource_metadata_is_emitted(document_schema):
     """The resource advertises the editable-lines contract + the save root."""
 
-    (resource,) = [m for m in _SCHEMA.angee_resources if m.model_label == "linesdemo.Document"]
+    (resource,) = [m for m in document_schema.angee_resources if m.model_label == "linesdemo.Document"]
     assert "save" in resource.capabilities
     assert resource.roots.save_name == "documents_save"
     assert resource.lines is not None
@@ -731,7 +740,7 @@ mutation($pk: ID!, $lines: [documents_rich_lines_insert_input!]) {
 """
 
 
-def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
+def test_rich_lines_metadata_projects_enum_and_m2m_child_fields(rich_schema):
     """The lines contract carries an enum child's values and an M2M's relation target (F-b).
 
     The reconstruction routes through the child node surface, so a choices column
@@ -739,7 +748,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
     target — instead of the old model reconstruction raising on either.
     """
 
-    (resource,) = [m for m in _SCHEMA_RICH.angee_resources if m.model_label == "linesdemo.Document"]
+    (resource,) = [m for m in rich_schema.angee_resources if m.model_label == "linesdemo.Document"]
     assert resource.lines is not None
     by_name = {field.name: field for field in resource.lines.fields}
     kind = by_name["kind"]
@@ -750,7 +759,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
     assert tags.relation_model_label == "linesdemo.Tag"
 
 
-def test_rich_nested_insert_persists_enum_and_m2m(db):
+def test_rich_nested_insert_persists_enum_and_m2m(db, rich_schema):
     """A nested insert writes the enum child (lowercase model value) and its M2M tags."""
 
     actor = create_platform_admin("author")
@@ -758,7 +767,7 @@ def test_rich_nested_insert_persists_enum_and_m2m(db):
         red = Tag.objects.create(name="Red")
         blue = Tag.objects.create(name="Blue")
     result = execute_schema(
-        _SCHEMA_RICH,
+        rich_schema,
         _INSERT_RICH,
         {
             "object": {
@@ -790,7 +799,7 @@ def test_rich_nested_insert_persists_enum_and_m2m(db):
         assert set(row.tags.values_list("name", flat=True)) == {"Red", "Blue"}
 
 
-def test_rich_save_round_trips_enum_and_m2m_diff(db):
+def test_rich_save_round_trips_enum_and_m2m_diff(db, rich_schema):
     """``_save`` diff-applies an enum change (lowercase) and an M2M set (sqids) atomically."""
 
     owner = create_user("owner")
@@ -806,7 +815,7 @@ def test_rich_save_round_trips_enum_and_m2m_diff(db):
     _grant_manager(doc, owner)
 
     result = execute_schema(
-        _SCHEMA_RICH,
+        rich_schema,
         _SAVE_RICH,
         {
             "pk": doc.public_id,
@@ -865,33 +874,20 @@ _PINNED_LINES = HasuraLines(
     writable=("label", "quantity", "position"),
 )
 
-_PINNED_SCHEMA = GraphQLSchemas(
-    [
-        SchemaAddon(
-            {
-                "public": {
-                    "query": [
-                        (
-                            pinned := hasura_model_resource(
-                                PinnedDocumentType,
-                                model=Document,
-                                name="pinned_documents",
-                                filterable=["id", "title"],
-                                sortable=["title"],
-                                aggregatable=["id"],
-                                writable=["title"],
-                                lines=_PINNED_LINES,
-                                id_column="sqid",
-                            )
-                        ).query
-                    ],
-                    "mutation": [pinned.mutation],
-                    "types": [PinnedDocumentType, PinnedLineType, *pinned.types],
-                }
-            }
-        )
-    ]
-).build("public")
+@pytest.fixture
+def pinned_schema() -> strawberry.Schema:
+    pinned = hasura_model_resource(
+        PinnedDocumentType,
+        model=Document,
+        name="pinned_documents",
+        filterable=["id", "title"],
+        sortable=["title"],
+        aggregatable=["id"],
+        writable=["title"],
+        lines=_PINNED_LINES,
+        id_column="sqid",
+    )
+    return _resource_schema(pinned, (PinnedDocumentType, PinnedLineType))
 
 _SAVE_PINNED = """
 mutation($pk: ID!, $lines: [pinned_documents_pinned_lines_insert_input!]) {
@@ -919,13 +915,13 @@ def _pinned_rows(doc: Document) -> list[tuple[str, int, int, bool]]:
         return list(doc.pinned_lines.order_by("position", "pk").values_list("label", "quantity", "position", "pinned"))
 
 
-def test_lines_save_edits_unlocked_cells_of_a_locked_row(db):
+def test_lines_save_edits_unlocked_cells_of_a_locked_row(db, pinned_schema):
     """A locked row keeps its locked cell but its other cells and its order stay editable."""
 
     owner = create_user("owner")
     doc, pinned, free = _pinned_document(owner)
     data = result_data(execute_schema(
-        _PINNED_SCHEMA,
+        pinned_schema,
         _SAVE_PINNED,
         {
             "pk": doc.public_id,
@@ -955,20 +951,20 @@ def test_lines_save_edits_unlocked_cells_of_a_locked_row(db):
     ],
     ids=["change-locked-cell", "remove-locked-row"],
 )
-def test_lines_save_refuses_to_bypass_a_row_lock(db, lines, message):
+def test_lines_save_refuses_to_bypass_a_row_lock(db, lines, message, pinned_schema):
     """The parent-authorized elevation never lets a line alter or remove a system row."""
 
     owner = create_user("owner")
     doc, pinned, free = _pinned_document(owner)
     before = _pinned_rows(doc)
     variables = {"pk": doc.public_id, "lines": lines(pinned, free)}
-    result = execute_schema(_PINNED_SCHEMA, _SAVE_PINNED, variables, user=owner)
+    result = execute_schema(pinned_schema, _SAVE_PINNED, variables, user=owner)
     assert result.errors is not None
     assert message in result.errors[0].message
     assert _pinned_rows(doc) == before
 
 
-def test_lines_cannot_create_a_system_row(db):
+def test_lines_cannot_create_a_system_row(db, pinned_schema):
     """A new line is a user write, so it can never become a system row."""
 
     owner = create_user("owner")
@@ -980,7 +976,7 @@ def test_lines_cannot_create_a_system_row(db):
         candidate.validate_row_lock(None)
     # ``pinned`` is not a writable line column, so the wire cannot even ask for it.
     result = execute_schema(
-        _PINNED_SCHEMA,
+        pinned_schema,
         _SAVE_PINNED,
         {"pk": doc.public_id, "lines": [{"label": "Forged", "quantity": 1, "position": 0, "pinned": True}]},
         user=owner,
@@ -1008,14 +1004,14 @@ def test_system_writers_keep_owning_locked_rows(db):
     assert _pinned_rows(doc)[0][0] == "Reprovisioned"
 
 
-def test_row_locked_lines_advertise_their_lock_field():
+def test_row_locked_lines_advertise_their_lock_field(document_schema, pinned_schema):
     """The lines contract names the node's lock projection for the composer."""
 
-    (resource,) = [m for m in _PINNED_SCHEMA.angee_resources if m.model_label == "linesdemo.Document"]
+    (resource,) = [m for m in pinned_schema.angee_resources if m.model_label == "linesdemo.Document"]
     assert resource.lines is not None
     assert resource.lines.lock_field == "locked_fields"
     assert "locked_fields" not in {field.name for field in resource.lines.fields}
-    (plain,) = [m for m in _SCHEMA.angee_resources if m.model_label == "linesdemo.Document"]
+    (plain,) = [m for m in document_schema.angee_resources if m.model_label == "linesdemo.Document"]
     assert plain.lines is not None and plain.lines.lock_field is None
 
 
@@ -1107,7 +1103,7 @@ def test_owner_lock_does_not_bypass_narrowed_write_surface(db, monkeypatch):
     assert doc.note == ""
 
 
-def test_owner_lock_rechecks_write_permission_for_lines_only_save(db, monkeypatch):
+def test_owner_lock_rechecks_write_permission_for_lines_only_save(db, monkeypatch, document_schema):
     owner = create_user("revoked-lock-owner")
     with system_context(reason="seed revoked lock target"):
         doc = Document.objects.create(title="Document")
@@ -1127,7 +1123,7 @@ def test_owner_lock_rechecks_write_permission_for_lines_only_save(db, monkeypatc
 
     monkeypatch.setattr(Document, "lock_subject", lock)
     monkeypatch.setattr(Document, "has_access", access)
-    result = execute_schema(_SCHEMA, _SAVE, {"pk": doc.public_id, "lines": [
+    result = execute_schema(document_schema, _SAVE, {"pk": doc.public_id, "lines": [
         {"label": "Must not create", "quantity": 1, "position": 0},
     ]}, user=owner)
     assert result.errors and waited
@@ -1151,7 +1147,7 @@ mutation($product: ID!, $key: String) {
 """
 
 
-def test_insert_decides_the_document_before_its_lines(db: None) -> None:
+def test_insert_decides_the_document_before_its_lines(db: None, product_schema: strawberry.Schema) -> None:
     """A refused caller gets the document's refusal before a line's product is resolved.
 
     Only an anonymous caller may not create a document, and an anonymous key is
@@ -1162,7 +1158,7 @@ def test_insert_decides_the_document_before_its_lines(db: None) -> None:
     with system_context(reason="seed"):
         hidden = Product.objects.create(name="Hidden")
 
-    result = execute_schema(_SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": hidden.public_id, "key": None})
+    result = execute_schema(product_schema, _INSERT_WITH_PRODUCT_LINE, {"product": hidden.public_id, "key": None})
 
     assert result.errors is not None
     assert isinstance(result.errors[0].original_error, PermissionDenied), result.errors[0].original_error
@@ -1175,7 +1171,9 @@ def test_insert_decides_the_document_before_its_lines(db: None) -> None:
     ((None, STATEMENTS_KEYLESS, REPEATED_KEYLESS), ("admitted-request", STATEMENTS_KEYED, REPEATED_KEYED)),
     ids=("keyless", "keyed"),
 )
-def test_insert_decodes_each_public_id_once(db: None, key: str | None, statements: int, repeated: int) -> None:
+def test_insert_decodes_each_public_id_once(
+    db: None, key: str | None, statements: int, repeated: int, product_schema: strawberry.Schema,
+) -> None:
     """An admitted insert resolves its line's product once, with or without an idempotency key."""
 
     author = create_platform_admin("decode-once-author")
@@ -1186,11 +1184,11 @@ def test_insert_decodes_each_public_id_once(db: None, key: str | None, statement
     # Measured after one warm execution, as document budgets are (docs/checks.md).
     warm = None if key is None else f"warm-{key}"
     result_data(execute_schema(
-        _SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": product.public_id, "key": warm}, user=author,
+        product_schema, _INSERT_WITH_PRODUCT_LINE, {"product": product.public_id, "key": warm}, user=author,
     ))
 
     read = measure_graphql_document(
-        _SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": product.public_id, "key": key}, actor=author,
+        product_schema, _INSERT_WITH_PRODUCT_LINE, {"product": product.public_id, "key": key}, actor=author,
     )
 
     read.assert_ceiling(statements=statements, repeated=repeated)
