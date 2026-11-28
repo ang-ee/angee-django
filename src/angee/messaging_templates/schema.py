@@ -1,0 +1,339 @@
+"""GraphQL schema contributions for message templates.
+
+Exposed on the console. A message template is an ordinary resource (list,
+detail, insert, update, delete); deleting an override is resetting it to its
+shipped default. The insert takes a kind, key, language and name, and the server
+seeds the rest (``MessageTemplateManager.create_own``), deciding ``create`` on
+the candidate before any work of its own; a keyed insert is claimed first, as
+every factory insert is, and a refusal rolls the claim back. A row reports what
+its reader may do with it (``permissions``), whether its kind carries a subject,
+preheader and layout, and, to a reader who may preview it, the rows naming its
+kind and key (``backlinks``), a read for one record's page. ``can_override`` and
+``can_keep_override`` answer, for the reader, what the two verbs below ask first
+(``MessageTemplate.override_refusal`` and ``keep_override_refusal``);
+``can_override`` is a read for one record's page; ``can_send_test`` answers
+what the test send asks first (``MessageTemplate.send_test_refusal``), the row's
+side alone. ``override_message_template`` starts the deployment's override of a
+shipped default and ``keep_message_template_override`` keeps an override over a
+default that changed; both return an ``ActionResult`` naming the override.
+``send_message_template_test`` sends a row with its sample to the caller's own
+address on the system channel (``MessageTemplateManager.send_test``) and returns
+an ``ActionResult`` naming the message; with an ``idempotency_key`` a retry of
+the same request names the same message, and another request under the key is a
+``CREATION_KEY_CONFLICT`` GraphQL error. The verbs refuse as the framework's
+actions do: a signed-out caller gets the session's GraphQL error, and a caller
+who may not create or write the override, or preview the row, gets a
+``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
+not a shipped default and an override of none are refused in band (``ok: false``,
+with the codes ``not_a_baseline`` and ``no_baseline``), and so is what refuses a
+test send after its permission: the row's side, the account's address, the
+render, and what ``compose_as_system`` refuses, as its docstring says. A row's
+``is_effective``, ``is_overridden``, ``has_updated_default`` and
+``overrides_default`` are read from its siblings and filter through the model's
+``hasura_filter_expressions``.
+``message_template_preview`` renders a row with its sample for a caller who may
+preview it (``MessageTemplate.preview``), in the kit it names or the default one;
+with a ``patch``, the resource's own ``message_templates_set_input`` decoded as
+the update decodes it (``MessageTemplateWriteBackend.patch_values``), it renders
+the row as that patch would save it, for a caller who may also write the row,
+and saves nothing. It refuses as the verbs do: a signed-out caller gets the
+session's GraphQL error, and a reader who may not preview the row, or write it
+with a patch, a ``PERMISSION_DENIED`` GraphQL error. What the row or its patch
+would be refused for comes back in band, one warning a refusal, each naming its
+column (``field``): ``SAVE_REFUSED`` for what saving the patch would refuse,
+``RENDER_ERROR`` for what does not render. Its rendered message carries the row's
+``language`` and the ``direction`` of the mail's own text
+(``RenderedMessage.direction``, a ``MessageTemplateTextDirection``), for a page
+that shows the subject, preheader or plain text outside the HTML.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Annotated, Any, cast
+
+import strawberry
+import strawberry_django
+from django.apps import apps
+from django.db.models import Prefetch
+from django.db.models.expressions import BaseExpression
+from strawberry import auto
+from strawberry.scalars import JSON
+from strawberry_django.optimizer import optimize
+from strawberry_django_hasura import input_to_dict
+
+from angee.base.prefetch import prefetched
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
+from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, CreationClaim, hasura_model_resource
+from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.messaging_templates.models import MessageTemplate as MessageTemplateModel
+from angee.messaging_templates.models import MessageTemplateQuerySet
+from angee.messaging_templates.walker import (
+    RenderedMessage,
+    TemplatePreview,
+    TemplateWarning,
+    TemplateWarningCode,
+    TextDirection,
+)
+
+MessageTemplate = apps.get_model("messaging_templates", "MessageTemplate")
+BrandKit = apps.get_model("brandkit", "BrandKit")
+
+MessageTemplateWarningCode = strawberry.enum(TemplateWarningCode, name="MessageTemplateWarningCode")
+MessageTemplateTextDirection = strawberry.enum(TextDirection, name="MessageTemplateTextDirection")
+MessageTemplateWarningType = strawberry.type(TemplateWarning, name="MessageTemplateWarningType")
+RenderedMessageType = strawberry.type(RenderedMessage, name="RenderedMessageType")
+MessageTemplatePreviewType = strawberry.type(TemplatePreview, name="MessageTemplatePreviewType")
+
+
+def _row_fact(name: str) -> BaseExpression:
+    """Build one row fact for the list's annotation, from the queryset's one mapping of them."""
+
+    return MessageTemplateQuerySet.row_fact_expressions[name](MessageTemplate._base_manager.all())
+
+
+_BACKLINKS = "_messaging_templates_backlinks"
+
+
+def _backlinks_prefetch(info: strawberry.Info) -> Prefetch:
+    """Batch the rows naming each listed row's kind and key, read with the nested selection's native hints."""
+
+    return MessageTemplate.backlinks_prefetch(optimize(MessageTemplate.objects.all(), info), to_attr=_BACKLINKS)
+
+
+@strawberry_django.type(MessageTemplate)
+class MessageTemplateType(AngeeNode):
+    """Console projection of one message template; its hashes stay on the server."""
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
+    kind: auto
+    key: auto
+    language: auto
+    name: auto
+    description: auto
+    format: auto
+    subject: auto
+    preheader: auto
+    source: auto
+    text_source: auto
+    layout: auto
+    variables: auto
+    sample: JSON | None
+    is_baseline: auto
+    created_at: auto
+    updated_at: auto
+    permissions = permissions_field(("delete", "preview", "write"))
+
+    @strawberry_django.field(only=["kind"])
+    def carries_message_fields(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether rows of this kind fill ``subject``, ``preheader`` and ``layout``; the others leave them empty."""
+
+        return parent.handler.carries_message_fields
+
+    @strawberry_django.field(
+        only=["kind", "key"], prefetch_related=[_backlinks_prefetch], extensions=[PermissionsExtension(("preview",))],
+    )
+    def backlinks(
+        parent: strawberry.Parent[MessageTemplateModel], info: strawberry.Info,
+    ) -> list[MessageTemplateType] | None:
+        """The rows, in any language, that name this row's kind and key: a template its layout, any row a block or
+        part it includes. Null for a reader who may not preview this row.
+
+        A read for one record's page, not for a list: its statements are fixed,
+        but every read checks each row that holds a listed block's or part's name.
+        """
+
+        if "preview" not in held_permissions(parent, ("preview",)):
+            return None
+        answer = prefetched(parent, _BACKLINKS, lambda: _backlinks_prefetch(info))
+        return cast("list[MessageTemplateType]", answer[1] if answer is not None else [])
+
+    @strawberry_django.field(annotate={"_is_effective": lambda info: _row_fact("is_effective")})
+    def is_effective(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether this row is what renders for its kind, key and language."""
+
+        return parent.is_effective
+
+    @strawberry_django.field(annotate={"_is_overridden": lambda info: _row_fact("is_overridden")})
+    def is_overridden(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether this shipped default has the deployment's override."""
+
+        return parent.is_overridden
+
+    @strawberry_django.field(annotate={"_has_updated_default": lambda info: _row_fact("has_updated_default")})
+    def has_updated_default(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether this override's shipped default changed since the override started or was last kept."""
+
+        return parent.has_updated_default
+
+    @strawberry_django.field(annotate={"_overrides_default": lambda info: _row_fact("overrides_default")})
+    def overrides_default(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether this row is the deployment's override of a shipped default; a deployment's own row is not."""
+
+        return parent.overrides_default
+
+    @strawberry_django.field(only=["kind", "key", "language", "is_baseline"])
+    def can_override(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether ``override_message_template`` admits the reader on this row: what the verb asks first.
+
+        A read for one record's page, not for a list: the reader's ``create``
+        on the override is decided for each row read.
+        """
+
+        return parent.override_refusal() is None
+
+    @strawberry_django.field(
+        only=["kind", "key", "language", "is_baseline"],
+        annotate={"_overrides_default": lambda info: _row_fact("overrides_default")},
+        extensions=[PermissionsExtension(("write",))],
+    )
+    def can_keep_override(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether ``keep_message_template_override`` admits the reader on this row: what the verb asks first."""
+
+        return parent.keep_override_refusal() is None
+
+    @strawberry_django.field(
+        only=["kind"],
+        annotate={"_is_effective": lambda info: _row_fact("is_effective")},
+        extensions=[PermissionsExtension(("preview",))],
+    )
+    def can_send_test(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether ``send_message_template_test`` admits the reader on this row: what the verb asks first.
+
+        The row's side alone: a test send it admits may still be refused in band,
+        for an account with no address, the system channel or its transport, or
+        the sample's render.
+        """
+
+        return parent.send_test_refusal() is None
+
+
+class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
+    """Write semantics for message templates: create belongs to the manager factory."""
+
+    def patch_values(self, data: Mapping[str, Any]) -> dict[str, Any]:
+        """Decode a set-input patch as the update decodes its input, applying it to no row: its native values.
+
+        The update's own steps: input extensions split off, refused here, since
+        the preview a patch is for writes nothing; enum member names and public
+        ids decoded by the base. Reads no row.
+        """
+
+        values, extensions = self._split_input(data)
+        if extensions:
+            raise ValueError(f"A patch takes columns alone, not {', '.join(sorted(extensions))}.")
+        return self._decode_public_id_fields(values)
+
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Create the deployment's own row; a keyed insert is claimed first, then the manager decides create.
+
+        As every factory backend: the factory decides as it writes, so the claim
+        is asked before it. ``create_own`` then decides ``create`` on the
+        candidate before it cleans, reads or writes anything, and a refusal rolls
+        the claim back with the insert.
+        """
+
+        del info
+        values = self._decode_public_id_fields(data)
+        if claim is not None and (replay := claim()) is not None:
+            return replay
+        return MessageTemplate.objects.create_own(**values)
+
+
+_WRITE_BACKEND = MessageTemplateWriteBackend(MessageTemplate)
+
+_MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
+    MessageTemplateType,
+    model=MessageTemplate,
+    name="message_templates",
+    filterable=["id", "kind", "key", "language", "format", "is_baseline"],
+    sortable=["kind", "key", "language", "name", "updated_at"],
+    aggregatable=["id"],
+    groupable=["kind", "language", "format", "is_baseline"],
+    insertable=["kind", "key", "language", "name"],
+    updatable=list(MessageTemplate.edited_fields),
+    write_backend=_WRITE_BACKEND,
+    id_column="sqid",
+)
+_PATCH_INPUT = cast(type, _MESSAGE_TEMPLATE_RESOURCE.set_input_type)
+"""The resource's own update input, ``message_templates_set_input``: the edited columns a preview's patch writes."""
+
+
+def _named_brand_kit(info: strawberry.Info, brand_kit: PublicID | None) -> Any:
+    """The kit a caller names, read through their own scope (``not_found`` for one they do not read), or ``None``
+    for the default kit."""
+
+    return None if brand_kit is None else require_instance_for_id(
+        BrandKit, brand_kit, queryset=BrandKit.objects.with_actor(session_user(info)),
+    )
+
+
+@strawberry.type
+class MessageTemplateMutation:
+    """Verbs on a row: overriding a shipped default, keeping an override, and a test send."""
+
+    @strawberry.mutation
+    @action_guard("Override message template failed.")
+    def override_message_template(self, info: strawberry.Info, template: PublicID) -> ActionResult:
+        """Start the deployment's override of a shipped default, or return the one it has."""
+
+        baseline = authorized_permission_target(info, MessageTemplate, template, "read")
+        override = MessageTemplate.objects.override(baseline)
+        return ActionResult(ok=True, message="Message template overridden.", id=override.sqid)
+
+    @strawberry.mutation
+    @action_guard("Keep message template override failed.")
+    def keep_message_template_override(self, info: strawberry.Info, template: PublicID) -> ActionResult:
+        """Keep an override's text over its shipped default as it is now, which clears ``has_updated_default``."""
+
+        override = authorized_permission_target(info, MessageTemplate, template, "read")
+        MessageTemplate.objects.keep_override(override)
+        return ActionResult(ok=True, message="Override kept.", id=override.sqid)
+
+    @strawberry.mutation
+    @action_guard("Send message template test failed.")
+    def send_message_template_test(
+        self, info: strawberry.Info, template: PublicID, brand_kit: PublicID | None = None,
+        idempotency_key: str | None = None,
+    ) -> ActionResult:
+        """Send the row with its sample to the caller's own address, on the system channel, in the named kit or the
+        default one; a retry under the same ``idempotency_key`` answers with the message the first one sent."""
+
+        row = authorized_permission_target(info, MessageTemplate, template, "read")
+        kit = _named_brand_kit(info, brand_kit)
+        message = MessageTemplate.objects.send_test(
+            row, actor=session_user(info), kit=kit, idempotency_key=idempotency_key,
+        )
+        return ActionResult(ok=True, message="A test of this message template is queued.", id=message.sqid)
+
+
+@strawberry.type
+class MessageTemplatePreviewQuery:
+    """A message template rendered with its sample, for a caller who may preview it."""
+
+    @strawberry.field
+    def message_template_preview(
+        self, info: strawberry.Info, template: PublicID, brand_kit: PublicID | None = None,
+        patch: Annotated[Any, strawberry.argument(graphql_type=_PATCH_INPUT | None)] = None,
+    ) -> TemplatePreview:
+        """Render the row with its sample, or as ``patch`` would save it, in the named kit or the default one, and
+        say what it warns about."""
+
+        row = authorized_permission_target(info, MessageTemplate, template, "read")
+        return row.preview(
+            kit=_named_brand_kit(info, brand_kit),
+            patch=None if patch is None else _WRITE_BACKEND.patch_values(input_to_dict(patch)),
+        )
+
+
+schemas = {
+    "console": {
+        "query": [_MESSAGE_TEMPLATE_RESOURCE.query, MessageTemplatePreviewQuery],
+        "mutation": [MessageTemplateMutation, _MESSAGE_TEMPLATE_RESOURCE.mutation],
+        "types": [MessageTemplateType, MessageTemplatePreviewType, *_MESSAGE_TEMPLATE_RESOURCE.types],
+    },
+}

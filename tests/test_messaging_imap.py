@@ -32,7 +32,7 @@ from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import BridgeSyncError, CursorInvalid, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
-from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
+from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Recipient, Thread
 from angee.messaging_integrate_imap import backend as imap_backend
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import _SEARCH_UID_WINDOW as WINDOW
@@ -173,15 +173,16 @@ def test_malformed_date_falls_back_to_internal_date() -> None:
 
 
 def test_direction_classifies_from_own_addresses() -> None:
-    """Own From is outbound; own From with only own recipients is internal."""
+    """Own From is outbound; own From with only own recipients is internal; an own address is any of its spellings."""
 
-    own = frozenset({"ada@example.com"})
+    own = frozenset({"ada@example.com", "desk@bücher.example"})
     outbound = _eml(sender="ada@example.com", to="bob@example.com")
-    internal = _eml(sender="ada@example.com", to="Ada <ADA@example.com>")
+    internal = _eml(sender="ada@example.com", to="Ada <ADA@example.com>, Desk <desk@xn--bcher-kva.example>")
     inbound = _eml(sender="bob@example.com", to="ada@example.com")
     assert _parse(outbound, own_addresses=own).direction == "outbound"
     assert _parse(internal, own_addresses=own).direction == "internal"
     assert _parse(inbound, own_addresses=own).direction == "inbound"
+    assert _parse(_eml(sender="desk@XN--BCHER-KVA.example"), own_addresses=own).direction == "outbound"
     assert _parse(outbound).direction == "inbound"  # no own-address knowledge
 
 
@@ -1377,7 +1378,7 @@ def test_poison_message_lands_through_the_fallback_envelope(
     def explode(raw: bytes, **kwargs: Any) -> Any:
         raise ValueError("unparseable")
 
-    monkeypatch.setattr("angee.messaging_integrate_imap.backend.parse_message", explode)
+    monkeypatch.setattr("angee.messaging_integrate_imap.parser.parse_message", explode)
     messages = _drain(backend)
 
     assert len(messages) == 1
@@ -1396,14 +1397,14 @@ def test_unlisted_parser_failure_lands_the_fallback_and_keeps_the_page(
         _eml(message_id="<poison@x>", subject="Poison"), _eml(message_id="<next@x>", subject="Next"),
     )})
     backend = _backend()
-    parse = imap_backend.parse_message
+    parse = imap_parser.parse_message
 
     def explode_once(raw: bytes, **kwargs: Any) -> Any:
         if b"<poison@x>" in raw:
             raise failure
         return parse(raw, **kwargs)
 
-    monkeypatch.setattr(imap_backend, "parse_message", explode_once)
+    monkeypatch.setattr(imap_parser, "parse_message", explode_once)
     messages = {message.external_id: message for message in _drain(backend)}
 
     assert set(messages) == {"poison@x", "next@x"}
@@ -1677,7 +1678,7 @@ def test_imap_worker_cancellation_propagates(
         raise SoftTimeLimitExceeded
 
     if phase == "parse":
-        monkeypatch.setattr(imap_backend, "parse_message", cancelled)
+        monkeypatch.setattr(imap_parser, "parse_message", cancelled)
     else:
         imap_server.refuse(phase, SoftTimeLimitExceeded())
     stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
@@ -2195,7 +2196,9 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert attachment.file.filename == attachment.name
     assert attachment.file.size_bytes == len(b"AGREED TERMS")
 
-    assert Participant._base_manager.filter(message=reply).count() == 2  # from + to
+    # The sender is the message's own; its one recipient row is the addressee.
+    assert list(Recipient._base_manager.filter(message=reply).values_list("role", flat=True)) == ["to"]
+    assert Handle._base_manager.get(pk=reply.sender_id).value == "bob@example.com"
 
     channel.refresh_from_db()
     assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}
@@ -2349,6 +2352,36 @@ def test_channel_resync_is_incremental_and_idempotent(
     assert RecordLink._base_manager.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
+def test_mail_from_the_accounts_own_address_in_another_spelling_is_reclassified_once_when_fetched_again(
+    imap_server: ImapServer,
+) -> None:
+    """An own address counts in any spelling, its display name dropped. Direction is in the sync hash, so a message
+    stored inbound while its own address went unmatched is rewritten in place once, when the mailbox is fetched
+    again; it stays synced and nothing is sent."""
+
+    raw = _eml(message_id="<own@x>", sender="Desk <desk@xn--bcher-kva.example>", to="bob@example.com")
+    imap_server.folders.update({"INBOX": mailbox(raw)})
+    channel = _imap_channel()
+    with system_context(reason="test imap own address spelling"):
+        assert channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC)) == 1
+        stored = Message._base_manager.get()
+        assert stored.direction == "inbound"
+
+        channel.config = {**channel.config, "own_addresses": ["Desk <Desk@Bücher.example>"]}
+        channel.save(update_fields=["config"])
+        # The server renumbers the mailbox: a new stream generation fetches it again in full.
+        imap_server.folders["INBOX"] = mailbox(raw, uidvalidity=200)
+        channel.refresh_from_db()
+        channel.run_sync(now=datetime(2026, 7, 2, 12, 5, tzinfo=UTC))
+        message = Message._base_manager.get()
+        assert (message.pk, message.direction, message.status) == (stored.pk, "outbound", "synced")
+
+        assert channel.run_sync(now=datetime(2026, 7, 2, 12, 10, tzinfo=UTC)) == 0
+    assert Message._base_manager.get().updated_at == message.updated_at
+    assert not Message._base_manager.exclude(status="synced").exists()
+
+
 def _attached(message_id: str) -> bytes:
     """Return a message with one attachment; with no storage drive its page cannot land."""
 
@@ -2446,3 +2479,25 @@ def test_page_closure_resolves_quotes_of_a_later_record(
     quoted = Message._base_manager.get(external_id="quoted@x")
     assert Part._base_manager.filter(message=quoted, role=Part.PartRole.QUOTED).exists()
     assert MessageEdge._base_manager.filter(src=original, dst=quoted, kind="quote").exists()
+
+
+_MIXED_CASE = (
+    b"From: Client Example <Client.Example@Example.TEST>\r\n"
+    b"To: Desk <Desk@Example.test>, Other@B\xc3\xbccher.Example\r\nCc: ccd@Example.test\r\n"
+    b"Message-ID: <partb-hash@example.test>\r\nSubject: Hello\r\nDate: Wed, 25 Nov 2026 10:00:00 +0000\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n\r\nbody\r\n"
+)
+_MIXED_CASE_SYNC_HASH = "308a07d2c6907f555f8afdd4e124d1b22f6d1192d771718d955ab2d5b941ffe7"
+"""The hash this message had when it was synced before the handle owner stopped taking a lower-cased address."""
+
+
+def test_the_parser_emits_addresses_lower_cased_so_an_already_synced_message_hashes_as_it_did() -> None:
+    """Changing the emitted form would change every stored sync hash; the handle owner lands any spelling anyway."""
+
+    parsed = parse_message(_MIXED_CASE, mailbox="INBOX", uid=1, uidvalidity=1)
+
+    assert parsed.sender is not None and parsed.sender.value == "client.example@example.test"
+    assert [(row.role, row.handle.value) for row in parsed.recipients] == [
+        ("to", "desk@example.test"), ("to", "other@bücher.example"), ("cc", "ccd@example.test"),
+    ]
+    assert parsed.sync_hash(channel_id=1, metadata={}) == _MIXED_CASE_SYNC_HASH

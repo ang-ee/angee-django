@@ -139,22 +139,25 @@ class _ConfigFormSpecProjector:
 
         schema_type = schema.get("type")
         if schema_type in {"string", "integer", "number", "boolean"}:
-            constraints = (
-                {"minLength", "maxLength"}
+            # A tuple, not a set: the projection keeps the constraints in this order in every process.
+            constraints: tuple[str, ...] = (
+                ("minLength", "maxLength")
                 if schema_type == "string"
-                else {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}
+                else ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
                 if schema_type in {"integer", "number"}
-                else set()
+                else ()
             )
             self._reject_keywords(
                 schema,
-                _SCHEMA_COMMON_KEYS | {"type", "enum", "const", "format"} | constraints,
+                _SCHEMA_COMMON_KEYS | {"type", "enum", "const", "format"} | set(constraints),
                 path,
             )
             scalar_projection: dict[str, Any] = {"type": schema_type}
             if "format" in schema:
                 if schema_type != "string" or schema["format"] not in {"date", "date-time"}:
                     self._unsupported(path, f"format {schema['format']!r}")
+                # The declared format is kept as the value's type; the widget presents it, this one or its author's.
+                scalar_projection["format"] = schema["format"]
                 scalar_projection["widget"] = "date" if schema["format"] == "date" else "datetime"
             for constraint in constraints:
                 if constraint in schema:
@@ -264,9 +267,17 @@ def config_form_spec(schema: dict[str, Any], *, owner: str, json_fields: bool = 
 
     Declared properties become structured fields. Extra root properties are not
     projected; callers that allow them must retain their existing raw JSON owner.
-    ``json_fields`` renders unstructured mappings, unions, recursive values and
-    unsupported scalar formats through the existing JSON widget. Typed parsing
-    remains the validation owner; bounded objects still expose structured fields.
+    A ``date`` or ``date-time`` string keeps its ``format`` beside the control that
+    presents it: the date control the projection selects, or the widget its author
+    declared (an authored ``json`` widget renders the member as raw JSON, with no
+    ``format``). The ``format`` states the value's declared type. Nothing asserts
+    it on this projection, which no validator is handed: typed parsing validates
+    the value, and may accept what the format's own grammar refuses (a date and
+    time with no offset); a validator handed the projection as a schema would
+    assert it. Any other format is unsupported, and ``json_fields`` renders every
+    shape the projection does not support below the root through the existing
+    JSON widget, with no ``format``. Typed parsing remains the validation owner;
+    bounded objects still expose structured fields.
     """
 
     return _ConfigFormSpecProjector(schema, owner=owner, json_fields=json_fields).form_spec()

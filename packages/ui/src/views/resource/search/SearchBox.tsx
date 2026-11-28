@@ -312,10 +312,12 @@ function SearchPanel({ search, stacked, lead }: { search: ResourceSearch; stacke
   </>;
 }
 
-/** One facet's options in the panel, under the facet's heading. */
+/** One facet's options in the panel, under the facet's heading; a refused read says why above the
+ * options its last read still holds. */
 function FacetPickerSection({ facet, search }: { facet: SearchFacet; search: ResourceSearch }): React.ReactElement {
   return <section className="grid gap-1">
     <h4 className="px-2 pt-2 text-2xs font-semibold text-fg-muted">{facet.label}</h4>
+    {facet.error ? <p className="px-2 text-xs text-fg-muted">{facet.error}</p> : null}
     {facet.optionGroupField && facet.relation
       ? <GroupedFacetOptions facet={facet} relation={facet.relation} optionGroupField={facet.optionGroupField} search={search} />
       : <FacetOptionButtons facet={facet} options={facet.options} search={search} />}

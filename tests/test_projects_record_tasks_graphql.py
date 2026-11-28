@@ -1,11 +1,14 @@
 """The composed GraphQL surface for record tasks: schedule, list, complete and the catalog."""
 
 from types import SimpleNamespace
+from unittest import mock
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
+from django.utils import timezone
+from rebac import PermissionDenied, actor_context, generic_target, system_context
 
 from angee.graphql.testing.documents import graphql_request
 from tests.native_work import WorkCase
@@ -112,6 +115,26 @@ class RecordTaskGraphQLTests(WorkCase):
         self.assertFalse(hidden.errors, hidden.errors)
         self.assertEqual(hidden.data["record_tasks"], [])
 
+
+    def test_a_reader_is_refused_before_the_task_is_validated(self):
+        """A reader of the record gets the save's own refusal, and the task's validators never run."""
+
+        spy = mock.Mock(side_effect=ValidationError("Not a title.", code="invalid"))
+        with mock.patch.object(self.Task._meta.get_field("title"), "validators", [spy]), actor_context(self.reader):
+            with self.assertRaises(PermissionDenied) as refused:
+                self.Task.objects.schedule(self.record_row, title="Refused", activity_type="call")
+            candidate = self.Task(
+                title="Refused",
+                assignee_id=self.reader.pk,
+                due_date=timezone.localdate(),
+                activity_type_id="call",
+                **generic_target(self.record_row).lookups(self.Task, "subject"),
+            )
+            with self.assertRaises(PermissionDenied) as saved:
+                candidate.save()
+        self.assertEqual(str(refused.exception), str(saved.exception))
+        spy.assert_not_called()
+        self.assertFalse(self.Task._base_manager.filter(title="Refused").exists())
 
     def test_a_person_takes_tasks_as_the_party_it_is(self):
         row = self.Person._base_manager.get(user=self.owner)

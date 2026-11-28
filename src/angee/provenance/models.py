@@ -47,7 +47,7 @@ from angee.base.serialization import canonical_json, canonical_json_sha256, json
 from angee.base.signals import send_bulk_update
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
-from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from angee.provenance.contrib.angee.history import ModelHistory
 from angee.provenance.managers import ChangesetManager
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
@@ -237,13 +237,6 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
             created_content_type_id=self.created_content_type_id,
             created_object_id=self.created_object_id,
         )
-
-    def revertable(self, record: models.Model, *, actor: Any = None) -> bool:
-        """Return whether ``record`` admits this boundary under its declared permission."""
-
-        if not isinstance(record, HistoryMixin):
-            return False
-        return self.pk in record.revertable_changesets((self,), actor=actor)
 
     def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, tuple[SubjectRef, ...]]:
         """Promise the actor tuple that this owner persists immediately after insert.

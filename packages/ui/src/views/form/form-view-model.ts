@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { get, set } from "react-hook-form";
+import { get, set, type FieldErrors } from "react-hook-form";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import {
+  holdsPermission,
   publicIdLabel,
   relationModelLabelForField,
   rowPublicId,
@@ -25,7 +26,8 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { isStructuredPresenceField, structuredFieldErrorPaths, textValue } from "./field-values";
+import { DATE_TIME_WIDGETS, NUMBER_WIDGETS, emptyValueForField, fieldRuleErrors, refusesSeed, textValue } from "./field-values";
+import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
@@ -65,10 +67,6 @@ export interface FormSectionModel {
   defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   render?: () => ReactNode;
-  /** Projected record permission required to show this section. */
-  permission?: string;
-  /** The container child behind it, shown only on records that admit that child. */
-  containerChild?: string;
   /** The pane this section fills instead of the sheet. */
   pane?: string;
   sequence?: number;
@@ -87,11 +85,45 @@ export interface FormViewFieldLayout {
 /** The section key of a form's editable lines, declared by a `lines` group or trailing the form. */
 export const EDITABLE_LINES_SECTION = "editable-lines";
 
+/**
+ * Whether a record's form displays a declared group: the one place its conditions are decided. A
+ * `savedOnly` group is no part of a create form; a group carrying a `permission` shows on a record
+ * that holds it (`holdsPermission`), so never without a record; a group a row-decided container
+ * child contributed (`containerChild`) shows where `admits`, the form's container admission, admits
+ * that child for the record. The sheet, its panes and the fields the form checks and saves
+ * (`displayedFormFields`) all read it: a field only groups it does not display declare is not that
+ * record's form field. A contribution's tabs ask it for their child's permission and admission, its
+ * actions for their child's admission alone: a contribution's permission does not gate the actions
+ * it contributes.
+ */
+export function formDisplaysGroup(
+  group: Pick<GroupDescriptor, "savedOnly" | "permission" | "containerChild">,
+  record: Row | null,
+  { isCreate, admits }: { isCreate: boolean; admits: (child: string, record: Row | null) => boolean },
+): boolean {
+  return !(isCreate && group.savedOnly)
+    && (group.permission === undefined || holdsPermission(record, group.permission))
+    && (group.containerChild === undefined || admits(group.containerChild, record));
+}
+
+/** The names of the fields `groups` declare: none of them is one of a form's ungrouped fields. */
+function groupFieldNames(groups: readonly GroupDescriptor[]): ReadonlySet<string> {
+  return new Set(groups.flatMap((group) => group.fields.map((field) => field.name)));
+}
+
+/**
+ * A form's sections: its ungrouped fields, then one per declared group it `displays` (see
+ * `formDisplaysGroup`), keyed by the group's index among all `groups`, so a group left out
+ * renumbers no other. The first `pageGroupCount` of `groups` are the page's own, the rest
+ * contributed. The ungrouped section holds the `fields` that neither one of the page's own groups,
+ * displayed or not, nor a displayed contributed group declares.
+ */
 export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
   sequences: readonly (number | undefined)[] = [],
-  isCreate = false,
+  displays: (group: GroupDescriptor) => boolean = () => true,
+  pageGroupCount = groups.length,
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
   if (groups.filter((group) => group.lines).length > 1) {
@@ -100,11 +132,8 @@ export function formSections(
   if (groups.some((group) => group.lines && group.pane !== undefined)) {
     throw new Error("A form's editable lines group cannot also be a pane.");
   }
-  const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
-    // A saved-only group's fields stay out of a create form, never falling back to the ungrouped section.
-    for (const field of group.fields) groupedNames.add(field.name);
-    if (isCreate && group.savedOnly) return [];
+    if (!displays(group)) return [];
     if (group.fields.length === 0 && group.content === undefined && !group.lines) return [];
     return [
       {
@@ -117,15 +146,16 @@ export function formSections(
         defaultOpen: group.defaultOpen,
         fields: group.fields,
         ...(group.content !== undefined ? { render: () => group.content } : {}),
-        ...(group.permission !== undefined ? { permission: group.permission } : {}),
-        ...(group.containerChild !== undefined ? { containerChild: group.containerChild } : {}),
         ...(group.pane !== undefined ? { pane: group.pane } : {}),
         sequence: sequences[index],
         order: index,
       },
     ];
   });
-  const ungrouped = fields.filter((field) => !groupedNames.has(field.name));
+  // A field of the page's own undisplayed group stays out of the form, never falling back to the
+  // ungrouped section; a page's own field only an undisplayed contribution re-declares shows there.
+  const grouped = groupFieldNames(groups.filter((group, index) => index < pageGroupCount || displays(group)));
+  const ungrouped = fields.filter((field) => !grouped.has(field.name));
   if (ungrouped.length > 0) sections.unshift({ key: "fields", fields: ungrouped });
   return sections;
 }
@@ -258,12 +288,35 @@ export function addFieldSelection(
   paths.add(field.name);
 }
 
+/** Whether `value` is a form's values object (a plain object, not a list). */
+export function isFormValues(value: unknown): value is FormValues {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The selector a save's `data` has lost while it still sends a path that selector's repair seeded
+ * (`seeds`: the seeded paths by selector), or null. Such a save would write the config one
+ * implementation's choice carried under the implementation the record stores, so it is refused.
+ */
+export function repairSelectorLost(data: FormValues, seeds: ReadonlyMap<string, readonly string[]>): string | null {
+  for (const [selector, seeded] of seeds) {
+    if (!Object.hasOwn(data, selector) && seeded.some((path) => Object.hasOwn(data, path))) return selector;
+  }
+  return null;
+}
+
+/**
+ * The form's mode lock: an `editOnly` field is read-only on a create, a `createOnly` one on an edit,
+ * unless `choosable` says the record lets it be chosen once more (a create-only selector whose stored
+ * key is not registered, `storedImplementationUnregistered`).
+ */
 export function withModeLockedFields(
   fields: readonly FieldDescriptor[],
   isCreate: boolean,
+  choosable?: (field: FieldDescriptor) => boolean,
 ): readonly FieldDescriptor[] {
   return fields.map((field) => {
-    const locked = isCreate ? field.editOnly : field.createOnly;
+    const locked = isCreate ? field.editOnly : field.createOnly && !choosable?.(field);
     return locked && !field.readOnly ? { ...field, readOnly: true } : field;
   });
 }
@@ -279,6 +332,25 @@ export function flattenedFormFields(
     for (const field of group.fields) addFormField(flattened, seen, field);
   }
   return flattened;
+}
+
+/**
+ * One record's form fields: `flattenedFormFields` over the declarations its form displays, the
+ * first declaration of a name winning. They are the form's field list `fields`, less the fields of
+ * the page's own groups that `displays` (see `formDisplaysGroup`) rejects, which a page's field list
+ * also lists; then the fields of the `groups` it displays, in their order. The first
+ * `pageGroupCount` of `groups` are the page's own, the rest contributed. A field the page declares
+ * outside its own groups keeps the page's declaration whatever a contribution re-declares, and with
+ * every group displayed this is `flattenedFormFields(fields, groups)`, declaration for declaration.
+ */
+export function displayedFormFields(
+  fields: readonly FieldDescriptor[],
+  groups: readonly GroupDescriptor[],
+  displays: (group: GroupDescriptor) => boolean,
+  pageGroupCount: number,
+): readonly FieldDescriptor[] {
+  const undisplayed = groupFieldNames(groups.filter((group, index) => index < pageGroupCount && !displays(group)));
+  return flattenedFormFields(fields.filter((field) => !undisplayed.has(field.name)), groups.filter(displays));
 }
 
 function addFormField(
@@ -309,7 +381,7 @@ export function emptyDraft(
 }
 
 /** The fields a draft for `values` holds: those visible for them, resolved against them. */
-export function visibleFields(fields: readonly FieldDescriptor[], values: FormValues): FieldDescriptor[] {
+export function visibleFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
   return fields.map((field) => resolveField(field, values)).filter((field) => isFieldVisible(field, values));
 }
 
@@ -472,6 +544,11 @@ export function hiddenResetWrites(
   return writes;
 }
 
+/**
+ * A create draft's seed for `field`: the page's default value, else the field's own, else nothing
+ * for an omittable or presence-required field, else its empty value (`emptyValueForField`), which a
+ * field that may be left out does not take where its declared type refuses it (`refusesSeed`).
+ */
 function initialDraftFieldValue(
   field: FieldDescriptor,
   defaultValues: Record<string, unknown> | undefined,
@@ -479,7 +556,8 @@ function initialDraftFieldValue(
   if (hasDottedValue(defaultValues, field.name)) return dottedValue(defaultValues, field.name);
   if (field.hasDefault || field.defaultValue !== undefined) return field.defaultValue;
   if (field.omittable || field.presenceRequired) return MISSING_DOTTED_VALUE;
-  return emptyValue(field);
+  const seed = emptyValueForField(field);
+  return refusesSeed(field, seed) ? MISSING_DOTTED_VALUE : seed;
 }
 
 export function recordToValues(
@@ -495,7 +573,7 @@ export function recordToValues(
     const value = isRelationIdField(field)
       ? raw ?? null
       : recordFieldValue({ ...record, [field.name]: raw }, field);
-    setDottedValue(values, field.name, value === undefined ? emptyValue(field) : value);
+    setDottedValue(values, field.name, value === undefined ? emptyValueForField(field) : value);
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
@@ -529,33 +607,77 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
   return !field.hidden && isFieldVisible(field, values);
 }
 
-export function missingRequiredFieldNames(
+/**
+ * The fields a form shows a control of for `values`, in its order: those visible for them,
+ * resolved against them (`visibleFields`, which applies `showWhen` once), that are not hidden:
+ * `isFieldControlVisible` for a whole list, each field resolved first. A refusal's binder claims
+ * the reasons of these (their names are `applyFormErrors`'s `shownFieldNames` on the record form's
+ * save and both form dialogs), and the rule checks ask only these.
+ */
+export function shownFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
+  return visibleFields(fields, values).filter((field) => !field.hidden);
+}
+
+/**
+ * A record form's errors for the rules its `fields` fail (the fields its save can write,
+ * `pathWritable`, and the record does not redact, `fieldIsRedacted`, of those the form displays
+ * for the record, `displayedFormFields`, and the rail rows `displayedRailGroups` holds), each
+ * field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a dialog's check
+ * (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for `values`
+ * (`shownFields`: neither hidden nor conditionally excluded) and not read-only, and
+ * leaves the others to the server; a field only a group the record does not display declares, one
+ * the save cannot write and one the record redacts are not among `fields`, so they are not asked,
+ * whatever their widget.
+ * It differs from a dialog's check in four facts only: it reads read-only from the field as
+ * resolved for `values` (its own flag, its `resolve`, its mode on a create or an edit), where a
+ * dialog also reads `readOnlyWhen`; it reads each value at its dotted path, where a dialog reads
+ * one flat key (both read an own key holding `undefined` as absent); it counts a field as required
+ * by its own flag or by `requiredFieldNames`, the model's required-on-create names, where a dialog
+ * counts the flag alone; and it always checks constraints, which a dialog may leave to a schema
+ * resolver.
+ */
+export function formRuleErrors(
   values: FormValues,
   fields: readonly FieldDescriptor[],
   requiredFieldNames: ReadonlySet<string>,
-): readonly string[] {
-  return visibleFields(fields, values).flatMap((field) => {
-    const value = dottedValue(values, field.name);
-    if (isStructuredPresenceField(field)) {
-      return structuredFieldErrorPaths(field, value, hasDottedValue(values, field.name));
-    }
-    return (field.required || requiredFieldNames.has(field.name)) && isEmptyFieldValue(value)
-      ? [field.name]
-      : [];
-  });
+  t: UiTranslate,
+): FieldErrors<FormValues> {
+  return fieldErrorsFromRules(shownFields(fields, values)
+    .filter((field) => !field.readOnly)
+    .flatMap((field) => fieldRuleErrors(
+      field,
+      { value: dottedValue(values, field.name), present: hasDottedValue(values, field.name) },
+      { required: Boolean(field.required) || requiredFieldNames.has(field.name), validateConstraints: true },
+    )), t);
 }
 
+/**
+ * `sections`, each with the fields it shows for `values`: those visible for them, resolved against
+ * them (`visibleFields`), that `displays` keeps (a record form's `displaysField`). A section keeps
+ * its key and place whatever fields it is left with (`isEmptySection` says when none of them shows).
+ */
 export function visibleSections(
   sections: readonly FormSectionModel[],
   values: FormValues,
+  displays: (field: FieldDescriptor) => boolean = () => true,
 ): readonly FormSectionModel[] {
-  return sections.map((section) => ({ ...section, fields: visibleFields(section.fields, values) }));
+  return sections.map((section) => ({ ...section, fields: visibleFields(section.fields, values).filter(displays) }));
+}
+
+/**
+ * Whether a section has nothing to show: no field that renders a control (a `hidden` field keeps
+ * its value in the form and renders none) and no content of its own. The sheet renders nothing for
+ * it, its heading included, and the pane strip lists no pane for it.
+ */
+export function isEmptySection(section: Pick<FormSectionModel, "fields" | "render">): boolean {
+  return section.fields.every((field) => field.hidden) && section.render === undefined;
 }
 
 /** What decides whether a save writes a field at all. */
 interface FieldSaveOptions {
   isCreate: boolean;
   seededFieldNames?: ReadonlySet<string> | null;
+  /** The paths the save can write (`formWritablePaths`, read through `pathWritable`); none, every path. */
   writableFields?: ReadonlySet<string> | null;
 }
 
@@ -567,10 +689,107 @@ function createSeeded(field: FieldDescriptor, options: FieldSaveOptions): boolea
 
 /** Whether a save may write `field`: one the record lets it write, editable or a create seed. */
 function savesField(field: FieldDescriptor, options: FieldSaveOptions): boolean {
-  return (!options.writableFields || isWritableDottedField(options.writableFields, field.name))
-    && (!field.readOnly || createSeeded(field, options));
+  return pathWritable(field.name, options.writableFields) && (!field.readOnly || createSeeded(field, options));
 }
 
+/**
+ * Whether a record form's save can write the field at `path`: the one place a record form decides a
+ * field's writability. What the save sends reads it, its resets of hidden fields included
+ * (`hiddenResetWrites`), and so does which declared preset applies when a field changes; a preset
+ * still writes any path into the form's values, and a field it fills is then displayed
+ * (`formDisplaysField`). `writable` (`formWritablePaths`) names the path or its root; absent, under
+ * the form's own submit owner, every path is writable. A path no record form field declares is
+ * therefore not writable, unless the form's own submit owner saves it. Whether the record redacts
+ * the path is another fact (`fieldIsRedacted`): a redacted field the form itself wrote (a preset's
+ * write, a hidden reset) is sent, and one it did not write is not, since an edit's save sends only
+ * what the form changed and a create has no record to redact anything. Limit: that holds for a flat
+ * field. A structured field goes whole once one of its members changed, so where the record redacts
+ * it and a preset writes one member, its untouched members go as the form loaded them, the record's
+ * placeholders included.
+ */
+export function pathWritable(path: string, writable: ReadonlySet<string> | null | undefined): boolean {
+  return !writable || writable.has(path) || writable.has(path.split(".", 1)[0] ?? path);
+}
+
+/**
+ * Whether `record` redacts the field at `path`: its root is in the record's `redacted_fields`, what
+ * the viewer may not read. The one place a record form decides a field's readability: the form
+ * shows the field's lock and no control (`fieldControlReadOnly` makes any control of it
+ * read-only), its check does not ask it, and its banner calls a refusal of it by its name rather
+ * than highlighted.
+ */
+export function fieldIsRedacted(record: FormValues | null | undefined, path: string): boolean {
+  const redacted = record?.redacted_fields;
+  return Array.isArray(redacted) && redacted.includes(path.split(".", 1)[0]);
+}
+
+/**
+ * The paths a record form's save writes, each a field's name or its root's (read through
+ * `pathWritable`): of one record's form `fields`, the names `modeWritable` names, a field or its
+ * root (the model's create fields on a create, its updatable fields on an edit; absent, every one
+ * of them); or none, meaning every path, under the form's own submit owner (`ownSubmit`), which
+ * receives the whole values and so may write any path.
+ */
+export function formWritablePaths(
+  fields: readonly FieldDescriptor[],
+  modeWritable: ReadonlySet<string> | null,
+  ownSubmit: boolean,
+): ReadonlySet<string> | null {
+  return ownSubmit ? null : new Set(fields.map((field) => field.name).filter((name) => pathWritable(name, modeWritable)));
+}
+
+/**
+ * Whether a record form shows the control of `field` read-only, the form's lock and a preview
+ * aside: the field is read-only as declared and resolved; or the record redacts it (`redacted`,
+ * `fieldIsRedacted`), whatever its widget declares; or its save cannot write it (`writable`,
+ * `pathWritable`), unless on a saved record its widget writes its own value
+ * (`WidgetDefinition.writesOwnValue`) and so decides its own editability. On a create that flag
+ * changes nothing.
+ */
+export function fieldControlReadOnly(
+  field: FieldDescriptor,
+  { writable, redacted, isCreate, writesOwnValue }: { writable: boolean; redacted: boolean; isCreate: boolean; writesOwnValue: boolean },
+): boolean {
+  return Boolean(field.readOnly) || redacted || (!writable && (isCreate || !writesOwnValue));
+}
+
+/**
+ * The record form's decision whether it displays a field, as `formDisplaysGroup` is its decision on a
+ * group; on a create that decision reads the `value` the field holds. Whether a field is visible (its
+ * `showWhen`, its `hidden`; `isFieldControlVisible`) is another fact, which this does not decide.
+ * On a create, a field that holds nothing to display (`holdsNothingToDisplay`, an empty object
+ * included) is not displayed where its save cannot write it (`writable`, `pathWritable`), nor where it
+ * is the form's status and its control is read-only (`readOnlyStatus`): a status nobody sets on a
+ * create holds nothing to display until the server gives it one. A field that holds a value (a seed,
+ * a default, a preset's write) is displayed, read-only where it is, and an edit displays every
+ * field. The sheet's sections, its panes and the form's status and body read it; a control a page
+ * renders itself is the page's to display.
+ */
+export function formDisplaysField(
+  value: unknown,
+  { writable, isCreate, readOnlyStatus = false }: { writable: boolean; isCreate: boolean; readOnlyStatus?: boolean },
+): boolean {
+  return !isCreate || !holdsNothingToDisplay(value) || (writable && !readOnlyStatus);
+}
+
+/**
+ * Whether `value` gives a record form nothing to display: `null` or `undefined`, a text of blanks
+ * only, an empty list, an empty object. It is the display's own fact: what the rule check counts as
+ * missing (`isEmptyFieldValue`, for which an empty object is a value) and what a create leaves out of
+ * its payload (`isBlankCreateValue`) are others.
+ */
+export function holdsNothingToDisplay(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0;
+}
+
+/**
+ * What a record form's save sends for `values`, built from the `fields` it writes. It writes nothing
+ * into `values`: what it takes from them it copies, so turning a structured root's dotted members into
+ * their wire values changes what it returns, never the values it was given.
+ */
 export function mutationData(
   values: FormValues,
   fields: readonly FieldDescriptor[],
@@ -614,26 +833,25 @@ export function mutationData(
       continue;
     }
     if (!options.isCreate && !dirty && !structuredRootDirty) continue;
-    setDottedValue(data, field.name, next);
+    // A copy, as a hidden reset's: a structured root's dotted members may be written into what is
+    // returned, and a write there must never reach `values`.
+    setDottedValue(data, field.name, cloneFormValue(next));
   }
   if (!options.isCreate && options.id != null) data.id = options.id;
   return data;
 }
 
 /**
- * `field` as it presents for `values`: what its `resolve` returns over its declaration, read-only
- * when either is. A `resolve` never renames the value: the field keeps reading and writing its
- * declared `name`, whatever name the resolved descriptor carries.
+ * `field` as it presents for `values`, as the caller's descriptor type: what its `resolve` returns
+ * over its declaration, read-only when either is, so a subtype's own members are kept from the
+ * declaration or laid over by `resolve`. A `resolve` never renames the value: the field keeps
+ * reading and writing its declared `name`, whatever name arrives.
  */
-export function resolveField(field: FieldDescriptor, values: FormValues): FieldDescriptor {
+export function resolveField<T extends FieldDescriptor>(field: T, values: FormValues): T {
   const resolved = field.resolve?.(values);
   return resolved
     ? { ...field, ...resolved, name: field.name, readOnly: Boolean(field.readOnly || resolved.readOnly) }
     : field;
-}
-
-function isWritableDottedField(writable: ReadonlySet<string>, path: string): boolean {
-  return writable.has(path) || writable.has(path.split(".", 1)[0] ?? path);
 }
 
 function isDirtyValue(value: unknown): boolean {
@@ -654,7 +872,14 @@ function setDottedValue(target: Record<string, unknown>, path: string, value: un
   set(target, path, value);
 }
 
-function cloneFormValue(value: unknown): unknown {
+/**
+ * A record form's copy of a value it reads: a deep copy (`structuredClone`) of an object or a list, that
+ * shares nothing with `value`; anything else as it is. The save's payload and `nextSave` read through it.
+ * A record form's values are plain data: `structuredClone` copies a class instance as a plain object
+ * without its methods (a `toJSON` among them), and a function throws, as in the form's undo history
+ * (`useFormHistory`), which already copies every value this way.
+ */
+export function cloneFormValue<T>(value: T): T {
   if (value == null || typeof value !== "object") return value;
   return structuredClone(value);
 }
@@ -684,30 +909,12 @@ function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
   return value;
 }
 
-function emptyValue(field: FieldDescriptor): unknown {
-  if (isNumericField(field)) return null;
-  if (isNullableScalarWidget(field)) return null;
-  if (field.widget === "tagInput" || isRelationListField(field)) return [];
-  if (field.kind === "switch" || field.widget === "switch") return false;
-  if (fieldWidgetId(field) === "json") return {};
-  return "";
-}
-
-function isEmptyFieldValue(value: unknown): boolean {
-  if (value == null) return true;
-  if (typeof value === "string") return value.trim() === "";
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
-}
-
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
-  const id = fieldWidgetId(field);
-  return id === "date" || id === "datetime" || id === "time";
+  return DATE_TIME_WIDGETS.has(fieldWidgetId(field));
 }
 
 function isNumericField(field: FieldDescriptor): boolean {
-  const id = fieldWidgetId(field);
-  return id === "integer" || id === "float";
+  return NUMBER_WIDGETS.has(fieldWidgetId(field));
 }
 
 function hasOptionValue(field: FieldDescriptor): boolean {
@@ -773,7 +980,13 @@ export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
 /**
  * Exact-field messages stay bare. With a root path, descendants keep their full
  * dotted paths for nested routing; an empty root produces relative paths.
- * Omit the root to leave every message unprefixed.
+ * Omit the root to leave every message unprefixed. A bare value is a message only
+ * where React Hook Form puts message text: as an error given here, or inside a
+ * `types` subtree; anywhere else a child that is not an object is skipped. Under
+ * `type`, any value that is not an object is the library's own attribute (or
+ * `MEMBER_ERRORS`) and is skipped while an object is the error of a member named
+ * `type` and is walked as any member's, and `ref`, where the library keeps the
+ * registered control, is never walked, so a member named `ref` shows no message.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -781,7 +994,8 @@ export function fieldErrorMessages(errors: readonly unknown[], path?: string): s
   return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));
 }
 
-function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string): string[] {
+/** `inTypes`: the error sits inside a `types` subtree, where a bare value is message text. */
+function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string, inTypes = false): string[] {
   if (error == null) return [];
   if (typeof error !== "object") return [String(error)];
   const messages: string[] = [];
@@ -792,11 +1006,21 @@ function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: stri
     messages.push(path && path !== rootPath ? `${path}: ${message}` : message);
   }
   return messages.concat(Object.entries(error).flatMap(([name, child]) => {
-    if (name === "ref" || name === "type" || child === undefined
+    const childInTypes = inTypes || name === "types";
+    if (name === "ref" || child === undefined || (name === "type" && typeof child !== "object")
+      || (typeof child !== "object" && !childInTypes)
       || (hasMessage && (name === "message" || name === "types"))) return [];
     const childPath = path === undefined ? undefined : path ? `${path}.${name}` : name;
-    return nestedFieldErrorMessages(child, childPath, rootPath);
+    return nestedFieldErrorMessages(child, childPath, rootPath, childInTypes);
   }));
+}
+
+/**
+ * The text of the label a form shows for its field `name`: undefined for a field the form does
+ * not hold, one it shows without a label, or one whose label is not text (`textValue`).
+ */
+export function formFieldLabel(fieldByName: ReadonlyMap<string, FieldDescriptor>, name: string): string | undefined {
+  return textValue(fieldByName.get(name)?.label) || undefined;
 }
 
 export function fieldValidationSummary(
@@ -805,7 +1029,7 @@ export function fieldValidationSummary(
   t: UiTranslate,
 ): string {
   const fields = Object.keys(fieldErrors).map(
-    (name) => fieldByName.get(name)?.label || name,
+    (name) => formFieldLabel(fieldByName, name) ?? name,
   );
   return fields.length > 0
     ? t("form.fixHighlightedFieldsNamed", { fields: fields.join(", ") })

@@ -37,6 +37,7 @@ function ProgressBarEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<ProgressValue>): ReactElement {
   const progress = normaliseProgress(value);
 
@@ -62,6 +63,7 @@ function ProgressBarEdit({
         snapOnStep
         className="w-20 shrink-0"
         inputProps={{
+          ref: controlRef,
           ...field?.controlProps,
           "aria-label": widgetLabel(field, "Progress"),
           inputMode: "numeric",

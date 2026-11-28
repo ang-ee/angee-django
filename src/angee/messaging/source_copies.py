@@ -94,7 +94,12 @@ def observe_email_identity(message: Any) -> None:
     An RFC Message-ID names one email wherever it is received; chat and provider
     ids are account-local and never compared. The rule asserts the message pair
     and the thread pair; applying each statement folds the copy into its oldest
-    occurrence unless a person keeps them separate.
+    occurrence unless a person keeps them separate. A record's chatter thread is
+    never one of a thread pair: its readers are the record's, so folding a
+    mailbox's thread into it would take that thread out of its owner's inbox and
+    put their later mail on the record. Only the message pair is asserted then.
+    System mail is never asserted, on either side: the system channel's seal
+    refuses the rule's write there, so a copy of it in a mailbox stays apart.
     """
 
     message_model = apps.get_model("messaging", "Message")
@@ -106,8 +111,11 @@ def observe_email_identity(message: Any) -> None:
         except rule_model.DoesNotExist:
             # The envelope landed before the install resources (the rule and its grants).
             return
-        message = messages.select_related("thread").filter(pk=message.pk).first()
-    if message is None or message.message_type != "email" or not message.external_id or message.channel_id is None:
+        message = messages.select_related("thread", "channel").filter(pk=message.pk).first()
+    if (
+        message is None or message.message_type != "email" or not message.external_id or message.channel_id is None
+        or message.channel.system_only
+    ):
         return
     actor = to_subject_ref(source)
     copies = (
@@ -115,13 +123,19 @@ def observe_email_identity(message: Any) -> None:
         .with_external_ids((message.external_id,))
         .filter(platform=message.platform, message_type="email", channel__isnull=False)
         .exclude(channel_id=message.channel_id)
-        .select_related("thread")
+        .select_related("thread", "channel")
         .order_by("pk")
     )
     with changeset(fresh=True, activity="system", change_reason=SOURCE_IDENTITY_RULE, origin=source):
         for copy in copies:
+            if copy.channel is None or copy.channel.system_only:
+                continue
             evidence = [EvidenceReference.of(row) for row in sorted((message, copy), key=lambda row: row.pk)]
-            for left, right in ((message, copy), (message.thread, copy.thread)):
+            pairs: list[tuple[Any, Any]] = [(message, copy)]
+            own, theirs = message.thread, copy.thread
+            if own is not None and theirs is not None and not (own.is_record_attached() or theirs.is_record_attached()):
+                pairs.append((own, theirs))
+            for left, right in pairs:
                 if left is None or right is None or left.pk == right.pk:
                     continue
                 pair = type(left).same_as.for_pair(left.with_actor(actor), right)

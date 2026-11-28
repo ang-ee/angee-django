@@ -339,6 +339,64 @@ def test_delivery_makes_the_targets_record_once_and_links_it() -> None:
         assert ResponseRecord._base_manager.get(response=row).record == made
 
 
+def test_a_form_stores_its_targets_validated_configuration_and_system_work_cannot_store_another() -> None:
+    """Every save stores the configuration as the target's model validates it; one it refuses is not stored."""
+
+    with system_context(reason="webforms tests setup"):
+        made = Form.objects.create(name="Tags", target_class="tag", target_config={"prefix": "Guest: ", "unused": 1})
+        plain = Form.objects.create(name="Plain tags", target_class="tag")
+        with pytest.raises(ValidationError) as refused:
+            Form.objects.create(name="Bad tags", target_class="tag", target_config={"prefix": 5})
+
+    assert (stored(made).target_config, stored(plain).target_config) == ({"prefix": "Guest: "}, {"prefix": ""})
+    assert list(refused.value.message_dict) == ["target_config.prefix"]
+    with system_context(reason="webforms tests read"):
+        assert not Form._base_manager.filter(name="Bad tags").exists()
+
+
+def test_clean_leaves_the_validated_configuration_on_the_form() -> None:
+    form = Form(name="Tags", target_class="tag", target_config={"prefix": "Guest: ", "unused": 1})
+
+    form.full_clean()
+
+    assert form.target_config == {"prefix": "Guest: "}
+
+
+def test_a_form_saves_another_field_as_before_and_an_unvalidated_stored_configuration_is_left_alone() -> None:
+    """A rename stores the name: the configuration it holds is stored as it was, or left alone when not written."""
+
+    form, _version = published("tag")
+    with system_context(reason="webforms tests setup"):
+        renamed = Form.objects.get(pk=form.pk)
+        renamed.name = "Renamed"
+        renamed.save()
+        # A configuration stored before its target's model tightened: written past the model.
+        Form._base_manager.filter(pk=form.pk).update(target_config={"prefix": 5})
+        older = Form.objects.get(pk=form.pk)
+        older.name = "Renamed again"
+        older.save(update_fields=["name", "updated_at"])
+
+    assert (stored(form).name, stored(form).target_config) == ("Renamed again", {"prefix": 5})
+
+
+def test_a_response_whose_forms_stored_configuration_no_longer_validates_is_refused_and_not_tried_again() -> None:
+    """Delivery refuses it by its own code, whatever the target, and keeps nothing of the configuration."""
+
+    form, _version = published("tag")
+    row, _made = receive(form)
+    with system_context(reason="webforms tests setup"):
+        Form._base_manager.filter(pk=form.pk).update(target_config={"prefix": 5})
+
+    with pytest.raises(DeliveryFailed) as refused:
+        stored(row).deliver()
+
+    kept = stored(row)
+    assert refused.value.reason == "refused: config_invalid"
+    assert (kept.delivery, kept.delivery_error, kept.delivery_attempts, kept.retry_at) == (
+        Delivery.FAILED, "refused: config_invalid", 1, None,
+    )
+
+
 def test_a_failed_delivery_leaves_no_record_and_shows_on_the_response_until_it_is_dismissed() -> None:
     form, _version = published("failing")
     row, _made = receive(form)
@@ -786,7 +844,7 @@ def test_a_target_is_chosen_only_by_someone_its_owner_lets_make_its_records() ->
         chosen = Form.objects.create(name="Tags from the public", target_class="tag")
 
     assert (stored(kept).target_class, stored(chosen).target_class) == ("store", "tag")
-    assert (stored(seeded).name, stored(seeded).target_config) == ("Renamed", {})
+    assert (stored(seeded).name, stored(seeded).target_config) == ("Renamed", {"prefix": ""})
 
 
 def test_a_forms_manager_publishes_and_an_outsider_does_not_even_read() -> None:

@@ -16,9 +16,9 @@ from angee.messaging.testing.models import (
     MessageEdge,
     MessageStar,
     Part,
-    Participant,
     Party,
     Reaction,
+    Recipient,
     Thread,
     ThreadAttachment,
     ThreadFollower,
@@ -48,7 +48,7 @@ def test_message_only_reader_gets_null_for_every_private_to_one_relation_except_
         parent = Message.objects.create(thread=thread, channel=channel)
         sender = Handle.objects.create(platform="email", value="hidden@example.com", created_by=owner)
         message = Message.objects.create(thread=thread, channel=channel, parent=parent, sender=sender)
-        Participant.objects.create(message=message, thread=thread, handle=sender)
+        Recipient.objects.create(message=message, handle=sender)
         hidden_parent = Part.objects.create(message=parent, position=0)
         _storage_drive(tmp_path, owner=owner)
         private_file, _created = StorageFile.objects.ingest_bytes(b"Private attachment", filename="private.txt")
@@ -58,14 +58,14 @@ def test_message_only_reader_gets_null_for_every_private_to_one_relation_except_
         query Read($id: String!) {
           messages_by_pk(id: $id) {
             id thread { id } channel { id } parent { id } sender { id }
-            participants { handle { id } }
+            recipients { handle { id } }
           }
           parts(where: {message: {_eq: $id}}) { parent { id } file { id } }
         }
     """, {"id": message.sqid}, user=viewer))
     assert result["messages_by_pk"] == {
         "id": message.sqid, "thread": None, "channel": None, "parent": None, "sender": None,
-        "participants": [{"handle": None}],
+        "recipients": [{"handle": None}],
     }
     assert result["parts"] == [{"parent": None, "file": {"id": str(private_file.sqid)}}]
 
@@ -215,7 +215,7 @@ def test_notification_acknowledgement_returns_validation_for_foreign_or_missing_
     ("ThreadFollowerType", ("thread", "attachment", "last_read_message")),
     ("MessageEdgeType", ("src", "dst")),
     ("MessageStarType", ("message",)),
-    ("ParticipantType", ("handle",)),
+    ("RecipientType", ("handle",)),
     ("ReactionType", ("handle",)),
     ("RecordThreadNotificationType", ("message", "follower")),
 ])
@@ -238,15 +238,17 @@ def test_unlisted_projection_types_regate_sudo_cached_relations(activity_catalog
             "ThreadFollowerType": follower,
             "MessageEdgeType": MessageEdge.objects.create(src=message, dst=other, kind="quote"),
             "MessageStarType": MessageStar.objects.create(message=message, user=viewer),
-            "ParticipantType": Participant.objects.create(message=message, handle=handle),
+            "RecipientType": Recipient.objects.create(message=message, handle=handle),
             "ReactionType": Reaction.objects.create(message=message, handle=handle, reaction="ok"),
             "RecordThreadNotificationType": ThreadNotification.objects.create(
                 thread=thread, message=message, follower=hidden_follow, user=viewer,
             ),
         }
         row = type(rows[projection])._base_manager.select_related(*fields).get(pk=rows[projection].pk)
-    if projection in {"ThreadAttachmentType", "MessageEdgeType", "ParticipantType", "ReactionType"}:
+    if projection in {"ThreadAttachmentType", "MessageEdgeType", "ReactionType"}:
         grant(row, "reader", viewer)
+    elif projection == "RecipientType":
+        grant(message, "reader", viewer)  # A recipient row is read through its message or thread.
     assert row.with_actor(viewer).has_access("read")
     with actor_context(viewer):
         definition = getattr(messaging_schema, projection).__strawberry_definition__

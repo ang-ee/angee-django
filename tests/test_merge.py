@@ -13,9 +13,12 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db.models import DO_NOTHING
+from django.db import transaction
+from django.db.models import DO_NOTHING, Q, Subquery
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from rebac import PermissionDenied, RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
@@ -34,10 +37,12 @@ from angee.base.models.merge_references import (
 from angee.base.models.refs import RecordRefMixin
 from angee.graphql import records
 from angee.graphql.testing.documents import execute_schema, result_data
-from angee.messaging.testing.models import Directory, Handle, Message, Participant, Party, Reaction
+from angee.messaging.testing.models import Directory, Handle, Message, Party, Reaction, Recipient
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance import checks as provenance_checks
 from angee.provenance.context import changeset
+from angee.provenance.contrib.angee.history import ModelHistory
+from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
 )
@@ -191,12 +196,40 @@ def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None
     with actor_context(curator):
         survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
         boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        assert boundary.pk in survivor.revertable_changesets((boundary,), actor=curator)
         survivor.name = "Mobile phones"
         survivor.save(update_fields=("name",))
-        with pytest.raises(ValidationError, match="later write prevents revert"):
+        assert boundary.pk not in survivor.revertable_changesets((boundary,), actor=curator)
+        with pytest.raises(ValidationError) as refusal:
             boundary.with_actor(curator).revert()
+        assert refusal.value.code == "later_change"
     assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_merge_whose_survivor_is_gone_is_not_refused_for_what_its_survivor_recorded(settings: Any) -> None:
+    """Only a standing survivor's history speaks for an unchanged survivor; a deleted one's later rows do not."""
+    curator = _curator("merge-revert-survivor-gone")
+    mobile, mobil, _ada, _bob = _vocabulary(owner=curator)
+    with actor_context(curator):
+        Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
+    boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+    history = model_history(Tag)
+    assert isinstance(history, ModelHistory)
+    assert not Tag.history.filter(id=mobile.pk, changeset=boundary).exists()
+    with system_context(reason="merge test survivor write"), changeset(fresh=True, change_reason="Survivor write"):
+        Tag._base_manager.filter(pk=mobile.pk).update(name="Mobile phones")
+    assert history.revert_blockers(Tag, (boundary,)) == {boundary.pk: "later_change"}
+
+    # Detached and deleted untracked, so the absorbed tag gains no later version of its own.
+    settings.SIMPLE_HISTORY_ENABLED = False
+    with system_context(reason="merge test survivor removal"):
+        Tag._base_manager.filter(pk=mobil.pk).update(merged_into=None)
+        Tag._base_manager.filter(pk=mobile.pk).delete()
+    settings.SIMPLE_HISTORY_ENABLED = True
+
+    assert history.revert_blockers(Tag, (boundary,)) == {}
 
 
 def test_merging_needs_write_on_the_survivor() -> None:
@@ -510,7 +543,7 @@ def test_a_merge_identity_must_be_a_declared_unique_set(monkeypatch: pytest.Monk
     """Edges and plain pointing rows (a message's reactions) declare their identity alike."""
 
     pointing = [model for model in apps.get_models() if issubclass(model, MergeContractMixin)]
-    assert {Participant, Reaction} <= set(pointing)
+    assert {Recipient, Reaction} <= set(pointing)
     assert not [error for model in pointing for error in model.check() if error.id == "angee.E037"]
 
     monkeypatch.setattr(CustomColumnEdge, "merge_identity", (("target_ct", "target_id"),))
@@ -546,7 +579,7 @@ def test_merge_policies_merge_along_the_class_hierarchy(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(AngeeDataModel, "merge_policies", {"handle": MergePolicy.BLOCK, "message": MergePolicy.BLOCK})
     policies = {(ref.model, ref.name): ref.policy for owner in (Handle, Message) for ref in references(owner)}
-    assert (policies[Participant, "handle"], policies[Participant, "message"]) == (MergePolicy.KEEP, MergePolicy.BLOCK)
+    assert (policies[Recipient, "handle"], policies[Recipient, "message"]) == (MergePolicy.KEEP, MergePolicy.BLOCK)
 
 
 def test_a_moved_stance_keeps_its_recency_so_the_tie_break_keeps_its_winner() -> None:
@@ -709,3 +742,44 @@ def test_metadata_marks_a_mergeable_resource() -> None:
     assert resources["tags.Tag"].mergeable
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["tags.Tag"]["mergeable"] is True
+
+
+def test_redirect_groups_reads_a_subquery_through_one_union_of_its_indexed_arms() -> None:
+    """A subquery of survivors compiles to ``pk IN (… UNION ALL …)``, never ``IN (…) OR IN (…)``.
+
+    PostgreSQL cannot estimate a disjunction of two ``IN`` sublinks and plans it as a
+    scan of most of the table. Values keep the disjunction, which the indexes serve.
+    """
+
+    survivors = Handle._base_manager.filter(platform="email").values("pk")
+    for shape in (survivors, Subquery(survivors)):
+        sql, _ = Handle._base_manager.redirect_groups(shape).query.sql_with_params()
+        assert "UNION ALL" in sql and " OR " not in sql
+    sql, _ = Handle._base_manager.redirect_groups([1, 2]).query.sql_with_params()
+    assert " OR " in sql and "UNION" not in sql
+
+
+@settings(deadline=None, max_examples=25, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(survivors=st.integers(min_value=1, max_value=4), data=st.data())
+def test_redirect_groups_selects_what_the_disjunction_selects(survivors: int, data: st.DataObject) -> None:
+    """Over random one-hop merge graphs, every input shape selects the rows of ``pk IN … OR merged_into IN …``.
+
+    Unselected survivors and their redirects are the unrelated rows; examples roll back.
+    """
+
+    targets = data.draw(st.lists(st.integers(min_value=0, max_value=survivors - 1), max_size=6), label="redirects")
+    with transaction.atomic(), system_context(reason="test redirect groups merge graph"):
+        create = Handle._base_manager.create
+        rows = [create(platform="email", value=f"s{index}@example.test") for index in range(survivors)]
+        rows += [
+            create(platform="email", value=f"r{index}@example.test", merged_into=rows[target])
+            for index, target in enumerate(targets)
+        ]
+        ids = sorted(data.draw(st.sets(st.sampled_from([row.pk for row in rows])), label="survivors"))
+        expected = set(
+            Handle._base_manager.filter(Q(pk__in=ids) | Q(merged_into_id__in=ids)).values_list("pk", flat=True)
+        )
+        subquery = Handle._base_manager.filter(pk__in=ids).values("pk")
+        for shape in (ids, subquery, Subquery(subquery)):
+            assert set(Handle._base_manager.redirect_groups(shape).values_list("pk", flat=True)) == expected
+        transaction.set_rollback(True)

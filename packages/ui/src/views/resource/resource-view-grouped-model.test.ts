@@ -6,6 +6,7 @@ import { enUiMessages } from "../../i18n";
 
 import {
   buildGroupedRenderModel,
+  groupScopesEqual,
   type GroupedRenderModel,
   type GroupedRenderParams,
 } from "./resource-view-grouped-model";
@@ -404,6 +405,15 @@ test("the leaf groups read carries each group's first page; only later pages are
   });
   expect(second.carriedLeaves.size).toBe(0);
   expect(second.leafScopes).toMatchObject([{ key: header.bucketKey, page: 2, pageSize: 3 }]);
+});
+
+test("the same keys in another priority are another leaf groups read: its scope differs by the order its rows ask for", () => {
+  const scopes = (leafOrder: GroupedRenderParams["leafOrder"]) =>
+    buildGroupedRenderModel<Row>(new Map(), EMPTY_LEAVES, EMPTY_ROWS, params({ groupStack: [{ field: "status" }], leafOrder })).groupScopes;
+  const ownerFirst = scopes({ owner: "ASC", nestedOwner: "DESC" });
+  expect(ownerFirst[0]?.query.rows?.orderBy).toEqual([{ owner: "asc" }, { nestedOwner: "desc" }]);
+  expect(groupScopesEqual(ownerFirst, scopes({ owner: "ASC", nestedOwner: "DESC" }))).toBe(true);
+  expect(groupScopesEqual(ownerFirst, scopes({ nestedOwner: "DESC", owner: "ASC" }))).toBe(false);
 });
 
 test("a declared leaf page size larger than the server's page bound is clamped to it", () => {

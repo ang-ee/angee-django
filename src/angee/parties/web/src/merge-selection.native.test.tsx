@@ -284,6 +284,22 @@ describe("Merge in a parties list's selection bar", () => {
       expect(screen.queryByText("Comparison")).toBeNull();
     });
 
+    test("a list whose groups were turned descending opens the dialog on every group, its read forwarded unchanged", async () => {
+      // The name header pressed: the list's groups read asks for them descending, nulls still last.
+      const turned: AllMatchingGroups = {
+        ...byName, read: { ...byName.read, orderBy: [{ field: "display_name", direction: "DESC", nulls: "LAST" }] },
+      };
+      renderMountedSelection(["ada"], "peopleScope=UNASSIGNED", [], turned);
+
+      fireEvent.click(await screen.findByRole("button", { name: MERGE }));
+
+      expect(await screen.findByText(enPartiesMessages["duplicates.title"]!)).toBeTruthy();
+      expect(reads.variables).toContainEqual({ ...groupByVariables({ ...turned.read, pageSize: 50 }), rows_limit: 11 });
+      expect(groupByVariables(turned.read)).toMatchObject({
+        order_by: [{ field: "display_name", direction: "DESC", nulls: "LAST" }],
+      });
+    });
+
     test("a flat list says to group it first", async () => {
       renderMountedSelection(["ada", "grace", "joan"], "peopleScope=UNASSIGNED", undefined, {
         unit: "records", total: 300, read: { where: {} },
@@ -339,10 +355,10 @@ describe("Merge in a parties list's selection bar", () => {
       expect(description(verb)).toBe(enPartiesMessages["merge.selection.allGrouping"]);
     });
 
-    test("a nulls-first order is refused: its null key would come first and no cursor steps past it", async () => {
+    test.each(["ASC", "DESC"] as const)("a nulls-first order is refused (%s): its null key would come first and no cursor steps past it", async (direction) => {
       renderMountedSelection(["ada"], "peopleScope=UNASSIGNED", [], {
         ...byName,
-        read: { ...byName.read, orderBy: [{ field: "display_name", direction: "ASC", nulls: "FIRST" }] },
+        read: { ...byName.read, orderBy: [{ field: "display_name", direction, nulls: "FIRST" }] },
       });
 
       const verb = await screen.findByRole("button", { name: MERGE });

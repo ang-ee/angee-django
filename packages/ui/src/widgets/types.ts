@@ -149,6 +149,13 @@ export interface FieldPresentation {
   /** Native autocomplete intent, including current-password and new-password for secret inputs. */
   autoComplete?: string;
   /**
+   * `null` declines the relation picker's inline edit of the selected record, which is
+   * otherwise offered whenever the related resource has editable fields: for a field where
+   * editing the related record is out of place (a channel chosen in a send dialog). A
+   * registered widget that renders a relation picker passes it on as the picker's `edit`.
+   */
+  relationEdit?: null;
+  /**
    * For a money widget: the path to the FK owning the row's currency — a sibling
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).
    */
@@ -180,6 +187,8 @@ export interface WidgetControlProps extends Pick<WidgetControlSurfaceProps, "pre
   max?: number;
   minLength?: number;
   maxLength?: number;
+  /** The control's own pending state: a select is disabled and busy while what it offers loads. */
+  loading?: boolean;
 }
 
 export interface WidgetFocusTarget {
@@ -212,6 +221,11 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
 export interface WidgetDefinition<TValue = unknown, TRow = unknown> {
   /** Accepts a parsed `rowTemplate` for fixed-size arrays of objects in a form spec. */
   acceptsRowTemplate?: true;
+  /**
+   * On a saved record this widget does not write through the form: it commits through its own
+   * action, or not at all, and decides its own editability. On a create it changes nothing.
+   */
+  writesOwnValue?: true;
   edit?: ComponentType<WidgetRenderProps<TValue, TRow>>;
   read: ComponentType<WidgetRenderProps<TValue, TRow>>;
   cell?: ComponentType<WidgetRenderProps<TValue, TRow>>;

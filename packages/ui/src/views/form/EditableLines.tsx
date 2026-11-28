@@ -1,6 +1,6 @@
 import * as React from "react";
 import {
-  Controller, useFieldArray, useFormState, useWatch,
+  Controller, get, useFieldArray, useFormState, useWatch,
   type Control, type FieldValues, type UseFormSetValue,
 } from "react-hook-form";
 import type { CrudFilter } from "@refinedev/core";
@@ -25,10 +25,12 @@ import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
 import {
-  CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig, lineLockedFields,
+  CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig, lineLockedFields, lineRowKey,
 } from "./editable-lines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
-import type { ValidationErrors } from "./validation-errors";
+import { fieldErrorMessages } from "./form-view-model";
+import type { FormHistory } from "./use-form-history";
+import { messagesForDottedPath } from "./validation-errors";
 
 export interface EditableLinesProps {
   /** Owns the ordered child array in the composing form's values and save diff. */
@@ -43,8 +45,6 @@ export interface EditableLinesProps {
   readOnly?: boolean;
   /** Document totals supplied by the composer, recomputed from live line rows. */
   footer?: (rows: readonly Row[]) => React.ReactNode;
-  /** Server validation messages per line row, indexed by row position. */
-  rowErrors?: readonly (ValidationErrors | undefined)[];
   /** Initially visible editable fields; others remain available in the header menu and save diff. */
   primaryFields?: readonly string[];
   /**
@@ -61,12 +61,36 @@ export interface EditableLinesProps {
     fieldName: string,
     parentRow: Row | null,
   ) => readonly CrudFilter[] | undefined;
+  /**
+   * The composing form's undo verbs; without them the lines record no step. One user
+   * intention is one step. A cell's change starts its group, named by the cell's form
+   * path (`lines.2.label`), before it writes. A row patch a widget sends is written
+   * inside its cell's group and ends it: a patch sent after its cell's change in the
+   * same interaction joins that change's step; one sent first, or alone, is a step of
+   * its own, and a change sent after it starts another. Adding, duplicating, removing
+   * or reordering a line is one step through `perform`. Since a cell's path names its
+   * row by position, the editor ends the cell groups it started when their control
+   * commits, when a row patch for the cell is written, when the editor unmounts, before
+   * its own row operations, and right after the rows change under it otherwise (a row
+   * operation other code performs, an undo, a redo, a discard). After a row operation by
+   * other code the steps are still one per intention and the interaction callbacks stay
+   * paired, but that late commit's path names whichever row then sits at that position,
+   * if any. A cell changed on after an undo starts a step of its own. The history
+   * itself records a group's step when another field starts. A line added by code is
+   * built with `emptyLineRow` or `duplicateLineRow` and then performed; while a cell's
+   * group is open that is still one step, with the cell's late commit as above. Give the
+   * editor and the history the same read-only state: a read-only history runs no
+   * `perform`, so the row controls would do nothing while the cells still write. A
+   * record form passes its interaction callbacks as `start` and `commit`, so they see a
+   * cell as they see any other field.
+   */
+  history?: Pick<FormHistory, "perform" | "start" | "commit">;
 }
 
 /** Authored presentation of one line field, keyed by its name. */
 export interface EditableLineField extends Pick<
   FieldDescriptor,
-  "name" | "currencyField" | "description" | "options" | "statusDisplay" | "widget"
+  "name" | "currencyField" | "description" | "options" | "relationEdit" | "statusDisplay" | "widget"
 > {
   /** Column header and the cells' accessible name. */
   label?: string;
@@ -100,11 +124,14 @@ type LineViewRow = { id: string; index: number; value: Row };
  * A row the backend locks (`lines.lockField`) is a system row: the list shows a lock
  * in place of its reorder handle, it carries a "System" marker, it offers no duplicate
  * or remove, and its locked cells are read-only while its other cells stay editable.
+ * A cell's reasons are the errors the form holds at its path (`lines.1.label`), the server's
+ * and the form's own check's alike, as a record field's are, and they describe its control; a
+ * column with a reason on any line cannot be hidden.
  * @kind surface
  */
 export function EditableLines({
-  control, setValue, name, lines, parentRow, readOnly, footer, rowErrors,
-  primaryFields, fields: authoredFields = [], supplementalColumns = [], relationFilters,
+  control, setValue, name, lines, parentRow, readOnly, footer,
+  primaryFields, fields: authoredFields = [], supplementalColumns = [], relationFilters, history,
 }: EditableLinesProps): React.ReactElement {
   const t = useUiT();
   const controlId = React.useId();
@@ -112,8 +139,51 @@ export function EditableLines({
   const schemaMetadata = useSchemaFieldMetadata();
   // Keep RHF's presentation identity off the child's own public id.
   const { fields, append, insert, move, remove } = useFieldArray({ control, name, keyName: "rhfKey" });
-  const { isDirty: formIsDirty } = useFormState({ control });
+  const { isDirty: formIsDirty, errors } = useFormState({ control });
+  // Each line's reasons, worded from the line's node by the form's own walker of an error tree, which
+  // tells a cell's error from the attributes of the line's own (a reason under `lines.1` itself is no
+  // cell's, whatever its columns are named), and a reason of the lines as a whole is no line's.
+  const lineErrors: unknown = get(errors, name);
+  const reasonsByLine = Array.from(Array.isArray(lineErrors) ? lineErrors : [], (node: unknown, index) =>
+    fieldErrorMessages(node ? [node] : [], `${name}.${index}`));
+  const cellReasons = (index: number, column: string) =>
+    messagesForDottedPath(reasonsByLine[index] ?? [], `${name}.${index}.${column}`);
   const rows = (useWatch({ control, name }) as Row[] | undefined) ?? [];
+  // Async widgets resolve their RHF identity at completion, never a captured index.
+  const latest = React.useRef({ fields, readOnly, setValue, history });
+  latest.current = { fields, readOnly, setValue, history };
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  // The cell groups this editor started and has not seen committed, by form path, held
+  // only to end them. A path names its row by position: the editor ends them before it
+  // moves rows itself, and right after anything else has moved them, when the path may
+  // already name another row. Committing a path whose group the history already ended
+  // (another field started) records nothing, and one the form already ended (a discard,
+  // a refresh, a save) does nothing at all.
+  const openCells = React.useRef(new Set<string>());
+  const endCell = React.useCallback((path: string) => {
+    openCells.current.delete(path);
+    latest.current.history?.commit(path);
+  }, []);
+  const endOpenCells = React.useCallback(() => openCells.current.forEach(endCell), [endCell]);
+  // End them right after the rows changed under those paths by anything but this editor's
+  // own row operations (which end them first, below): a row operation other code
+  // performed, or a form reset (an undo, a redo, a discard), which gives every row a new
+  // key. After another's row operation the steps stay one per intention and the commit
+  // still pairs its start, but its path names whichever row now sits at that position, if
+  // any. A cell changed on after an undo then starts a group of its own. Declared before
+  // the fallback below, so a key that fallback writes joins no cell group.
+  const rowKeys = fields.map((field) => field.rhfKey).join(" ");
+  React.useEffect(() => { endOpenCells(); }, [endOpenCells, rowKeys]);
+  // And when the editor unmounts (a pane that hides the lines, a closed record), so no start
+  // is left without its commit. Only a cell's change records a path, after mount, so the
+  // mount-time cleanup React's StrictMode runs finds none.
+  React.useEffect(() => endOpenCells, [endOpenCells]);
+  // The fallback for a row that arrives with no identity (a create form's seed rows, a
+  // hand-built row): its client key is RHF's field-array key.
   React.useEffect(() => {
     fields.forEach((field, index) => {
       const row = rows[index];
@@ -122,23 +192,28 @@ export function EditableLines({
       }
     });
   }, [config.idField, fields, name, rows, setValue]);
-  // Async widgets resolve their RHF identity at completion, never a captured index.
-  const latest = React.useRef({ fields, readOnly, setValue });
-  latest.current = { fields, readOnly, setValue };
-  const mounted = React.useRef(true);
-  React.useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-  const patchRow = React.useCallback((key: string, patch: Record<string, unknown>) => {
+  // One user intention is one step of the form's history, when the form has one. End the
+  // open cell groups first, while each path still names its row.
+  const performRowOperation = React.useCallback((action: () => void) => {
+    const recorder = latest.current.history;
+    if (!recorder) { action(); return; }
+    endOpenCells();
+    recorder.perform(action);
+  }, [endOpenCells]);
+  // Written inside its cell's group: joined to a change of the cell sent before it, or a
+  // step of its own, and the group ends either way.
+  const patchRow = React.useCallback((key: string, cell: string, patch: Record<string, unknown>) => {
     const current = latest.current;
     if (!mounted.current || current.readOnly) return;
     const index = current.fields.findIndex((field) => field.rhfKey === key);
     if (index < 0) return;
+    const path = `${name}.${index}.${cell}`;
+    current.history?.start(path);
     for (const [field, value] of Object.entries(patch)) {
       current.setValue<string>(`${name}.${index}.${field}`, value, { shouldDirty: true });
     }
-  }, [name]);
+    endCell(path);
+  }, [endCell, name]);
   const viewRows = React.useMemo(() => fields.map((field, index) => ({
     id: field.rhfKey, index, value: rows[index] ?? {},
   })), [fields, rows]);
@@ -155,12 +230,16 @@ export function EditableLines({
     const header = authored?.label ?? titleCase(field.name);
     const currencyField = authored?.currencyField ?? field.currencyField;
     const statusDisplay = authored?.statusDisplay ?? field.statusDisplay;
-    const descriptor: FieldDescriptor = {
-      name: field.name, label: header, widget, options: authored?.options ?? enumOptions(field),
+    // Each cell names this descriptor by its own path in the form (`path`, below), as every
+    // descriptor is named: the cell's own validation registers there and moves with its row.
+    const descriptor: Omit<FieldDescriptor, "name"> = {
+      label: header, widget, options: authored?.options ?? enumOptions(field),
       ...(currencyField ? { currencyField } : {}),
       ...(statusDisplay ? { statusDisplay } : {}),
+      ...(authored?.relationEdit === null ? { relationEdit: null } : {}),
     };
-    const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
+    // A column whose cell has a reason on any line.
+    const hasErrors = reasonsByLine.some((_, index) => cellReasons(index, field.name).length > 0);
     return {
       id: field.name, field: `value.${field.name}`, header, widget,
       ...(currencyField ? { currencyField } : {}),
@@ -172,44 +251,61 @@ export function EditableLines({
       align: filterFieldType(field.name, field) === "number"
         || ["money", "integer", "float"].includes(widget ?? "") ? "right" : "left",
       render: ({ id, index, value }) => {
-        const messages = rowMessages(rowErrors?.[index], field.name);
         const cellReadOnly = readOnly || lineLockedFields(value, config).includes(field.name)
           || Boolean(authored?.readOnlyWhen?.(value, parentRow ?? null));
-        const controlProps: WidgetControlProps = {
-          presentation: "cell", id: `${controlId}-${id}-${field.name}`,
-          "aria-invalid": messages.length > 0 || undefined,
-        };
+        const path = `${name}.${index}.${field.name}`;
+        // A relation cell's draft slot names its row by identity, so two rows never share one.
+        const slot = `${name}.${lineRowKey(value, config) ?? id}.${field.name}`;
         return <div className="min-w-0">
-          <Controller control={control} name={`${name}.${index}.${field.name}`}
-            render={({ field: controller }) => relationMulti ? (
-              <RelationMultiFieldWidget
-                controlProps={controlProps}
-                value={Array.isArray(controller.value) ? controller.value : []}
-                onChange={controller.onChange} readOnly={cellReadOnly} relation={relationMulti}
-                filters={relationFilters?.(field.name, parentRow ?? null)}
-                aria-label={header}
-              />
-            ) : relation ? (
-              <RelationFieldWidget
-                controlProps={controlProps} controlRef={controller.ref}
-                value={relationValueId(controller.value) || null}
-                onChange={controller.onChange} readOnly={cellReadOnly} relation={relation}
-                filters={relationFilters?.(field.name, parentRow ?? null)}
-                selectedOption={relationSelectedOption(controller.value, relation.labelField)}
-                aria-label={header}
-              />
-            ) : (
-              <FieldDescriptorControl
-                controlProps={controlProps} controlRef={controller.ref} field={descriptor}
-                row={value} parentRow={parentRow} value={controller.value}
-                messages={messages} readOnly={cellReadOnly} onChange={controller.onChange}
-                onRowChange={(patch) => patchRow(id, patch)}
-              />
-            )}
+          <Controller control={control} name={path}
+            render={({ field: controller }) => {
+              const messages = cellReasons(index, field.name);
+              const cellId = `${controlId}-${id}-${field.name}`;
+              // The reasons describe the control, as a record field's describe its own.
+              const errorId = messages.length > 0 ? `${cellId}-error` : undefined;
+              const controlProps: WidgetControlProps = {
+                presentation: "cell", id: cellId,
+                "aria-invalid": messages.length > 0 || undefined,
+                "aria-describedby": errorId,
+              };
+              const onChange = (next: unknown) => {
+                if (history) { history.start(path); openCells.current.add(path); }
+                controller.onChange(next);
+              };
+              const onCommit = history && (() => endCell(path));
+              return <>{relationMulti ? (
+                <RelationMultiFieldWidget
+                  controlProps={controlProps}
+                  value={Array.isArray(controller.value) ? controller.value : []}
+                  onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relationMulti}
+                  filters={relationFilters?.(field.name, parentRow ?? null)}
+                  fieldName={slot}
+                  aria-label={header}
+                />
+              ) : relation ? (
+                <RelationFieldWidget
+                  controlProps={controlProps} controlRef={controller.ref}
+                  value={relationValueId(controller.value) || null}
+                  onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relation}
+                  filters={relationFilters?.(field.name, parentRow ?? null)}
+                  selectedOption={relationSelectedOption(controller.value, relation.labelField)}
+                  fieldName={slot}
+                  edit={authored?.relationEdit}
+                  aria-label={header}
+                />
+              ) : (
+                <FieldDescriptorControl
+                  controlProps={controlProps} controlRef={controller.ref} field={{ ...descriptor, name: path }}
+                  row={value} parentRow={parentRow} value={controller.value}
+                  messages={messages} readOnly={cellReadOnly} onChange={onChange} onCommit={onCommit}
+                  onRowChange={(patch) => patchRow(id, field.name, patch)}
+                />
+              )}
+              {errorId ? <div id={errorId}>{messages.map((message, index) => (
+                <p key={index} className="mt-1 text-12 text-danger-text">{message}</p>
+              ))}</div> : null}</>;
+            }}
           />
-          {messages.map((message, index) => (
-            <p key={index} className="mt-1 text-12 text-danger-text">{message}</p>
-          ))}
         </div>;
       },
     };
@@ -239,12 +335,12 @@ export function EditableLines({
     defineRowAction<LineViewRow>({
       kind: "page", id: "duplicate", label: t("lines.duplicate"), icon: "copy",
       presentation: "icon", variant: "ghost", pendingPolicy: "disable-actions", visible: unlocked,
-      onSelect: ({ index }) => insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never),
+      onSelect: ({ index }) => performRowOperation(() => insert(index + 1, duplicateLineRow(rows[index] ?? {}, config) as never)),
     }),
     defineRowAction<LineViewRow>({
       kind: "page", id: "remove", label: t("lines.remove"), icon: "trash",
       presentation: "icon", variant: "danger", pendingPolicy: "disable-actions", visible: unlocked,
-      onSelect: ({ index }) => remove(index),
+      onSelect: ({ index }) => performRowOperation(() => remove(index)),
     }),
   ];
   return <div className="min-w-0">
@@ -258,11 +354,11 @@ export function EditableLines({
         if (current.readOnly) return;
         const from = current.fields.findIndex((field) => field.rhfKey === fromId);
         const to = current.fields.findIndex((field) => field.rhfKey === toId);
-        if (from >= 0 && to >= 0 && from !== to) move(from, to);
+        if (from >= 0 && to >= 0 && from !== to) performRowOperation(() => move(from, to));
       }}
       canReorderRow={unlocked}
       footerRow={readOnly ? undefined : <Button type="button" variant="ghost" size="sm"
-        onClick={() => append(emptyLineRow(fields.length, config) as never)}>
+        onClick={() => performRowOperation(() => append(emptyLineRow(fields.length, config) as never))}>
         <Glyph name="plus" decorative />{t("lines.add")}
       </Button>}
     />
@@ -278,11 +374,4 @@ export function EditableLines({
     ) : null}
     {footer ? <div className="pt-2">{footer(rows)}</div> : null}
   </div>;
-}
-
-function rowMessages(
-  rowError: ValidationErrors | undefined,
-  fieldName: string,
-): readonly string[] {
-  return rowError?.fieldErrors[fieldName] ?? [];
 }

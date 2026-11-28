@@ -45,8 +45,8 @@ other runs and native platform answers. The same owner predicate serves workflow
 eligibility; possibly accepted and SENT outbound deliveries still count after local
 trash because trash does not retract a public reply. Other discarded and failed
 replies do not. Reply preparation composes
-`Message.objects.compose_reply` with the final hold state at insertion and native
-idempotency replay. The actor needs readable context and channel `reply`.
+`Message.objects.compose` with the feed's handle as sender, the final hold state at
+insertion and native idempotency replay. The actor needs readable context and channel `reply`.
 Unreadable comments raise `PermissionDenied`. New attempts on answered comments
 raise `CommentAnswered`; matching replays return their existing reply first.
 `Feed.reply_hold` is operator-editable hours: null holds for approval indefinitely,
@@ -109,6 +109,17 @@ belongs to `FeedBackend.retry_after(response)`.
 
 The required integration is the ledger's authorization anchor and is protected
 from deletion while its quota periods remain.
+
+A feed whose backend key is no longer registered may be given a registered one
+once (a repair), and its config is carried over
+([`ImplBase.carried_config`](../base/implementations.py)): a stored value the new
+backend's config reads and accepts is kept; a value it refuses is reset to its
+default, and where a rule across keys refuses the values together (`reply_reserve`
+must stay below `quota_limit`) every value is reset to the defaults, so a feed
+stored with `quota_limit: 5` repairs to `quota_limit: 10000`; a key the config does
+not read is dropped, extras included although `FeedBackend.Config` allows them.
+Nothing else reports what changed: the repair read
+(`feeds_repair_choices`) shows the carried config before the save.
 
 Re-observation of the `active_thread_days` window (default 30 days) catches edits,
 moderation changes, hides and deletes. Declare it as its own event-feed

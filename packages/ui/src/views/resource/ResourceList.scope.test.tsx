@@ -102,7 +102,7 @@ test("a native controlled child list isolates queries and record UI from its par
   expect(await screen.findByRole("button", { name: "Open Schedule" })).toBeTruthy();
   const childRequest = getList.mock.calls[0]?.[0];
   expect(childRequest?.meta?.gqlVariables).toMatchObject({ where: { workflow: { _eq: "workflow-1" } } });
-  expect(childRequest?.meta?.gqlVariables?.order_by).toEqual({});
+  expect(childRequest?.meta?.gqlVariables?.order_by).toEqual([]);
   expect(JSON.stringify(childRequest)).not.toContain("status");
   expect(JSON.stringify(childRequest)).not.toContain("version");
   expect(parent.state.groupStack).toEqual([{ field: "status" }]);

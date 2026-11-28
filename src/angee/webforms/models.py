@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Self
 
@@ -41,7 +42,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
 from rebac.actors import is_sudo
@@ -50,6 +51,7 @@ from angee.base.fields import DiagnosticTextField, ImplClassField, StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.base import AngeeDataModel
+from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
@@ -64,7 +66,9 @@ from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 from angee.webforms.constants import DELIVER_RESPONSE_TASK
+from angee.webforms.resources import FormResource
 from angee.webforms.targets import DeliveryRefused, FormTarget
 from angee.webforms.validators import (
     CONTACT_LIMIT,
@@ -121,6 +125,12 @@ def _model(name: str) -> Any:
     return apps.get_model("webforms", name)
 
 
+def _taken(slug: str) -> str:
+    """The refusal of an address another form holds."""
+
+    return f"The address forms/{slug} belongs to another form."
+
+
 class FormUnavailable(LookupError):
     """The form takes no submission: it is not published, or it is closed or archived."""
 
@@ -133,8 +143,9 @@ class DeliveryFailed(Exception):
     """A response could not be handed to its target; ``reason`` is what the response keeps of it.
 
     The reason is the failure's class, or ``refused: <code>`` when the target's
-    owner refused the response. It never carries the failure's own message,
-    which may quote an answer.
+    owner refused the response, or web forms did (``config_invalid``: the form's
+    stored configuration no longer validates). It never carries the failure's
+    own message, which may quote an answer.
     """
 
     def __init__(self, reason: str) -> None:
@@ -188,9 +199,20 @@ class FormQuerySet[FormT: Form](ArchiveQuerySet[FormT], AngeeHistoryQuerySet[For
 FormManager = AngeeHistoryManager.from_queryset(FormQuerySet)
 
 
-class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
-    """One public form: its name for staff, whether it takes submissions, and what a response becomes."""
+class Form(ResourceLoadMixin, ImplDefaultsMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+    """One public form: its name for staff, whether it takes submissions, and what a response becomes.
 
+    An addon declares a form as one resource row (:class:`~angee.webforms.resources.FormResource`):
+    the form, the version it serves (:meth:`serve`) and its addresses (:meth:`ensure_aliases`).
+
+    Its target's configuration is the implementation configuration of
+    ``target_class`` (:class:`ImplDefaultsMixin`): every save stores it as the
+    target's ``config_model`` validates it, system work included, and a refusal
+    is reported under ``target_config``.
+    """
+
+    resource_class = FormResource
+    impl_config_field = "target_config"
     sqid_prefix = "wbf_"
 
     name = models.CharField(max_length=160)
@@ -205,7 +227,7 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """
     target_class = ImplClassField(FormTarget, default="store")
     target_config = models.JSONField(default=dict, blank=True)
-    """The target's own configuration, checked by its ``config_model``: how answers become its record's fields."""
+    """The target's own configuration, stored as its ``config_model`` validates it: how answers fill its record."""
     theme_id = models.CharField(max_length=64, blank=True, default="", validators=[THEME_ID])
     """The theme the public page wears; empty follows the deployment's default."""
     retention_days = models.PositiveIntegerField(
@@ -238,18 +260,31 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         return self.name
 
     def clean(self) -> None:
-        """Check the target's configuration against the target the form selects."""
+        """Leave the target's validated configuration on the form, and check it against the target it selects.
+
+        The configuration is validated first, so what is compared with the
+        stored one, and read by the target, is what would be stored. A target or
+        configuration being chosen is also held to the target's own
+        :meth:`FormTarget.clean`, whoever chooses it; its refusal is under
+        ``target_config``.
+        """
 
         super().clean()
-        try:
-            self.target()
-        except ValidationError as error:
-            raise ValidationError({"target_config": error.messages}) from error
+        self.validate_impl_configs()
+        target = self.target()
+        if self._target_changed():
+            try:
+                target.clean()
+            except ValidationError as error:
+                raise ValidationError({"target_config": error.messages}) from error
 
     def target(self) -> FormTarget:
-        """Return this form's target, bound to it and to its checked configuration."""
+        """Return this form's target, bound to it and its checked configuration; refused under ``target_config``."""
 
-        return self.get_target_class_impl()(self)
+        try:
+            return self.get_target_class_impl()(self)
+        except ValidationError as error:
+            raise self.impl_config_error(error) from None
 
     def undelivered(self) -> tuple[int, datetime | None]:
         """Return how many responses still wait for delivery, and when the first of them is removed.
@@ -272,10 +307,19 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         return int(count or 0), expires
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Refuse a target, or a configuration of it, the acting user may not choose."""
+        """Store the target's validated configuration; refuse a target or configuration the actor may not choose.
+
+        The configuration is validated, and a new form's target defaults
+        seeded, before :meth:`_target_changed` compares the choice with what is
+        stored, so the same configuration given another way is no new choice.
+        ``ImplDefaultsMixin`` repeats both when it saves, finding nothing left
+        to change.
+        """
 
         fields = kwargs.get("update_fields")
         if fields is None or {"target_class", "target_config"} & set(fields):
+            self.prepare_impl_defaults()
+            self.validate_impl_configs(update_fields=fields)
             self._require_target_choice()
         super().save(*args, **kwargs)
 
@@ -288,18 +332,23 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         acting user (demo data, a migration) is not asked.
         """
 
-        chosen = (str(self.target_class), self.target_config)
-        if not self._state.adding:
-            stored = type(self)._base_manager.filter(pk=self.pk).values_list("target_class", "target_config").first()
-            if stored is not None and (str(stored[0]), stored[1]) == chosen:
-                return
+        if not self._target_changed():
+            return
         actor = instance_actor(self)
         if actor is None:
             if self.is_sudo() or is_sudo():
                 return
             raise PermissionDenied("Denied: choosing a form's target requires an actor.")
         if not self.target().permits(actor):
-            raise PermissionDenied(f"Denied: the current actor may not point a form at {chosen[0]!r}.")
+            raise PermissionDenied(f"Denied: the current actor may not point a form at {str(self.target_class)!r}.")
+
+    def _target_changed(self) -> bool:
+        """Whether the target or its configuration is being chosen: a new form, or one that differs from the stored."""
+
+        if self._state.adding:
+            return True
+        stored = type(self)._base_manager.filter(pk=self.pk).values_list("target_class", "target_config").first()
+        return stored is None or (str(stored[0]), stored[1]) != (str(self.target_class), self.target_config)
 
     @transition(
         status, source=[FormStatus.DRAFT, FormStatus.CLOSED], target=FormStatus.PUBLISHED, on_success=save_state,
@@ -313,6 +362,120 @@ class Form(HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     @transition(status, source=FormStatus.PUBLISHED, target=FormStatus.CLOSED, on_success=save_state)
     def close(self) -> None:
         """Stop taking submissions; what was received stays."""
+
+    def serve(self, content: Mapping[str, Any], *, publish: bool = True) -> Any:
+        """Serve ``content``, a version's content by field name (``FormVersion.CONTENT_FIELDS``); return its version.
+
+        The version served now is kept when it holds exactly that content.
+        Otherwise the form's newest version is published when it is an
+        unpublished one holding that content, and a new version holding it is
+        made and published when it is not (:meth:`FormVersion.publish`), in one
+        transaction, so content the publication refuses leaves no version
+        behind. Content the form served before, and serves no longer, is a new
+        version too: what is served is decided by the version served now, never
+        by an older one. A field ``content`` leaves out takes the version's
+        default. Like ``publish``, it opens a draft form and leaves a published
+        or closed one in its state. The content is held to the version's fields
+        and rules before anything is written, each refusal under the field it is
+        about.
+
+        With ``publish=False`` the content is only prepared, for a person to
+        publish: the version served now or the form's newest version is kept
+        when it holds exactly that content, and otherwise a new unpublished
+        version holding it is made. Nothing is published or opened, so the
+        form's state and the version it serves are left as they are; the
+        publication judges the version when a person publishes it.
+        """
+
+        self.require_access("write")
+        versions = _model("FormVersion")
+        unknown = sorted(str(name) for name in set(content) - set(versions.CONTENT_FIELDS))
+        if unknown:
+            raise ValidationError({"version": (
+                f"A version holds {', '.join(versions.CONTENT_FIELDS)}; it does not hold {', '.join(unknown)}."
+            )})
+        candidate = versions(form_id=self.pk, **content)
+        # The verb sets the form, the number and the publication; the content is the caller's.
+        candidate.full_clean(exclude=["form", "number", "published_at"])
+        with transaction.atomic():
+            # The form's lock first, as publish takes it: the version served is read as it stands.
+            form = _model("Form").system_queryset(lock=("self",)).get(pk=self.pk)
+            served = versions._base_manager.filter(pk=form.published_version_id).first()
+            if served is not None and served._content() == candidate._content():
+                return served
+            # The newest version under its own lock, as a revision takes it: its content holds until this commits.
+            newest = versions.system_queryset(lock=("self",)).filter(form_id=self.pk).order_by("-number").first()
+            holds = newest is not None and newest._content() == candidate._content()
+            version = newest if holds and not (publish and newest.published_at) else candidate
+            if version is candidate:
+                candidate.save()
+            if publish:
+                version.publish()
+        if publish:
+            self.refresh_from_db(fields=("published_version", "status", "updated_at"))
+        return version
+
+    def ensure_aliases(self, aliases: Iterable[str | Mapping[str, str]]) -> None:
+        """Give the form each of ``aliases`` it lacks; never remove or change one it has.
+
+        ``aliases`` is a collection, never a single slug or mapping. An alias is
+        a slug, or a mapping of :attr:`FormAlias.ADDRESS_FIELDS` to strings
+        (``{"slug": "entrada", "language": "es"}`` for an address that opens the
+        form in one language). Every one is held to the alias's fields before
+        any alias is made, and the refusals are reported together under
+        ``aliases``, each naming its alias; a slug given twice is refused there
+        too. An alias the form already has, under a given slug or another,
+        stays as it is, its language too. A slug another form holds is refused
+        under ``aliases``, before any alias is made; so is one another form
+        takes while this call runs, and the aliases this call made go with the
+        refusal. A slug the same form gains meanwhile is its own.
+        """
+
+        self.require_access("write")
+        model = _model("FormAlias")
+        shape = f"Give an alias as a slug, or as a mapping of {', '.join(model.ADDRESS_FIELDS)} to strings."
+        if isinstance(aliases, str | Mapping):
+            raise ValidationError({"aliases": f"Give a collection of aliases, not one alias. {shape}"})
+        wanted: dict[str, Any] = {}
+        refused: list[str] = []
+        for given in aliases:
+            fields = {"slug": given} if isinstance(given, str) else given
+            if (
+                not isinstance(fields, Mapping) or "slug" not in fields or not set(fields) <= set(model.ADDRESS_FIELDS)
+                or not all(isinstance(value, str) for value in fields.values())
+            ):
+                named = isinstance(fields, Mapping) and isinstance(fields.get("slug"), str)
+                refused.append(f"{fields['slug'] if named else given}: {shape}")
+                continue
+            alias = model(form=self, **fields)
+            try:
+                alias.clean_fields(exclude=["form"])
+            except ValidationError as error:
+                refused.extend(f"{fields['slug']}: {message}" for message in error.messages)
+                continue
+            if alias.slug in wanted:
+                refused.append(f"{alias.slug}: given twice.")
+            wanted[alias.slug] = alias
+        if refused:
+            raise ValidationError({"aliases": refused})
+        held = dict(model._base_manager.filter(slug__in=list(wanted)).values_list("slug", "form_id"))
+        taken = [slug for slug in wanted if held.get(slug, self.pk) != self.pk]
+        if taken:
+            raise ValidationError({"aliases": [_taken(slug) for slug in taken]})
+        with transaction.atomic():
+            for slug, alias in wanted.items():
+                if slug in held:
+                    continue
+                try:
+                    # The unique slug decides a concurrent insert; the savepoint keeps the transaction usable.
+                    with transaction.atomic():
+                        alias.save()
+                except IntegrityError as error:
+                    # Only the slug's own uniqueness is a contender's; any other refusal is the database's.
+                    if model._base_manager.filter(slug=slug).exclude(form_id=self.pk).exists():
+                        raise ValidationError({"aliases": [_taken(slug)]}) from error
+                    if not model._base_manager.filter(slug=slug, form_id=self.pk).exists():
+                        raise
 
 
 class FormVersionQuerySet(ClosedUpdateQuerySet[Any], AngeeQuerySet):
@@ -475,6 +638,9 @@ class FormAlias(AngeeDataModel, concrete=True):
     slug = models.CharField(max_length=64, unique=True, validators=[SLUG])
     language = models.CharField(max_length=35, blank=True, default="", validators=[LANGUAGE])
     """The language this address opens the form in; empty leaves it to the visitor's."""
+
+    ADDRESS_FIELDS: ClassVar[tuple[str, ...]] = ("slug", "language")
+    """The fields that state an address; :meth:`Form.ensure_aliases` takes an alias as a mapping of them."""
 
     objects = FormAliasManager()
 
@@ -744,7 +910,11 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         and the values in its frames may quote an answer, so neither is stored,
         logged or raised. What is logged is where it was raised. The response is
         tried again later (:meth:`ResponseManager.redeliver`) unless its
-        target's owner refused it (:class:`~angee.webforms.targets.DeliveryRefused`).
+        target's owner refused it (:class:`~angee.webforms.targets.DeliveryRefused`),
+        or its form's stored configuration no longer builds the target (its
+        ``config_model`` changed since it was saved): a refusal as
+        ``config_invalid``, for every target, which staff answer by correcting
+        the form's target and delivering again.
 
         The attempt is counted and its next try set under the row's lock,
         before the target runs and in a transaction of its own: an attempt whose
@@ -762,7 +932,12 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
                     return self._record()
                 made = row._record()
                 if made is None:
-                    made = row.form.target().deliver(row)
+                    try:
+                        target = row.form.target()
+                    except ValidationError:
+                        # Its message may quote the configuration: the refusal keeps its code alone.
+                        raise DeliveryRefused("config_invalid") from None
+                    made = target.deliver(row)
                     if made is not None:
                         if not _model("ResponseRecord").declares_target(type(made)):
                             # Nothing would erase the answers when an undeclared record goes.

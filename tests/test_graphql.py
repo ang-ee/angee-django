@@ -28,6 +28,7 @@ from rebac import (
     RebacMixin,
     RelationshipTuple,
     SubjectRef,
+    actor_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -40,7 +41,7 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.base.exceptions import TransitionNotAllowed
+from angee.base.exceptions import DomainError, TransitionNotAllowed
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeModel
 from angee.base.permissions import require_rebac_queryset
@@ -55,9 +56,10 @@ from angee.graphql.schema import (
     GraphQLSchemas,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from tests.conftest import make_addon
+from tests.conftest import create_platform_admin, create_user, make_addon
 from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
+from tests.scopedemo.models import FactoryDoc, Scope
 
 
 @strawberry.type
@@ -107,9 +109,13 @@ def test_generated_read_root_conceals_missing_and_hidden_ids(db: None) -> None:
         assert read(identity) == {"data": {"people_by_pk": None}}
 
 
+class _DocumentRefused(DomainError):
+    code = "DOCUMENT_REFUSED"
+
+
 @pytest.mark.parametrize("refusal", [
     ValidationError("refusal-canary"), PermissionDenied("refusal-canary"),
-    TransitionNotAllowed("refusal-canary"), ObjectDoesNotExist("refusal-canary"),
+    TransitionNotAllowed("refusal-canary"), ObjectDoesNotExist("refusal-canary"), _DocumentRefused(),
 ])
 def test_resolver_refusals_do_not_log_errors_or_documents(
     refusal: Exception, caplog: pytest.LogCaptureFixture,
@@ -302,45 +308,39 @@ def test_hasura_write_backend_decodes_public_relations_through_write_owner(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("admitted", (True, False), ids=("admitted", "refused"))
 def test_hasura_write_backend_create_delegates_prepared_insertion(
+    admitted: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hasura only decodes public IDs before native preparation and insertion, in one transaction."""
+    """Hasura decodes public IDs once and REBAC decides the row before native validation and insertion."""
 
-    related = SimpleNamespace(pk=7)
-    created: dict[str, Any] = {}
+    actor = create_platform_admin("delegating-admin") if admitted else create_user("delegating-member")
+    with system_context(reason="test.delegation.scope"):
+        scope = Scope.objects.create(name="Delegated")
+    write_relationships([RelationshipTuple(to_object_ref(scope), "direct_member", to_subject_ref(actor))])
+    delegated: list[dict[str, Any]] = []
 
-    def fake_require_instance_for_id(
-        model: type[models.Model],
-        value: str,
-        *,
-        queryset: object | None = None,
-    ) -> object:
-        del model, value, queryset
-        return related
-
-    def fake_create(
-        info: Any,
-        model: type[models.Model],
-        data: dict[str, Any],
-        **kwargs: Any,
-    ) -> models.Model:
+    def fake_create(info: Any, model: type[models.Model], data: dict[str, Any], **kwargs: Any) -> models.Model:
         del info
-        assert model is GatedWriteThing
-        assert data == {"owner_id": related.pk, "name": "Row"}
+        assert model is FactoryDoc
         assert kwargs == {"key_attr": "sqid", "full_clean": True}
-        instance = model(owner_id=data["owner_id"], name=data["name"])
-        created["row"] = instance
-        return instance
+        delegated.append(data)
+        return model(**data)
 
-    monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
     monkeypatch.setattr(hasura_data.mutation_resolvers, "create", fake_create)
+    backend = AngeeHasuraWriteBackend(FactoryDoc, public_id_fields=("scope",))
+    data = {"scope": scope.public_id, "title": "Row"}
 
-    backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
+    with actor_context(actor):
+        if not admitted:
+            with pytest.raises(PermissionDenied):
+                backend.create(cast(Any, SimpleNamespace()), data)
+            assert delegated == []
+            return
+        result = backend.create(cast(Any, SimpleNamespace()), data)
 
-    result = backend.create(cast(Any, SimpleNamespace()), {"owner": "pub-owner", "name": "Row"})
-
-    assert result is created["row"]
+    assert delegated == [{"scope_id": scope.pk, "title": "Row"}]
     assert not result.is_sudo()
 
 
@@ -881,39 +881,95 @@ def test_variable_coercion_preserves_custom_scalar_error_code(caplog: pytest.Log
     assert invalid_value not in caplog.text
 
 
-def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: pytest.LogCaptureFixture) -> None:
-    """Resolver failures log their class, path and frames without exception values."""
+@pytest.mark.parametrize("located", [False, True], ids=["raised", "located"])
+def test_unexpected_graphql_errors_log_once_without_exception_or_request_values(
+    located: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A resolver failure is one record of its class, path and frames.
 
-    secret = "secret-token-xyz"
+    The record carries neither the exception's value nor the request: printing a
+    ``GraphQLError`` quotes the document at its location, so a token written inline
+    would reach the log, and so would a variable. An error raised already located
+    is logged the same way.
+    """
 
-    def raise_provider_failure() -> str:
+    secret, inline, variable = "secret-token-xyz", "inline-token-canary", "variable-note-canary"
+
+    def raise_provider_failure(info: strawberry.Info) -> bool:
+        if located:
+            raise GraphQLError(secret, path=info.path.as_list())
         raise RuntimeError(secret)
 
     @strawberry.type
-    class Query:
-        @strawberry.field
-        def failure(self) -> str:
-            return raise_provider_failure()
+    class Mutation:
+        @strawberry.mutation
+        def redeem(self, info: strawberry.Info, token: str, note: str) -> bool:
+            return raise_provider_failure(info)
 
-    schema = GraphQLSchemas([addon(public={"query": [Query]})]).build("public")
+    schema = GraphQLSchemas([addon(public={"query": [HelloQuery], "mutation": [Mutation]})]).build("public")
 
-    result = schema.execute_sync("{ failure }")
+    result = schema.execute_sync(
+        f'mutation Redeem($note: String!) {{ redeem(token: "{inline}", note: $note) }}',
+        variable_values={"note": variable},
+    )
 
     assert result.errors is not None
     assert result.errors[0].message == "An unexpected error occurred."
     assert result.errors[0].extensions == {"code": "INTERNAL"}
     assert result.errors[0].original_error is None
-    records = [
-        record for record in caplog.records if record.name == "angee.graphql.schema" and record.levelno == logging.ERROR
-    ]
-    assert len(records) == 1
-    diagnostic = records[0].getMessage()
-    assert "RuntimeError" in diagnostic
-    assert "['failure']" in diagnostic
+    [record] = caplog.records
+    assert (record.name, record.levelno, record.exc_info) == ("angee.graphql.schema", logging.ERROR, None)
+    diagnostic = record.getMessage()
+    assert ("GraphQLError" if located else "RuntimeError") in diagnostic
+    assert "['redeem']" in diagnostic
     assert __file__ in diagnostic
     assert "in raise_provider_failure" in diagnostic
-    assert "raise RuntimeError(secret)" in diagnostic
-    assert secret not in caplog.text
+    assert ("raise GraphQLError(secret" if located else "raise RuntimeError(secret)") in diagnostic
+    _assert_record_omits(record, caplog, secret, inline, variable)
+
+
+def test_non_null_violations_log_once_without_request_values(caplog: pytest.LogCaptureFixture) -> None:
+    """graphql-core's own field error is sanitized and logged once, like a resolver's.
+
+    A resolver returning ``None`` for a non-null field fails in graphql-core, which
+    raises a ``TypeError`` and wraps it with the field's path; the client gets
+    ``INTERNAL`` and the record quotes nothing from the request.
+    """
+
+    inline, variable = "inline-token-canary", "variable-note-canary"
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        def redeem(self, token: str, note: str) -> bool:
+            return cast(bool, None)
+
+    schema = GraphQLSchemas([addon(public={"query": [HelloQuery], "mutation": [Mutation]})]).build("public")
+
+    result = schema.execute_sync(
+        f'mutation Redeem($note: String!) {{ redeem(token: "{inline}", note: $note) }}',
+        variable_values={"note": variable},
+    )
+
+    assert result.data is None
+    assert result.errors is not None
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
+    assert result.errors[0].original_error is None
+    [record] = caplog.records
+    assert (record.name, record.levelno, record.exc_info) == ("angee.graphql.schema", logging.ERROR, None)
+    diagnostic = record.getMessage()
+    assert "(TypeError) at path ['redeem']" in diagnostic
+    assert "in complete_value" in diagnostic
+    _assert_record_omits(record, caplog, inline, variable)
+
+
+def _assert_record_omits(record: logging.LogRecord, caplog: pytest.LogCaptureFixture, *values: str) -> None:
+    """No rendering of the record, nor the captured log text, carries any of ``values``."""
+
+    texts = (record.getMessage(), str(record.msg), repr(record.args), logging.Formatter().format(record), caplog.text)
+    for value in values:
+        assert not [text for text in texts if value in text], value
 
 
 def test_graphql_identity_exports_public_node() -> None:

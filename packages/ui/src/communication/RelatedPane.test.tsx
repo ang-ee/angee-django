@@ -187,3 +187,90 @@ test("edge eligibility precedes probes and custom narrowing", () => {
   view.rerender(<Example content={{ ...content, edge: { model: "example.Edge" }, when: () => false }} />);
   expect(screen.queryByText("References")).toBeNull();
 });
+
+
+const EMPTY_TITLE = "No links yet";
+
+test("the pane shows its empty state when every eligible group has neither rows nor a verb, and the rows again when one has", async () => {
+  query.mockReturnValue(groupCounts({ "example.files": 0 }));
+  const groups = (pages: number) => containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {
+    "example.files": { content: { label: "Files", relatedCount: { models: ["example.File"] }, render: (_: ChatterViewContext, label: RelatedGroupLabel) => <>{label()}<li>One file</li></> } },
+    "example.pages": { content: { label: "Pages", usePaneCount: () => pages, render: (_: ChatterViewContext, label: RelatedGroupLabel) => <>{label()}<li>One page</li></> } },
+  } });
+  const pane = (pages: number) => <AppRuntimeProvider runtime={{ containers: groups(pages) }}><RelatedPane context={context} /></AppRuntimeProvider>;
+  const view = render(pane(0));
+  expect(await screen.findByText(EMPTY_TITLE)).toBeTruthy();
+  expect(screen.queryByText("Files")).toBeNull();
+  expect(screen.queryByText("Pages")).toBeNull();
+  // The list that holds no row is out of the accessibility tree while the empty state stands for it.
+  expect(screen.queryByRole("list")).toBeNull();
+
+  view.rerender(pane(1));
+  await waitFor(() => expect(screen.queryByText(EMPTY_TITLE)).toBeNull());
+  expect(screen.getByText("One page")).toBeTruthy();
+  expect(screen.getByRole("list")).toBeTruthy();
+
+  view.rerender(pane(0));
+  expect(await screen.findByText(EMPTY_TITLE)).toBeTruthy();
+});
+
+test("a group stays mounted while the pane flips between its rows and its empty state", async () => {
+  // Each mount of the group's own hook; a group unmounted with the list would withdraw what it
+  // published and remount, so the pane would never settle.
+  const mounted = vi.fn(() => {
+    // A loop of remounts would otherwise never let the test end.
+    if (mounted.mock.calls.length > 5) throw new Error("The group keeps remounting.");
+  });
+  const content = (rows: number): RelatedGroupContent => ({
+    label: "Pages",
+    usePaneCount: () => { React.useEffect(() => { mounted(); }, []); return rows; },
+    render: (_, label) => <>{label()}<li>One page</li></>,
+  });
+  const view = render(<Example content={content(0)} />);
+  expect(await screen.findByText(EMPTY_TITLE)).toBeTruthy();
+  view.rerender(<Example content={content(1)} />);
+  expect(await screen.findByText("One page")).toBeTruthy();
+  await waitFor(() => expect(screen.queryByText(EMPTY_TITLE)).toBeNull());
+  view.rerender(<Example content={content(0)} />);
+  expect(await screen.findByText(EMPTY_TITLE)).toBeTruthy();
+  expect(mounted).toHaveBeenCalledTimes(1);
+});
+
+test("a group that only offers a verb keeps the pane from reading empty", async () => {
+  render(<Example content={{
+    label: "Files", usePaneCount: () => 0, useVerb: () => true,
+    render: (_, label) => <>{label(<button>Add</button>)}</>,
+  }} />);
+  // The verb is the awaited effect; the empty state is then known not to stand beside it.
+  expect(await screen.findByRole("button", { name: "Add" })).toBeTruthy();
+  await waitFor(() => expect(screen.getByRole("list")).toBeTruthy());
+  expect(screen.queryByText(EMPTY_TITLE)).toBeNull();
+});
+
+test("a group whose count has not answered yet keeps the pane from reading empty", async () => {
+  query.mockReturnValue({ data: undefined });
+  const group = vi.fn((_: ChatterViewContext, label: RelatedGroupLabel) => <>{label()}<li>Loading rows</li></>);
+  render(<Example content={{ label: "Files", relatedCount: { models: ["example.File"] }, render: group }} />);
+  expect(await screen.findByText("Loading rows")).toBeTruthy();
+  expect(screen.queryByText(EMPTY_TITLE)).toBeNull();
+});
+
+test("the empty state is not in any committed frame of a pane whose group shows rows, the first included", () => {
+  // What each commit holds, read where the group's own rows are laid out: the first commit comes
+  // before any group has published what it shows.
+  const frames: boolean[] = [];
+  function Rows({ label }: { label: RelatedGroupLabel }) {
+    React.useLayoutEffect(() => { frames.push(screen.queryByText(EMPTY_TITLE) !== null); });
+    return <>{label()}<li>One file</li></>;
+  }
+  render(<Example content={{ label: "Files", usePaneCount: () => 1, render: (_, label) => <Rows label={label} /> }} />);
+  expect(screen.getByText("One file")).toBeTruthy();
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames).not.toContain(true);
+});
+
+test("no eligible group reads empty, as before", () => {
+  const containers = containersFromChildren(CHATTER_CONTAINERS, { "related#groups": {} });
+  render(<AppRuntimeProvider runtime={{ containers }}><RelatedPane context={context} /></AppRuntimeProvider>);
+  expect(screen.getByText(EMPTY_TITLE)).toBeTruthy();
+});

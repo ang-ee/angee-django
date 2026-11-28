@@ -1,0 +1,26 @@
+// Authorization schema for the brandkit addon.
+// @rebac_package: brandkit
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+
+// A brand kit is deployment configuration that themes, mail and documents wear:
+// every signed-in actor reads it, platform admins manage the kits, and everyone,
+// signed in or not, reads the default kit's colours.
+definition brandkit/brand_kit {
+    relation admin: angee/role // rebac:const=admin
+    // The default kit, live from its own column: no tuple and no target row.
+    relation default_kit: brandkit/brand_kit // rebac:const={"target_id":"default","filters":{"is_default":true}}
+
+    // The default sentinel needs no target row because this permission is builtin.
+    // Arrow-only through default_kit: never check it directly or use it as an action
+    // or field gate; doing so bypasses the default filter. Check read_colors instead.
+    permission default_reader = authenticated + anonymous
+    permission create = admin->member
+    permission read   = authenticated
+    // A deliberate disclosure: the default kit's colours, to everyone, signed in or not,
+    // for the pages a theme dresses with them. Only the public default_brand_kit_colors
+    // root reads under it, and it projects the ten colours alone.
+    permission read_colors = read + default_kit->default_reader
+    permission write  = admin->member
+    permission delete = admin->member
+}

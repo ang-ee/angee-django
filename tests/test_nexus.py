@@ -18,17 +18,19 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.roles import grant as grant_role
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
+from angee.messaging.managers import MessageQuerySet
 from angee.messaging.testing.models import (
     Handle,
     Message,
     MessageEdge,
-    Participant,
     Party,
     Person,
+    Recipient,
     Relationship,
     RelationshipKind,
     Thread,
@@ -75,12 +77,22 @@ def _message(
 
 
 def _address(message: Any, handle: Any, role: str = "to") -> Any:
-    return Participant._base_manager.create(
+    return Recipient._base_manager.create(
         message=message,
-        thread=message.thread,
         handle=handle,
         role=role,
     )
+
+
+def _messages_involving(*parties: Any) -> list[Any]:
+    """The pks of the messages ``parties`` sent or received, as the correspondence timeline selects them."""
+
+    return sorted(Message._base_manager.filter(pk__in=MessageQuerySet.ids_involving_parties(
+        parties,
+        handles=Handle._base_manager.all(),
+        messages=Message._base_manager.all(),
+        recipients=Recipient._base_manager.all(),
+    )).values_list("pk", flat=True))
 
 
 def _schema() -> Any:
@@ -251,6 +263,8 @@ def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to
     del db
     owner = User.objects.create_user(username="handle-merge-reader")
     with system_context(reason="test nexus handle merge"):
+        # Alice's old address and her new one: a contact administrator merges them.
+        grant_role(actor=owner, role="parties/role:contact_admin")
         alice, bob = Party._base_manager.create(display_name="Alice", created_by=owner), _party("Bob")
         old, new = (
             Handle._base_manager.create(platform="email", value=value, created_by=owner)
@@ -268,10 +282,35 @@ def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to
     with actor_context(owner):
         new.with_actor(owner).merge(records=[old.public_id])
     with system_context(reason="test nexus handle merge readers"):
-        assert Participant._base_manager.get(pk=recipient.pk).handle_id == old.pk
-        assert list(Message.objects.involving_parties([alice]).values_list("pk", flat=True)) == [message.pk]
+        assert Recipient._base_manager.get(pk=recipient.pk).handle_id == old.pk
+        assert _messages_involving(alice) == [message.pk]
         assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
         assert list(Tie._base_manager.values_list("party_a_id", "party_b_id")) == [tuple(sorted((alice.pk, bob.pk)))]
+
+
+def test_involving_parties_reads_sent_messages_from_their_sender(db: None) -> None:
+    """A party's messages include those its handles sent, through a merged alias too.
+
+    Membership is ``pk IN``, so a message sent to oneself cannot repeat by construction.
+    """
+
+    del db
+    owner = User.objects.create_user(username="sender-membership-reader")
+    with system_context(reason="test nexus sender membership"):
+        alice, bob = Party._base_manager.create(display_name="Alice", created_by=owner), _party("Bob")
+        alice_handle, bob_handle = _handle(None, "alice@example.com"), _handle(bob, "bob@example.com")
+        # The fold re-resolves the survivor's party, so the link is a statement.
+        Party.objects.assert_handle(alice, alice_handle, asserted_by=owner)
+        alias = _handle(None, "alice@old.example.com")
+        sent = _message(sender=alias, thread=Thread._base_manager.create(platform="email"), sent_at=_T0,
+                        external_id="alice-to-bob")
+        _address(sent, bob_handle)
+        to_self = _message(sender=alice_handle, thread=sent.thread, sent_at=_T0, external_id="alice-to-alice")
+        _address(to_self, alice_handle)
+        alice_handle.fold([alias])
+
+        assert _messages_involving(alice) == sorted([sent.pk, to_self.pk])
+        assert _messages_involving(bob) == [sent.pk]
 
 
 def test_recompute_derives_addressed_reply_and_mention_edges_once(db: None) -> None:
@@ -342,22 +381,6 @@ def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(db: None) 
             tuple(sorted((alice.pk, bob.pk))),
             tuple(sorted((alice.pk, carol.pk))),
         }
-
-
-def test_thread_roster_only_group_with_ten_participants_produces_no_ties(db: None) -> None:
-    """Thread roster co-membership never expands one group message into pair edges."""
-
-    del db
-    with system_context(reason="test nexus roster guard"):
-        parties = [_party(f"Person {index}") for index in range(10)]
-        handles = [_handle(party, f"person{index}@example.com") for index, party in enumerate(parties)]
-        thread = Thread._base_manager.create(platform="whatsapp", modality=Thread.Modality.GROUP)
-        _message(sender=handles[0], thread=thread, sent_at=_T0, external_id="group", platform="whatsapp")
-        for handle in handles:
-            Participant._base_manager.create(thread=thread, handle=handle, role="to")
-
-        assert Tie.objects.recompute(now=_T0) == 0
-        assert Tie._base_manager.count() == 0
 
 
 def test_recompute_excludes_record_chatter_and_public_threads(db: None) -> None:

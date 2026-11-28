@@ -2,7 +2,7 @@
 
 Parties are the people and organisations a project keeps track of. A party is
 reached through one or more :class:`Handle` rows (an email address, a phone
-number, a social handle) — the same handle that messaging uses as a participant,
+number, a social handle) — the same handle that messaging uses as a sender or recipient,
 so this addon is the contacts foundation the messaging addon builds on. The link
 between a party and a handle is a confidence-bearing member statement
 so a sync can record an uncertain match as a weak candidate instead of guessing.
@@ -26,6 +26,7 @@ import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import datetime
+from functools import cache
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -42,7 +43,16 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, SubjectRef, actor_context, backend, system_context, to_object_ref, to_subject_ref
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    SubjectRef,
+    actor_context,
+    backend,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+)
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -53,12 +63,14 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.identity import public_id_of
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
+from angee.iam.roles import subject_has_role
 from angee.integrate.mixins import LinkedRecordMixin, StatedRecordMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
@@ -70,9 +82,11 @@ from angee.parties.managers import (
     DirectoryManager,
     FolderManager,
     HandleManager,
+    OrganizationManager,
     PartyManager,
     PartyStatementQuerySet,
     RelationshipManager,
+    ValueOwned,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.provenance.context import current_changeset
@@ -91,6 +105,18 @@ from angee.tags.models import TaggedModel
 
 _HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
 """Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
+
+
+@cache
+def _local_part_character(character: str) -> str:
+    """One character of an email address's local part as :meth:`Handle.normalize_local_part` compares it.
+
+    Its lower case, unless it is a non-ASCII character whose lower case is ASCII or of another length: that one
+    is kept as it is. Computed from ``str.lower`` per character, so the set it keeps moves with Unicode.
+    """
+
+    lowered = character.lower()
+    return lowered if character.isascii() or (len(lowered) == 1 and not lowered.isascii()) else character
 
 
 class Party(
@@ -605,12 +631,11 @@ class Party(
             if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
                 return True
         link_id = proposed["handle"]["statement_id"]
-        statement_model = self.statements.model
-        confirmed = (statement_model.StatementRank.PREFERRED, statement_model.StatementSnak.VALUE)
+        confirmed = self.statements.model.CONFIRMED_STANCE
         return bool(
             link_id
             and any(
-                row["id"] == link_id and (row["rank"], row["snak"]) != confirmed
+                row["id"] == link_id and any(row[name] != value for name, value in confirmed.items())
                 for row in current["handles"]
             )
         )
@@ -841,8 +866,17 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         sqid_prefix="ogs_",
     )
 
+    objects = OrganizationManager()
+
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
+    """``domain`` in the domain-spelling rule's one spelling (``Handle.normalize_email_domain``); ``""`` if none.
+
+    What :meth:`domain_filter` compares, through its one index (``Meta.indexes``). Written by :meth:`save` from
+    ``domain``, so history versions it beside the domain, as a handle's keys; the provision repair
+    (``OrganizationManager.renormalize_domains``) writes it alone on a row a save did not key.
+    """
 
     class Meta:
         """Django model options for the organization child model."""
@@ -850,19 +884,65 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/organization"
+        indexes = (
+            # One btree for domain_filter's equality: a field's db_index adds a pattern-ops twin and history copies.
+            models.Index(fields=("domain_key",), name="%(app_label)s_org_domain_key"),
+        )
+
+    @classmethod
+    def domain_filter(cls, domain: str) -> models.Q:
+        """The organizations whose domain is ``domain`` in any spelling the domain-spelling rule joins: its letter
+        case, a punycode or Unicode label, and the spellings IDNA 2003 sends as one (``Handle.normalize_email_domain``).
+
+        One indexed comparison of :attr:`domain_key`; an empty ``domain`` names no organization. Several
+        organizations may share a domain.
+        """
+
+        key = Handle.normalize_email_domain(domain)
+        return models.Q(domain_key=key) if key else models.Q(pk__in=[])
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the organization with :attr:`domain_key` computed from the domain it stores.
+
+        An insert, a full save, and a partial save naming ``domain`` compute the key from ``domain`` and write it
+        beside it; a history revert restoring the domain keys it again. A partial save naming the key without the
+        domain writes the key of the domain the row stores, read first, never of one changed in memory and not
+        saved. A partial save of other fields leaves the key. The bulk paths write no key: a queryset ``update``
+        of the domain and ``bulk_update`` naming it leave the key as it was until the provision repair keys it
+        (``bulk_create`` cannot insert an organization, a multi-table child).
+        """
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "domain" in update_fields:
+            self.domain_key = Handle.normalize_email_domain(self.domain)
+            if update_fields is not None and "domain_key" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "domain_key"]
+        elif "domain_key" in update_fields:
+            stored = type(self)._base_manager.filter(pk=self.pk).values_list("domain", flat=True).first()
+            self.domain_key = Handle.normalize_email_domain(self.domain if stored is None else stored)
+        super().save(*args, **kwargs)
 
 
 class Handle(
-    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True,
+    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, ImmutableFieldsMixin, AuditMixin, AngeeDataModel,
+    concrete=True,
 ):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
-    idempotent. ``party`` is the resolved identity the Handle manager
-    materialises; it is null until a handle is linked, so a handle synced for an
-    unknown sender is still a valid row. A handle carries tags of its own, apart
-    from its party's (a consumer marks a company's accounts-payable address).
+    idempotent — and a live email handle on its spelling key
+    (:meth:`spelling_key_of`), so any letter case or domain spelling of one
+    address is one live handle. The keys are written once (:attr:`immutable_fields`): a message
+    reads its addresses from its handles when it is sent, so a field write of one
+    would send messages already written somewhere else, and no save of one is
+    admitted, whoever makes it. Only the handle owner's verbs change a key:
+    ``HandleManager.upsert`` when a source's ``external_id`` matched and the
+    address behind it moved, and ``HandleManager.reidentify``. ``party`` is the
+    resolved identity the Handle manager materialises; it is null until a handle
+    is linked, so a handle synced for an unknown sender is still a valid row. A
+    handle carries tags of its own, apart from its party's (a consumer marks a
+    company's accounts-payable address).
     """
 
     @classmethod
@@ -908,13 +988,21 @@ class Handle(
             return cast(Handle.Platform, cls.EMAIL if "@" in (value or "") else cls.OTHER)
 
     sqid_prefix = "hdl_"
+    immutable_fields = ("platform", "value", "external_id")
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
     normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
+    """The person-matching key (:meth:`normalize_value`): what a lookup or a suggestion of a person compares."""
     normalized_version = models.PositiveSmallIntegerField(default=0, db_index=True, editable=False)
-    """The :attr:`NORMALIZATION_VERSION` the rule had when ``normalized_value`` was computed; 0 before the rule had one.
+    """The :attr:`NORMALIZATION_VERSION` the rule had when the keys were computed; 0 before the rule had one.
 
-    Written beside the key by every write of it (:meth:`save`), never alone.
+    Written beside the keys by every write of them (:meth:`save`), never alone.
+    """
+    spelling_key = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
+    """What a live email handle is unique by (:meth:`spelling_key_of`), written beside ``normalized_value``.
+
+    ``""`` on every other platform, where ``value`` itself is the address, and on a row stored before the rule had
+    it, until the key repair (``HandleManager.renormalize_handles``) reaches it.
     """
     external_id = models.CharField(max_length=512, blank=True, default="")
     display_name = models.CharField(max_length=4096, blank=True, default="")
@@ -991,6 +1079,16 @@ class Handle(
                 condition=~models.Q(external_id=""),
                 name="uq_handle_platform_external_id",
             ),
+            # A merged-away row keeps its survivor's key as a redirect; a row the key repair has not reached has none.
+            models.UniqueConstraint(
+                fields=("spelling_key",),
+                condition=models.Q(platform="email", merged_into__isnull=True) & ~models.Q(spelling_key=""),
+                name="uq_handle_spelling_key",
+            ),
+        )
+        indexes = (
+            # A spelling of an address merged away lands on its survivor: the lookup reads merged rows by key too.
+            models.Index(fields=("spelling_key",), condition=models.Q(platform="email"), name="ix_handle_spelling_key"),
         )
 
     def __str__(self) -> str:
@@ -1001,16 +1099,16 @@ class Handle(
     ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
     """Platforms whose value is itself an account's address: an email address, a phone number."""
 
-    NORMALIZATION_VERSION: ClassVar[int] = 1
+    NORMALIZATION_VERSION: ClassVar[int] = 2
     """The version of the normalization rule; bump it whenever the rule returns something else.
 
-    The rule is :meth:`normalize_value` and :meth:`normalize_email_domain`.
-    ``normalized_value`` is stored, so a changed rule leaves stored keys behind.
-    Each row carries the version its key was computed under
-    (:attr:`normalized_version`), and provisioning saves again the rows whose
-    version is not this one (``HandleManager.renormalize_handles``). A test pins
-    the rule's outputs beside the number, so changing an output without a bump
-    fails.
+    The rule is :meth:`spelling_key_of`, :meth:`normalize_value` and
+    :meth:`normalize_email_domain`. ``spelling_key`` and ``normalized_value`` are
+    stored, so a changed rule leaves stored keys behind. Each row carries the
+    version its keys were computed under (:attr:`normalized_version`), and
+    provisioning saves again the rows whose version is not this one
+    (``HandleManager.renormalize_handles``). A test pins the rule's outputs beside
+    the number, so changing an output without a bump fails.
     """
 
     @classmethod
@@ -1031,6 +1129,21 @@ class Handle(
         return models.Q(**{f"{prefix}platform__in": cls.ACCOUNT_PLATFORMS}) | ~models.Q(**{f"{prefix}external_id": ""})
 
     @classmethod
+    def spellings_filter(cls, values: Iterable[str]) -> models.Q:
+        """The email handles spelling any of these addresses: each one's row by the value as given, and every row,
+        live or merged away, owning its spelling key (:meth:`spelling_key_of`).
+
+        The email arm of ``HandleManager.find_identities``, which decides which
+        row an address lands on; at most one live row owns a key
+        (``uq_handle_spelling_key``). One arm naming the platform, so the
+        ``(platform, value)`` key's index and the spelling key's serve it.
+        """
+
+        spelled = sorted(set(values))
+        keys = sorted({key for value in spelled if (key := cls.spelling_key_of(cls.Platform.EMAIL, value))})
+        return models.Q(platform=cls.Platform.EMAIL) & (models.Q(value__in=spelled) | models.Q(spelling_key__in=keys))
+
+    @classmethod
     def identified_connection(cls, parsed: ConnectionHandle) -> bool:
         """Whether a connection names its account by a real identifier, not by a display name only.
 
@@ -1042,22 +1155,85 @@ class Handle(
             return parsed.confidence >= 1.0
         return cls.identifies_account(parsed.platform, parsed.external_id)
 
+    ADDRESS_WHITESPACE: ClassVar[str] = "".join(character for character in map(chr, range(128)) if character.isspace())
+    """What an email address and its domain are trimmed of at either end: the ASCII characters ``str.isspace``
+    holds, and no other.
+
+    A non-ASCII space (a no-break space, an ideographic space) is kept, on either side of the ``@``, so a value it
+    pads never keys as the plain address and is a handle of its own. Before the ``@`` it is no address
+    (:meth:`is_email_address`: its name part holds a space). After it, it is one exactly when Django's domain rule
+    reads the space as a letter of the domain (it reads every character from U+00A1 to U+FFFF as one).
+    """
+
+    @classmethod
+    def spelling_key_of(cls, platform: str, value: str) -> str:
+        """Return what makes two spellings one email handle: the address trimmed of ASCII whitespace
+        (:attr:`ADDRESS_WHITESPACE`), its local part in one case (:meth:`normalize_local_part`) and its domain read by
+        :meth:`normalize_email_domain`; ``""`` on every other platform, where ``value`` itself is the address, and for
+        a value with no ``@``, which is no address and so has no other spelling.
+
+        A provider's alias (a Gmail dot or plus-tag) is an address of its own,
+        which only the person-matching key (:meth:`normalize_value`) groups. A
+        live email handle is unique by it (``uq_handle_spelling_key``). The key is
+        stored: changing what this returns means bumping
+        :attr:`NORMALIZATION_VERSION`.
+        """
+
+        if platform != cls.Platform.EMAIL:
+            return ""
+        local, at, domain = (value or "").strip(cls.ADDRESS_WHITESPACE).rpartition("@")
+        return f"{cls.normalize_local_part(local)}@{cls.normalize_email_domain(domain)}" if at else ""
+
+    @staticmethod
+    def normalize_local_part(local: str) -> str:
+        """Return an email address's local part in the one case it compares by: no non-ASCII character may turn into
+        a different mailbox's ASCII letter.
+
+        Every character is lower-cased (``JOSÉ@`` and ``josé@``, ``MÜLLER@`` and ``müller@`` are one mailbox each)
+        but a non-ASCII character whose lower case would be ASCII or of another length, which is kept as typed: the
+        Kelvin sign (U+212A) would become ``k``, so the Kelvin sign followed by ``ate@`` would be ``kate@``'s handle,
+        and ``İ`` (U+0130) would become ``i`` and a combining dot. The kept characters are computed from ``str.lower``
+        per character, never listed, so a later Unicode version moves them with it; a test pins today's two. A sign
+        that lower-cases onto another letter outside ASCII still folds (the Angstrom sign onto ``å``, the Ohm sign onto
+        ``ω``). ``lower()``, not ``casefold()``: ``Straße@`` and ``STRASSE@`` stay two addresses. The spelling key
+        (:meth:`spelling_key_of`) and through it the person-matching key (:meth:`normalize_value`) and
+        :meth:`is_spelling_of` read a local part only through it.
+        """
+
+        return "".join(map(_local_part_character, local))
+
+    @classmethod
+    def domain_of(cls, platform: str, value: str) -> str:
+        """Return an email address's domain in the one spelling the domain-spelling rule gives: its spelling key's.
+
+        ``""`` where :meth:`spelling_key_of` gives none: off email, and for a value
+        with no ``@``. What a caller compares an address's domain by, never a split of
+        a stored key of its own.
+        """
+
+        return cls.spelling_key_of(platform, value).rpartition("@")[2]
+
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:
-        """Return the persisted comparison value for one platform/value pair.
+        """Return the person-matching key for one platform/value pair: what groups the handles of probably one person.
 
-        Every platform strips surrounding whitespace and lowercases. Email keeps
-        that rule and additionally collapses dots and plus-tags in Gmail local
-        parts for both ``gmail.com`` and ``googlemail.com`` domains, and compares
-        a domain in one spelling (:meth:`normalize_email_domain`), so both
-        spellings of an internationalised domain are one address while ``value``
-        keeps what was typed. Phone and
+        Every other platform strips surrounding whitespace and lowercases. An email
+        address is its spelling key (:meth:`spelling_key_of`: its local part in one
+        case, its domain in one spelling) and additionally collapses dots and plus-tags in Gmail
+        local parts for both ``gmail.com`` and ``googlemail.com`` domains, so a
+        provider's aliases match one person while each stays a handle of its own.
+        Phone and
         WhatsApp values parse without an assumed region and format as E.164; values
         require a leading country code and must be possible and valid. Anything
         unparseable, invalid, or region-unknown falls back to its digits so
         punctuation still does not fork the same contact point. iMessage carries
         either kind of address, so it routes by value shape — the email rule when
-        the value contains ``@``, the phone rule otherwise.
+        the value contains ``@``, the phone rule otherwise. It is read where a
+        person is looked up or suggested; which handle an address lands on is the
+        spelling key's, but for two sites still open for a ruling, where it picks
+        the handle a provider's alias lands on: a directory adoption's
+        through-handle (``PartyManager._land_handles``) and a claimant's email
+        handle (``PartyManager.claimant_as_system``).
 
         The key is stored: changing what this returns for any value means
         bumping :attr:`NORMALIZATION_VERSION`, so provisioning saves the stored
@@ -1066,10 +1242,11 @@ class Handle(
 
         normalized = (value or "").strip().lower()
         if platform in (cls.Platform.EMAIL, cls.Platform.IMESSAGE) and "@" in normalized:
-            local, _, domain = normalized.rpartition("@")
+            # An address's case and trimming are the spelling key's, from the value as given.
+            local, _, domain = cls.spelling_key_of(cls.Platform.EMAIL, value).rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
-            return f"{local}@{cls.normalize_email_domain(domain)}"
+            return f"{local}@{domain}"
         if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP, cls.Platform.IMESSAGE):
             try:
                 number = parse(normalized, None)
@@ -1080,29 +1257,71 @@ class Handle(
             return "".join(character for character in normalized if character.isdigit())
         return normalized
 
-    @staticmethod
-    def normalize_email_domain(domain: str) -> str:
-        """Return the one spelling an email domain compares by: lower-cased, each punycode label read as Unicode.
+    @classmethod
+    def is_fallback_key(cls, platform: str, key: str) -> bool:
+        """Whether a person-matching key is the phone rule's fallback, a value's bare digits, not a number it read.
 
-        The one rule for a domain, whoever compares one: a handle's comparison key
-        (:meth:`normalize_value`) and a domain stored as typed elsewhere, such as
-        ``Organization.domain``, read through it on both sides. The standard
-        library's ``idna`` codec reads an ``xn--`` label, as Django's ``punycode``
-        writes one with it; a label the codec cannot read stays as typed.
-
-        Handle keys are stored from it: changing what this returns means bumping
-        :attr:`NORMALIZATION_VERSION`.
+        The phone rule (phone, WhatsApp, an iMessage value with no ``@``) gives an
+        E.164 number, which starts with ``+``; a value it cannot read as a valid
+        number falls back to its digits, which distinct numbers share
+        (``1-800-FLOWERS`` and ``1-800-COLLECT`` are both ``1800``). Such a key
+        still groups handles for a suggestion, and names no one address, so a
+        person's merge never takes it for another spelling (:meth:`validate_merge`).
         """
 
+        phone_rule = platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP) or (
+            platform == cls.Platform.IMESSAGE and "@" not in key
+        )
+        return phone_rule and not key.startswith("+")
+
+    @staticmethod
+    def normalize_email_domain(domain: str) -> str:
+        """Return the one spelling an email domain compares by: lower-cased, each label as the IDNA codec reads it.
+
+        The domain-spelling rule, wherever parties matches an identity by a domain (accounts
+        and sign-in allowlists compare domains for other intents): a handle's spelling key
+        (:meth:`spelling_key_of`) and person-matching key (:meth:`normalize_value`)
+        and an organization's domain key (``Organization.domain_key``, which
+        ``Organization.domain_filter`` compares), each stored from it, while the
+        domain itself stays as typed. Each label makes the standard library's
+        ``idna`` round trip (IDNA 2003), the codec Django's ``punycode`` writes a
+        domain with to send it: a punycode label reads as Unicode, and Unicode
+        spellings IDNA 2003 sends as one domain are one (NFD and NFC, full-width
+        letters, ``ß`` and ``ss``). A label the codec cannot read or write, such as
+        ``xn--strae-oqa`` (IDNA 2008's ``straße``, a domain of its own), stays as
+        typed. So does a whole name whose spelling would be longer than a domain name
+        can be (:attr:`DOMAIN_NAME_LIMIT`): a label never reads longer than its
+        punycode, so such a name could not be sent as a domain, and a name of
+        ligatures that each read as many letters (U+FDFA reads as 18) would
+        otherwise outgrow the columns its keys are stored in. A domain is trimmed of
+        ASCII whitespace only (:attr:`ADDRESS_WHITESPACE`), as an address is: a non-ASCII
+        space at either end stays in its label, which the codec reads as IDNA 2003 does
+        (NFKC makes most such spaces an ASCII space; one it prohibits keeps the label as
+        typed), so a padded domain never keys as the plain one.
+
+        Handle keys are stored from it: changing what this returns means bumping
+        :attr:`NORMALIZATION_VERSION`. An organization's key needs no version: its
+        provision repair compares every row with this rule as it is.
+        """
+
+        name = (domain or "").strip(Handle.ADDRESS_WHITESPACE).lower()
         labels = []
-        for label in (domain or "").strip().lower().split("."):
-            if label.startswith("xn--"):
-                try:
-                    label = label.encode("ascii").decode("idna").lower()
-                except UnicodeError:
-                    pass
+        for label in name.split("."):
+            try:
+                label = label.encode("idna").decode("idna")
+            except UnicodeError:
+                pass
             labels.append(label)
-        return ".".join(labels)
+        spelled = ".".join(labels)
+        return name if len(spelled) > Handle.DOMAIN_NAME_LIMIT else spelled
+
+    # Django hard-codes it in django/core/validators.py, URLValidator.__call__ (len(hostname) > 253): RFC 1034 3.1.
+    DOMAIN_NAME_LIMIT: ClassVar[int] = 253
+    """The longest a domain name may be, in characters (RFC 1034 section 3.1), as Django's ``URLValidator`` bounds it.
+
+    255 octets on the wire, less the length byte and the root's trailing dot. :meth:`normalize_email_domain`
+    keeps as typed a name whose spelling would be longer.
+    """
 
     # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
@@ -1113,8 +1332,8 @@ class Handle(
         """Whether ``value`` can be an email address at all, read as :meth:`normalize_value` reads it.
 
         What cannot be an address is no address; anything else is one, however
-        unusual. Surrounding whitespace aside, the value has exactly one ``@``,
-        a non-empty name part in any script (``jörg@``, ``peña@``) with no
+        unusual. Surrounding ASCII whitespace aside (:attr:`ADDRESS_WHITESPACE`), the value
+        has exactly one ``@``, a non-empty name part in any script (``jörg@``, ``peña@``) with no
         whitespace, control or format character (Unicode categories ``Cc`` and
         ``Cf``: a zero-width space, a direction mark), and a domain that passes
         the domain rule of Django's ``EmailValidator``, which reads an
@@ -1126,7 +1345,7 @@ class Handle(
 
         column = cls._meta.get_field("value")
         assert isinstance(column, models.Field) and column.max_length is not None
-        address = (value or "").strip()
+        address = (value or "").strip(cls.ADDRESS_WHITESPACE)
         if not address or len(address) > min(cls.EMAIL_ADDRESS_LIMIT, column.max_length) or address.count("@") != 1:
             return False
         name, domain = address.split("@")
@@ -1137,35 +1356,135 @@ class Handle(
 
     @staticmethod
     def normalize_display_name(value: str) -> str:
-        """Return the comparison key used by cross-platform display-name pooling."""
+        """Return the display-name pooling key: what cross-platform display-name pooling compares."""
 
         return " ".join((value or "").split()).casefold()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the handle while keeping ``normalized_value`` in lockstep, with the version of its rule beside it.
+        """Persist the handle with its keys in lockstep, and never as a second live handle of an email address.
 
-        The key is computed on an insert, on a full save, and whenever a partial
-        save names ``platform``, ``value`` or either key column; the two key
-        columns are then written together, so ``normalized_version`` always says
-        which rule ``normalized_value`` came from.
+        The keys (``spelling_key``, ``normalized_value``) are computed on an
+        insert, on a full save, and whenever a partial save names ``platform``,
+        ``value`` or a key column; the key columns are then written together with
+        ``normalized_version``, which always says which rule they came from.
+        First, an insert, a keyed save, or a save naming ``merged_into`` (a revert
+        restoring a merged-away row, keyed or not) that would keep this row a live
+        email handle beside the one owning its address's spelling key
+        (:meth:`value_owner`) raises :class:`ValueOwned` on ``value``: nothing is
+        written, the instance's keys are left as they were, a write-once allowance
+        granted for this save is spent as a save spends it, and the caller's
+        transaction stays usable. ``uq_handle_spelling_key`` is the backstop for
+        what that read cannot see (a concurrent insert, ``bulk_create``).
         """
 
         update_fields = kwargs.get("update_fields")
-        key_fields = ("normalized_value", "normalized_version")
+        key_fields = ("spelling_key", "normalized_value", "normalized_version")
         keyed = update_fields is None or {"platform", "value", *key_fields}.intersection(update_fields)
+        if (self._state.adding or keyed or "merged_into" in (update_fields or ())) and (
+            owner := self.value_owner()
+        ) is not None:
+            # The foundation spends an allowance in its own save (ImmutableFieldsMixin), which this refusal precedes.
+            # Debt at angee.base: the mixin offers no public way to spend an allowance on a refused save; this line
+            # switches to it when the mixin has one.
+            self._allowed_immutable_fields = set()
+            raise ValueOwned({"value": ValidationError(
+                "Handle %(owner)s is this address; a second live handle of it is not kept.",
+                code="value_owned",
+                params={"owner": public_id_of(owner)},
+            )})
         if self._state.adding or keyed:
-            self.normalized_value = self.normalize_value(self.platform, self.value)
-            self.normalized_version = self.NORMALIZATION_VERSION
+            for name, value in self.derived_keys().items():
+                setattr(self, name, value)
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
         super().save(*args, **kwargs)
 
+    def derived_keys(self) -> dict[str, Any]:
+        """The key columns this row's ``platform`` and ``value`` give under the rule as it is, with its version.
+
+        :meth:`save` writes them together; the key repair (``HandleManager.renormalize_handles``) writes them
+        alone, as they are here.
+        """
+
+        return {
+            "spelling_key": self.spelling_key_of(self.platform, self.value),
+            "normalized_value": self.normalize_value(self.platform, self.value),
+            "normalized_version": self.NORMALIZATION_VERSION,
+        }
+
+    def value_owner(self) -> Handle | None:
+        """Return the other live email handle owning the spelling key of this row's address, or ``None``.
+
+        The key is this row's own, computed from ``value``
+        (:meth:`spelling_key_of`), never read from its stored column, which the
+        key repair may not have reached; the other row is matched by its stored
+        key under ``uq_handle_spelling_key``'s own condition, so at most one
+        answers. It reads nothing off email, for a value that is no address, or
+        for a merged-away row (a redirect keeps its survivor's key). A structural
+        read through the base manager: no REBAC scope, no audit row.
+        :meth:`save` refuses to keep this row live beside it (:class:`ValueOwned`).
+        """
+
+        key = self.spelling_key_of(self.platform, self.value)
+        if not key or self.merged_into_id is not None:
+            return None
+        live = type(self)._base_manager.filter(platform=self.Platform.EMAIL, spelling_key=key, merged_into__isnull=True)
+        return live.exclude(pk=self.pk).order_by("pk").first()
+
+    def is_spelling_of(self, value: str, *, merged: bool = False) -> bool:
+        """Whether ``value`` is this handle's address: its own ``value``, or on email another letter case or domain
+        spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column).
+
+        ``merged`` also answers for every handle merged into this one, at any depth, by one read made only when
+        ``value`` is not this handle's own: a fold re-points the redirects of what it folds at the survivor, so
+        each handle merged into this one names it (``merged_into``), and :meth:`spellings_filter` finds a spelling
+        among them by its value or its stored key.
+        """
+
+        key = self.spelling_key_of(self.platform, value)
+        if value == self.value or bool(key) and key == self.spelling_key_of(self.platform, self.value):
+            return True
+        if not merged or self.pk is None:
+            return False
+        spelled = (self.spellings_filter((value,)) if self.platform == self.Platform.EMAIL
+                   else models.Q(platform=self.platform, value=value))
+        return type(self)._base_manager.filter(spelled, merged_into_id=self.pk).exists()
+
     def validate_merge(self, merged: Sequence[Any]) -> None:
-        """A contact alias keeps its platform and the directory identity lock order."""
+        """A contact alias keeps its platform and the directory identity lock order; a person merges an alias.
+
+        A merge redirects the mail people later address to a merged handle's address to
+        the kept one, and never system mail, which goes exactly to the address its
+        caller gave. So a person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
+        binds the kept handle to its actor) admits only another spelling or alias of
+        the kept address, the same person-matching key, unless that actor is a
+        contact administrator: an effective member of ``parties/role:contact_admin``,
+        as platform administrators are. The key is computed from each row's value
+        (:meth:`normalize_value`), never read from the stored column, which the key
+        repair may not have reached, and a phone rule's fallback (a value's bare
+        digits, :meth:`is_fallback_key`) names no one address, so it is never another
+        spelling. Anyone else merges the contacts, which says two addresses reach one
+        person and moves no address. System work (``fold``, as
+        ``HandleManager.reidentify`` folds an ``@lid`` into its number) merges any two
+        handles on one platform.
+        """
 
         super().validate_merge(merged)
         if any(row.platform != self.platform for row in merged):
             raise ValidationError("Only handles on the same platform can be merged.")
+        actor, elevated = self.effective_actor()
+        key = self.normalize_value(self.platform, self.value)
+        spelled = not self.is_fallback_key(self.platform, key) and all(
+            self.normalize_value(row.platform, row.value) == key for row in merged
+        )
+        if (
+            not elevated
+            and not spelled
+            and not subject_has_role(actor, ObjectRef("parties/role", "contact_admin"))
+        ):
+            raise ValidationError(
+                "Only a contact administrator merges two different addresses; merge their contacts instead."
+            )
         apps.get_model("parties", "Party").objects.lock_identity_rows(
             party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
         )
@@ -1195,15 +1514,20 @@ class Handle(
                 self.set_avatar(row.avatar)
 
     def retire_merged(self, merged: Any) -> None:
-        """Recompute identity projections after shared reference moves, then redirect.
+        """Redirect the merged handle, then recompute both handles' parties after the shared reference moves.
 
-        Resolution carries each handle's resolved party onto its instance, so the
-        redirect's history snapshot records that party.
+        A person's merge writes the redirect as that person (``MergeableMixin.merge``),
+        and a contact administrator writes a handle only through the party it reaches.
+        The moves have taken the merged handle's statements to the kept one, so its
+        resolution clears that party: redirecting first keeps the write the merge
+        authorized. The redirect's history version still names the former party;
+        the resolution that follows records the cleared one, and carries each
+        handle's resolved party onto its instance.
         """
 
+        super().retire_merged(merged)
         merged.resolve()
         self.resolve()
-        super().retire_merged(merged)
 
     def resolve(self) -> None:
         """Materialize the applied, eligible cross-party winner and both parties' handle counts.

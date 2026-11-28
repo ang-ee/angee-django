@@ -1,0 +1,25 @@
+{
+  "dynamicI18nKeyFamilies": [
+    {
+      "namespace": "brandkit",
+      "owner": "MailScheme",
+      "prefix": "contrast.scheme.",
+      "values": [
+        "LIGHT",
+        "DARK"
+      ]
+    },
+    {
+      "namespace": "brandkit",
+      "owner": "MailRole",
+      "prefix": "contrast.role.",
+      "values": [
+        "CANVAS",
+        "SURFACE",
+        "TEXT",
+        "MUTED",
+        "LINK"
+      ]
+    }
+  ]
+}

@@ -570,10 +570,7 @@ class ThreadedModelMixin(models.Model):
         write without it.
         """
 
-        attachment = self.message_thread_attachment(create=False)
-        target = attachment.require_threaded_target() if attachment is not None else self
-        if not target.can_post():
-            raise PermissionDenied(f"Posting on {target._meta.label} requires {target.thread_post_access!r} access.")
+        self.require_post()
         return self.message_system_post(
             body=body,
             attachments=attachments,
@@ -848,6 +845,24 @@ class ThreadedModelMixin(models.Model):
                         user=account,
                         role=apps.get_model("messaging", "ThreadAttachment").AttachmentRole.CHATTER,
                     )
+
+    def require_post(self, *, actor: Any = None) -> ThreadedModelMixin:
+        """Return the chatter host a post on this row lands with, once the actor may post there.
+
+        The host is resolved through this row's chatter attachment (a merged
+        record's survivor), and its :attr:`thread_post_access` decides, for
+        ``actor`` when given and else for the bound or ambient actor; a refusal
+        raises ``PermissionDenied``. The one post gate of a user's chatter post
+        and of a message composed on the record.
+        """
+
+        attachment = self.message_thread_attachment(create=False)
+        target = attachment.require_threaded_target() if attachment is not None else self
+        if actor is not None and isinstance(target, RebacMixin):
+            target.with_actor(actor)
+        if not target.can_post():
+            raise PermissionDenied(f"Posting on {target._meta.label} requires {target.thread_post_access!r} access.")
+        return target
 
     def can_post(self, user: AbstractBaseUser | AnonymousUser | None = None) -> bool:
         """Return whether the actor may post or react through the declared permission."""

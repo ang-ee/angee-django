@@ -4,10 +4,13 @@ on:
   workflow_call:
     inputs:
       python-version:
-        description: Python version for the uv test lane.
+        description: >-
+          Python version for the uv lanes. Empty, uv reads the checked-out repository's
+          .python-version, and the composed-stack lane the framework's
+          (docs/checks.md#sqlite-version).
         required: false
         type: string
-        default: "3.14"
+        default: ""
       pytest-extra-args:
         description: Optional arguments appended to the pytest command.
         required: false
@@ -31,8 +34,8 @@ on:
       pr-checks-enabled:
         description: >-
           Run the lanes a pull request's own run already ran on the tree a merge commit gives main
-          (the SQLite shards, the packages and the composed stack). A caller passes false on a push
-          to main, where only the PostgreSQL selection is new work.
+          (the packages and the composed stack). A caller passes false on a push to main, where the
+          SQLite suite and the PostgreSQL selection, which a pull request runs in part, run whole.
         required: false
         type: boolean
         default: true
@@ -86,6 +89,14 @@ on:
         required: false
         type: string
         default: "[]"
+      runs-on:
+        description: >-
+          Where every job runs, as a JSON runs-on value: "ubuntu-latest" for GitHub-hosted
+          runners, or self-hosted labels such as ["self-hosted", "angee-local"]. Callers pass
+          their CI_RUNS_ON variable.
+        required: false
+        type: string
+        default: '"ubuntu-latest"'
     secrets:
       ADDON_SOURCES_TOKEN:
         description: Token with read access to every private consumer dependency source.
@@ -106,7 +117,7 @@ env:
 jobs:
   python-quality:
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -119,28 +130,31 @@ jobs:
         env:
           PYTHONPATH: src
       # Static test contracts read source and docs without Django: patch
-      # targets, documentation links and recipes, and the agent methodology.
+      # targets, documentation links and recipes, the agent methodology, and the
+      # runtime image's Dockerfile, whose Python follows .python-version.
       - run: >-
           uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q
           tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
           tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
           tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
+          tests/test_runtime_image.py
 
-  # The suite runs as six contiguous shards of equal stored time
-  # (.test_durations, pytest-split); a test missing from it still runs in one.
-  # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
-  # and runner cleanup; retain per-test timings for balancing the shards.
-  # A pull request runs only the test files its changed paths reach
-  # (scripts/changed_path_selection.py); every other event runs the whole suite.
-  uv-shard:
-    name: uv ${{ matrix.group }}/6
-    if: ${{ inputs.uv-enabled && inputs.pr-checks-enabled }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [1, 2, 3, 4, 5, 6]
+  # One selection per run, which the SQLite shards and the PostgreSQL groups read.
+  # A pull request's shards run the test files its changed paths reach
+  # (scripts/changed_path_selection.py), and do not start when those reach no
+  # Python test; its PostgreSQL groups run the planner gate and the PostgreSQL
+  # selection's entries those paths reach (scripts/postgres_selection.py), in as
+  # many groups as their stored time needs. Every other event runs the whole suite
+  # and the whole PostgreSQL selection in six groups.
+  select:
+    if: ${{ inputs.uv-enabled }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    outputs:
+      sqlite: ${{ steps.select.outputs.sqlite }}
+      sqlite-tests: ${{ steps.select.outputs.sqlite-tests }}
+      postgres-tests: ${{ steps.select.outputs.postgres-tests }}
+      postgres-groups: ${{ steps.select.outputs.postgres-groups }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -149,36 +163,85 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      # bash runs with pipefail, so a failed diff or selection fails the shard.
-      - shell: bash
+      # bash runs with errexit and pipefail, so a failed diff or selection fails the job.
+      - id: select
+        shell: bash
         env:
           EVENT: ${{ github.event_name }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            tests=$(git diff --name-only HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
-            [ -n "$tests" ] || { echo "The changed paths reach no Python test."; exit 0; }
-            echo "$tests"
+            # A moved file as its old path too: a removed module selects the whole suite.
+            reached=$(git diff --name-only --no-renames HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
+            postgres=(scripts/postgres_selection.py)
+          else
+            reached=
+            postgres=(scripts/postgres_selection.py --all)
           fi
+          if [ "$EVENT" = pull_request ] && [ -z "$reached" ]; then
+            sqlite=false
+            echo "SQLite: not run, as the changed paths reach no Python test"
+          else
+            sqlite=true
+            echo "SQLite: ${reached:-the whole suite}"
+          fi
+          postgres_tests=$(printf '%s\n' "$reached" | uv run --locked python "${postgres[@]}")
+          postgres_groups=$(printf '%s\n' "$reached" | uv run --locked python "${postgres[@]}" --groups)
+          echo "PostgreSQL groups $postgres_groups: $postgres_tests"
+          {
+            echo "sqlite=$sqlite"
+            echo "sqlite-tests=$(printf '%s' "$reached" | tr '\n' ' ')"
+            echo "postgres-tests=$(printf '%s' "$postgres_tests" | tr '\n' ' ')"
+            echo "postgres-groups=$postgres_groups"
+          } >> "$GITHUB_OUTPUT"
+
+  # The suite runs as six contiguous shards of equal stored time
+  # (.test_durations, pytest-split); a test missing from it still runs in one.
+  # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
+  # and runner cleanup; retain per-test timings for balancing the shards.
+  uv-shard:
+    name: uv ${{ matrix.group }}/6
+    needs: select
+    if: ${{ inputs.uv-enabled && needs.select.outputs.sqlite == 'true' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      - shell: bash
+        env:
+          # Empty: the whole suite.
+          TESTS: ${{ needs.select.outputs.sqlite-tests }}
+        run: |
           # A small selection can leave a shard nothing to run: pytest's exit code 5.
           uv run pytest -q -n auto --dist loadfile --durations=25 \
-            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} $tests \
-            || { [ $? -eq 5 ] && [ -n "$tests" ]; }
+            --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }} $TESTS \
+            || { [ $? -eq 5 ] && [ -n "$TESTS" ]; }
 
   # The PostgreSQL selection is balanced over its own timing map
   # (.test_durations_postgres, least_duration): every worker flushes the
   # whole schema between transactional tests, so one job no longer fits.
   # Six groups under the SQLite shards' 60-minute limit keep the margin the
-  # map cannot predict. Main and releases run the whole selection; a pull
-  # request runs one group of the gates it must not regress before merge.
+  # map cannot predict. The select job sets the entries and the groups.
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/${{ strategy.job-total }}
+    needs: select
     if: ${{ inputs.uv-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
+    env:
+      # A push to main measures the tests each group runs and keeps the measurements
+      # for the timing map refresh in docs/checks.md; CI never writes the map itself.
+      RECORD_DURATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(github.event_name == 'pull_request' && '[1]' || '[1, 2, 3, 4, 5, 6]') }}
+        group: ${{ fromJSON(needs.select.outputs.postgres-groups) }}
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -187,7 +250,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres -d angee"
           --health-interval 10s
@@ -206,6 +269,10 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
+          # Docker published the service on a free host port, so jobs sharing one Docker
+          # host never collide; the restart can move it, so the URL is read after it.
+          port=$(docker inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' ${{ job.services.postgres.id }})
+          echo "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:$port/angee" >> "$GITHUB_ENV"
       - name: Enable pgvector for test databases
         # --nomigrations and composed hosts create tables without the pre_migrate
         # extension receiver; each native test database inherits template1.
@@ -214,151 +281,82 @@ jobs:
         # Every PostgreSQL-only contract (row and advisory locks, MVCC reads,
         # two-writer campaigns, vendor branches by node id) with the workflow,
         # decision and agent-session selection, and the authorization contracts
-        # the PostgreSQL lane's rule in docs/checks.md admits, in six
+        # the PostgreSQL lane's rule in docs/checks.md admits, in up to six
         # duration-balanced groups.
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
-        # A pull request runs the examples profile alone: its member planner-memory
-        # gate budgets what every permission change adds to the console's reads.
+        # The selection is .github/postgres-selection.txt; a pull request runs the
+        # entries its changed paths reach and the examples profile, whose member
+        # planner-memory gate budgets what every permission change adds to the
+        # console's reads.
         env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
-          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          TESTS: ${{ needs.select.outputs.postgres-tests }}
         run: |
-          if [ "$PULL_REQUEST" = true ]; then
-            set -- tests/test_composed_examples.py
-          else
-            set -- \
-            tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
-            tests/test_workflows_runtime.py tests/test_workflows_install.py \
-            tests/test_workflows_subject.py tests/test_workflows_publication.py \
-            tests/test_workflows_testing.py tests/test_testing.py \
-            tests/test_workflows_io.py tests/test_workflows_contract.py tests/test_workflows_graphql.py \
-            tests/test_workflows_fix_round.py tests/test_workflows_run_graph.py \
-            tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
-            tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
-            tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
-            tests/test_timeline_workflows.py tests/test_timeline_subscriptions.py \
-            tests/test_decision_display_nested.py \
-            tests/test_workflows_map_definition.py tests/test_workflows_map.py \
-            tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \
-            tests/test_workflows_await_definition.py tests/test_workflows_children.py \
-            tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
-            tests/test_workflows_retention.py \
-            tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
-            tests/test_workflows_triggers_concurrency.py tests/test_workflows_schedule_concurrency.py \
-            tests/test_workflows_watches.py tests/test_workflows_watch_concurrency.py \
-            'tests/test_composed_workflows.py::test_composed_workflows[posts]' \
-            'tests/test_composed_workflows.py::test_composed_workflows[messaging]' \
-            'tests/test_composed_workflows.py::test_composed_workflows[parties]' \
-            'tests/test_composed_workflows.py::test_composed_workflows[extraction]' \
-            tests/test_composed_examples.py tests/test_composed_messaging.py \
-            'tests/test_composed_intake.py::test_composed_intake[intake]' \
-            'tests/test_composed_work.py::test_composed_work[work]' \
-            tests/test_extraction_steps.py \
-            tests/test_extraction_models.py::test_extraction_rejects_targets_outside_file_and_message \
-            tests/test_extraction_models.py::test_competing_revision_requests_allocate_exactly_one_successor \
-            tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change \
-            tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
-            tests/test_checklists.py tests/test_calendar_concurrency.py \
-            tests/test_calendar_ics.py::test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once \
-            tests/test_calendar_google.py::test_two_racing_connects_of_one_account_make_one_source \
-            tests/test_calendar_google_publish.py::test_two_racing_publishes_of_one_calendar_bind_it_once \
-            tests/test_calendar_google_publish.py::test_two_sources_racing_to_publish_to_one_remote_calendar_bind_it_once \
-            tests/test_calendar_google_publish.py::test_a_publish_holding_its_vendor_lets_another_source_of_that_vendor_connect \
-            tests/test_calendar_google_publish.py::test_moving_a_series_waits_on_an_override_a_push_is_binding_then_releases_its_link \
-            tests/test_calendar_google_publish.py::test_an_edit_the_push_waits_on_to_bind_its_event_is_the_next_push \
-            tests/test_parties_addressbook_upgrade.py::test_the_address_book_template_upgrades_in_one_postgresql_migration \
-            tests/test_parties_directory_backend.py::test_a_page_holds_every_handle_its_linked_people_carry_before_any_record_applies \
-            tests/test_parties_directory_backend.py::test_mail_landing_on_a_pages_address_waits_for_the_page \
-            tests/test_parties_directory_backend.py::test_a_merge_of_a_pages_person_waits_for_the_page \
-            tests/test_parties_directory_backend.py::test_a_confirmation_of_a_pages_address_waits_for_the_page \
-            tests/test_parties_directory_backend.py::test_an_account_adopting_a_pages_candidate_waits_for_the_page \
-            tests/test_parties_same_as_concurrency.py \
-            tests/test_parties_handle_keys_concurrency.py \
-            tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
-            tests/test_integrate_discovery_concurrency.py \
-            tests/test_integrate_jwt_bearer.py::test_concurrent_mints_serialize_across_processes_on_postgresql \
-            tests/test_integrate_oauth_accounts.py::test_concurrent_attaches_bind_one_account_on_postgresql \
-            tests/test_integrate_oauth_accounts.py::test_racing_first_connects_keep_the_refresh_token_on_postgresql \
-            tests/test_integrate_oauth_accounts.py::test_legacy_adoption_racing_an_attach_binds_without_deadlock_on_postgresql \
-            tests/test_integrate_oauth_accounts.py::test_an_account_disconnect_waits_for_the_account_before_locking_its_credential_on_postgresql \
-            tests/test_framework_integration.py \
-            tests/test_base_row_lock.py \
-            tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
-            tests/test_hierarchy.py tests/test_iam_concurrency_campaign.py \
-            tests/test_iam_graphql.py \
-            tests/test_oidc.py::test_credential_disconnect_guard_blocks_last_oidc_sign_in \
-            tests/test_oidc.py::test_credential_disconnect_preserves_other_sign_in_methods \
-            tests/test_oidc.py::test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations \
-            tests/test_oidc.py::test_disconnect_does_not_count_unusable_oidc_alternatives \
-            tests/test_integrate_streams.py \
-            tests/test_integrate_scheduler.py::test_scheduled_admission_uses_the_schedulers_single_row_lock \
-            tests/test_integrate_scheduler.py::test_scheduler_skips_row_locked_bridge_and_enqueues_other_due_bridges \
-            tests/test_knowledge_clone_concurrency_campaign.py tests/test_knowledge_search.py \
-            tests/test_postgresql_extensions.py \
-            tests/test_knowledge_graph_pgvector_extraction.py tests/test_knowledge_graph_pgvector_local.py \
-            tests/test_knowledge_graph_pgvector_index.py tests/test_knowledge_graph_pgvector_jobs.py \
-            tests/test_knowledge_graph_pgvector_evaluation.py \
-            tests/test_knowledge_graph_pgvector_postgres.py tests/test_knowledge_graph_pgvector_resolution.py \
-            tests/test_knowledge_access_campaign.py::test_record_note_and_binding_keep_locks_replay_and_rollback \
-            tests/test_messaging.py tests/test_messaging_concurrency_campaign.py \
-            tests/test_messaging_channel_concurrency.py tests/test_messaging_reaction_concurrency.py \
-            tests/test_messaging_inbox_read.py tests/test_inbox_explorer.py tests/test_inbox_part_reads.py \
-            tests/test_group_rows.py \
-            tests/test_optimistic_lock.py \
-            tests/test_ownership_seams.py tests/test_portfolio_concurrency.py \
-            tests/test_proposals_campaign_queries.py tests/test_proposals_concurrency.py \
-            tests/test_resource_ledger.py::test_concurrent_upserts_converge_on_one_row_and_refuse_another_model \
-            tests/test_sequence.py \
-            tests/test_spaces_concurrency_campaign.py tests/test_stage_fractional_transition.py \
-            tests/test_storage.py tests/test_storage_upload_campaign.py \
-            tests/test_storage_access_campaign.py::test_download_urls_are_window_aligned_and_expire_from_the_window_start \
-            tests/test_storage_access_campaign.py::test_download_url_changes_for_new_content_inside_one_window \
-            tests/test_system_queryset.py::test_system_queryset_emits_for_update_on_postgresql \
-            tests/test_tags_categories_concurrency.py \
-            tests/test_task_locks.py \
-            tests/test_transitions.py::test_a_guarded_transition_holds_its_row_lock_until_commit \
-            tests/test_task_rank_allocation.py tests/test_projects_record_tasks.py \
-            tests/test_webforms_concurrency.py tests/test_webforms_messaging_concurrency.py \
-            tests/test_webforms_messaging_upgrade.py \
-            tests/test_projects_access_projections.py tests/test_parties_roles.py \
-            tests/test_timeline_concurrency.py \
-            tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
-            tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
+          # read splits without globbing, so a parametrized node id stays one argument.
+          read -ra tests <<< "$TESTS"
+          # Recording, the group splits by its own copy of the map, which pytest-split
+          # then overwrites with the durations of exactly the tests the group ran.
+          durations=.test_durations_postgres
+          record=()
+          if [ "$RECORD_DURATIONS" = true ]; then
+            durations=postgres-durations-${{ matrix.group }}.json
+            cp .test_durations_postgres "$durations"
+            record=(--store-durations --clean-durations)
           fi
           uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=postgresql-contracts.xml \
             --splits ${{ strategy.job-total }} --group ${{ matrix.group }} --splitting-algorithm least_duration \
-            --durations-path .test_durations_postgres "$@"
+            --durations-path "$durations" "${record[@]}" "${tests[@]}"
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("postgresql-contracts.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+      - name: Keep the group's measured durations
+        # A green group's measurements and its JUnit report, for two weeks.
+        if: env.RECORD_DURATIONS == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: postgres-durations-${{ matrix.group }}
+          path: |
+            postgres-durations-${{ matrix.group }}.json
+            postgresql-contracts.xml
+          retention-days: 14
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.
   uv:
     if: ${{ always() && inputs.uv-enabled }}
-    needs: [python-quality, uv-shard, uv-postgres]
-    runs-on: ubuntu-latest
+    needs: [python-quality, select, uv-shard, uv-postgres]
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - run: |
-          echo "quality=${{ needs.python-quality.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
+          echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
-          # The shards are skipped where a caller turned the pull-request lanes off.
-          test "${{ needs.uv-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
+          test "${{ needs.select.result }}" = success
+          # The shards are skipped where select turned them off: the changed paths reach
+          # no Python test.
+          test "${{ needs.uv-shard.result }}" = success || {
+            test "${{ needs.select.outputs.sqlite }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
     if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      # The action empties its destination first, so on runners sharing one home its
+      # default ~/setup-pnpm lets one job delete another's pnpm mid-run.
       - uses: pnpm/action-setup@v5
         with:
           version: 11.1.3
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@v5
         with:
           node-version: "26"
-          cache: pnpm
+          # GitHub's cache only on GitHub-hosted runners; a self-hosted runner installs from
+          # the registry and leaves the repository's cache space to them.
+          # package-manager-cache turns off the caching v5 otherwise starts on its own
+          # from package.json's packageManager.
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+          package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/**' typecheck
@@ -380,7 +378,7 @@ jobs:
   stack-shard:
     name: stack ${{ matrix.group }}/${{ strategy.job-total }}
     if: ${{ inputs.stack-enabled && inputs.pr-checks-enabled }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -394,13 +392,17 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres -d angee"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     steps:
+      # The checkouts below clean only their own paths; a reused self-hosted runner keeps
+      # the previous job's stack/ beside them, so start from an empty one.
+      - name: Start from an empty stack directory
+        run: rm -rf stack
       - uses: actions/checkout@v5
         with:
           repository: ${{ inputs.framework-repository }}
@@ -440,17 +442,33 @@ jobs:
               subprocess.run(["git", "-C", str(target), "fetch", "--depth=1", "origin", ref], check=True)
               subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
           PY
+      # Into the job's own directory: no root, and nothing outlives the job on a reused
+      # self-hosted runner.
       - name: Install the angee CLI (the public install path)
-        run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} ANGEE_INSTALL_DIR="$RUNNER_TEMP/bin" sh
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # uv runs from the stack root, above the framework checkout, where it would not
+      # find the framework's .python-version.
+      - name: Use the framework's Python
+        if: ${{ inputs.python-version == '' }}
+        run: echo "UV_PYTHON=$(cat stack/workspaces/src/angee/.python-version)" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
+      # The action empties its destination first, so on runners sharing one home its
+      # default ~/setup-pnpm lets one job delete another's pnpm mid-run.
       - uses: pnpm/action-setup@v5
         with:
           version: 11.1.3
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@v5
         with:
           node-version: "26"
+          # This job caches nothing, but on a reused runner the workspace root can hold
+          # another job's package.json, from whose packageManager v5 would start a cache.
+          package-manager-cache: false
       - name: Render the stack (local template ref — no registry round-trip)
         run: >-
           angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee/templates/stacks/dev"
@@ -632,11 +650,14 @@ jobs:
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
+          # Docker published the service on a free host port, so jobs sharing one Docker
+          # host never collide; the restart can move it, so the URL is read after it.
+          port=$(docker inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' ${{ job.services.postgres.id }})
+          echo "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:$port/angee" >> "$GITHUB_ENV"
       - name: Run the consumer's PostgreSQL test shard
         if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
         working-directory: stack
         env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
           DJANGO_SETTINGS_MODULE: settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
@@ -719,7 +740,7 @@ jobs:
   stack:
     if: ${{ always() && inputs.stack-enabled }}
     needs: [stack-shard]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - run: test "${{ needs.stack-shard.result }}" = success || { test "${{ inputs.pr-checks-enabled }}" = false && test "${{ needs.stack-shard.result }}" = skipped; }

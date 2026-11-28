@@ -2,15 +2,19 @@
 
 import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
-import type { DataResourceFieldMetadata, DataResourceMetadata } from "@angee/metadata";
+import type { DataResourceFieldMetadata, DataResourceLinesMetadata, DataResourceMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type { ReactNode } from "react";
+import { useForm } from "react-hook-form";
+import { boundedGraphQLTransportError } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
+import { EditableLines } from "../form/EditableLines";
+import { FormView } from "../form/FormView";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { RelationMultiFieldWidget } from "./RelationMultiFieldWidget";
 import { useRelationForms } from "./RelationRecordDialog";
@@ -40,6 +44,23 @@ const person = kind("parties.Person", "people", "given_name");
 const tag = testDataResource("tags.Tag", { recordRepresentation: "name", fields: [id, text("name")] });
 const resources = [party, organization, person, tag];
 
+/** A self-related, keyed resource: a node's parent is a node, and its create takes an idempotency key. */
+const node = testDataResource("tree.Node", {
+  recordRepresentation: "name",
+  createArguments: [{ name: "idempotency_key", type: "String" }],
+  fields: [id, text("name"), ...["parent", "sibling"].map((name): DataResourceFieldMetadata => ({
+    name, kind: "relation", scalar: "ID", relationModelLabel: "tree.Node", relationObject: true, readable: true,
+    aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false,
+  }))],
+});
+
+/** A tag-like resource whose create root takes an idempotency key, quick-created from its name. */
+const label = testDataResource("labels.Label", {
+  recordRepresentation: "name",
+  createArguments: [{ name: "idempotency_key", type: "String" }],
+  fields: [id, text("name")],
+});
+
 const partyRelation = { resource: "parties.Party", labelField: "display_name", canCreate: false };
 const tagRelation = { resource: "tags.Tag", labelField: "name", canCreate: true };
 
@@ -59,8 +80,9 @@ function harness(list: readonly DataResourceMetadata[] = resources) {
     getOne: vi.fn(async () => ({ data: { id: "people-new", display_name: "Ada" } })),
   };
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const notify = vi.fn();
   function Wrapper({ children }: { children?: ReactNode }) {
-    return <Provider resources={list} dataProvider={dataProvider}>
+    return <Provider resources={list} dataProvider={dataProvider} notificationProvider={{ open: notify, close: vi.fn() }}>
       <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider>
           <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>{children}</AppRuntimeProvider>
@@ -68,7 +90,7 @@ function harness(list: readonly DataResourceMetadata[] = resources) {
       </RouterContextProvider>
     </Provider>;
   }
-  return { create, Wrapper };
+  return { create, notify, Wrapper };
 }
 
 test("an MTI parent creates through its creatable concrete kinds; a plain model creates itself", () => {
@@ -165,3 +187,184 @@ test("a model without concrete kinds opens its own create form with no kind swit
   expect(await within(dialog).findByLabelText("Name")).toHaveProperty("value", "Follow up");
   expect(within(dialog).queryByRole("group", { name: "Kind" })).toBeNull();
 });
+
+test("a create form opened from a relation field names its draft under the form hosting the field: a chain of one resource's creates sends one key each", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  render(<Wrapper><FormView resource="tree.Node" id={null} fields={[{ name: "name" }, { name: "parent", kind: "relation", widget: "many2one" }]} /></Wrapper>);
+
+  // The page's create form, the parent's create form over it, and the grandparent's over that: all open at once.
+  const createParent = async (within_: ReturnType<typeof within>, query: string) => {
+    fireEvent.click(within_.getByRole("combobox", { name: "Parent" }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: query } });
+    fireEvent.click(await screen.findByText(`Create “${query}”`));
+  };
+  await createParent(within(document.body), "Child");
+  const [parent] = await screen.findAllByRole("dialog", { name: "New node" });
+  await createParent(within(parent!), "Grand");
+  // The parent's dialog is hidden from the accessibility tree, unnamed, while the grandparent's is over it.
+  await waitFor(() => expect(screen.getAllByRole("dialog", { hidden: true })).toHaveLength(2));
+  const grandparent = screen.getByRole("dialog", { name: "New node" });
+  expect(within(grandparent).getByLabelText("Name")).toHaveProperty("value", "Grand");
+
+  fireEvent.click(within(grandparent).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  await waitFor(() => expect(screen.getAllByRole("dialog", { hidden: true })).toHaveLength(1));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "New node" })).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys).toEqual([expect.any(String), expect.any(String)]);
+  expect(keys[1]).not.toBe(keys[0]);
+}, 20_000);
+
+test("a relation field's create outside any form is a draft of its own beside a create form of the same resource", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  const nodeRelation = { resource: "tree.Node", labelField: "name", canCreate: true };
+  // A page's create form of a node, and a picker of nodes outside it (a toolbar's, a filter's): both open at once.
+  render(<Wrapper>
+    <FormView resource="tree.Node" id={null} fields={[{ name: "name" }]} />
+    <RelationFieldWidget value={null} relation={nodeRelation} aria-label="Related node" />
+  </Wrapper>);
+  fireEvent.click(screen.getByRole("combobox", { name: "Related node" }));
+  fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Leaf" } });
+  fireEvent.click(await screen.findByText("Create “Leaf”"));
+  const dialog = await screen.findByRole("dialog", { name: "New node" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect((create.mock.calls[0]?.[0] as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key)
+    .toEqual(expect.any(String));
+});
+
+test("two relation fields to one resource keep their drafts apart: a lost create in one is retried under its own key after the other creates", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  render(<Wrapper><FormView resource="tree.Node" id={null}
+    fields={[{ name: "name" }, { name: "parent", kind: "relation", widget: "many2one" }, { name: "sibling", kind: "relation", widget: "many2one" }]} /></Wrapper>);
+  const createFrom = async (field: string, query: string) => {
+    fireEvent.click(screen.getByRole("combobox", { name: field }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: query } });
+    fireEvent.click(await screen.findByText(`Create “${query}”`));
+    const dialog = await screen.findByRole("dialog", { name: "New node" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    return dialog;
+  };
+  // Field A's create loses its answer (it may have been written); the person closes the dialog.
+  const lost = await createFrom("Parent", "Alpha");
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  fireEvent.click(within(lost).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  // Field B creates something else, then field A's create is retried.
+  await createFrom("Sibling", "Beta");
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  await createFrom("Parent", "Alpha");
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys[1]).not.toBe(keys[0]);
+  // A's retry carries A's key: the server replays the record it may have written, so it is written once.
+  expect(keys[2]).toBe(keys[0]);
+}, 20_000);
+
+test("a quick create on a keyed root sends its draft's key through the create root the form uses: a retry after a lost answer carries it", async () => {
+  const { create, Wrapper } = harness([...resources, label]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const change = vi.fn();
+  render(<Wrapper><RelationMultiFieldWidget value={[]} onChange={change} fieldName="labels"
+    relation={{ resource: "labels.Label", labelField: "name", canCreate: true }} aria-label="Labels" /></Wrapper>);
+  const quick = async (query: string, count: number) => {
+    fireEvent.input(screen.getByRole("combobox", { name: "Labels" }), { target: { value: query }, inputType: "insertText" });
+    fireEvent.click(await screen.findByRole("option", { name: `Create “${query}”` }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+  };
+  await quick("Urgent", 1);
+  await quick("Urgent", 2);
+  await waitFor(() => expect(change).toHaveBeenCalledOnce());
+  await quick("Later", 3);
+  const calls = create.mock.calls.map(([call]) => call as { resource?: string; meta?: { gqlVariables?: { idempotency_key?: string } } });
+  // The same create the record form saves through: the root's resource, the key as its root argument.
+  expect(calls.map((call) => call.resource)).toEqual(["labels", "labels", "labels"]);
+  const keys = calls.map((call) => call.meta?.gqlVariables?.idempotency_key);
+  expect(keys[0]).toEqual(expect.any(String));
+  expect(keys[1]).toBe(keys[0]);
+  expect(keys[2]).not.toBe(keys[0]);
+});
+
+test.each([
+  ["a lost answer says it may have been sent and that sending again sends it once", () => new TypeError("Failed to fetch"),
+    { message: "Save failed", description: "No answer came back, so it may have been sent. Sending again from this page sends it once." }],
+  ["a spent key says an earlier attempt created a record", () => boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+    message: "This idempotency key was already used for different content.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }),
+  { message: "Created earlier",
+    description: "An earlier attempt to create from this field already created a record; find it among the existing ones before creating again." }],
+  ["any other failure keeps the data layer's notice", () => boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+    message: "Name is taken.", extensions: { code: "VALIDATION", validationErrors: { name: ["Name is taken."] }, formErrors: [] } }] } }),
+  { message: expect.stringContaining("There was an error creating") }],
+])("a keyed quick create tells its failure in its own words: %s", async (_name, failure, notice) => {
+  const { create, notify, Wrapper } = harness([...resources, label]);
+  create.mockRejectedValueOnce(failure());
+  render(<Wrapper><RelationMultiFieldWidget value={[]} onChange={vi.fn()} fieldName="labels"
+    relation={{ resource: "labels.Label", labelField: "name", canCreate: true }} aria-label="Labels" /></Wrapper>);
+  fireEvent.input(screen.getByRole("combobox", { name: "Labels" }), { target: { value: "Urgent" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Create “Urgent”" }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error", ...notice })));
+});
+
+test("two relation fields' quick creates keep their drafts apart: a lost one is retried under its own key after the other field's", async () => {
+  const { create, Wrapper } = harness([...resources, label]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const relation = { resource: "labels.Label", labelField: "name", canCreate: true };
+  render(<Wrapper>
+    <RelationMultiFieldWidget value={[]} onChange={vi.fn()} fieldName="labels" relation={relation} aria-label="Labels" />
+    <RelationMultiFieldWidget value={[]} onChange={vi.fn()} fieldName="flags" relation={relation} aria-label="Flags" />
+  </Wrapper>);
+  const quick = async (field: string, query: string, count: number) => {
+    fireEvent.input(screen.getByRole("combobox", { name: field }), { target: { value: query }, inputType: "insertText" });
+    fireEvent.click(await screen.findByRole("option", { name: `Create “${query}”` }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+  };
+  await quick("Labels", "Urgent", 1);
+  await quick("Flags", "Later", 2);
+  await quick("Labels", "Urgent", 3);
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys[1]).not.toBe(keys[0]);
+  expect(keys[2]).toBe(keys[0]);
+});
+
+test("rows of one lines editor keep their create drafts apart: a lost create from one row is retried under its own key after another row creates", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const lines = {
+    field: "lines", modelLabel: "demo.Line",
+    fields: [{
+      name: "node", kind: "relation", scalar: "ID", relationModelLabel: "tree.Node", relationObject: true, readable: true,
+      filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false,
+    }],
+  } satisfies DataResourceLinesMetadata;
+  function Lines(): ReactNode {
+    const form = useForm<Record<string, unknown>>({ defaultValues: { lines: [{ id: "one", node: null }, { id: "two", node: null }] } });
+    return <EditableLines control={form.control} setValue={form.setValue} name="lines" lines={lines} />;
+  }
+  render(<Wrapper><Lines /></Wrapper>);
+  const createFrom = async (row: number, query: string, count: number) => {
+    fireEvent.click(screen.getAllByRole("combobox", { name: "Node" })[row]!);
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: query } });
+    fireEvent.click(await screen.findByText(`Create “${query}”`));
+    const dialog = await screen.findByRole("dialog", { name: "New node" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+    return dialog;
+  };
+  // Row one's create loses its answer and the person closes it; row two creates something else.
+  const lost = await createFrom(0, "Alpha", 1);
+  fireEvent.click(within(lost).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  await createFrom(1, "Beta", 2);
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  await createFrom(0, "Alpha", 3);
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys[0]).toEqual(expect.any(String));
+  expect(keys[1]).not.toBe(keys[0]);
+  // Row one's retry carries its own key: the server replays what it may have written.
+  expect(keys[2]).toBe(keys[0]);
+}, 20_000);

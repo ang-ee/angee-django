@@ -1,4 +1,4 @@
-"""IAM receivers: the sign-in stamp and the retirement of a deactivated account's sign-in links.
+"""IAM receivers: the sign-in stamp.
 
 Django stamps ``last_login`` from ``user_logged_in`` with a plain instance save.
 The account's audit dates are gated (``write__last_login``) so that a consumer's
@@ -9,11 +9,9 @@ update so a sign-in never bumps the account's revision under an open edit.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
-from django.apps import apps
-from django.contrib.auth import get_user_model, user_logged_in
-from django.db.models.signals import post_save
+from django.contrib.auth import user_logged_in
 from django.utils import timezone
 from rebac import system_context
 
@@ -30,26 +28,8 @@ def stamp_last_login(sender: Any, user: Any, **kwargs: Any) -> None:
     user.last_login = now
 
 
-def retire_sign_in_links(
-    sender: Any,
-    instance: Any,
-    update_fields: Any = None,
-    raw: bool = False,
-    **kwargs: Any,
-) -> None:
-    """Retire the outstanding sign-in links of an account saved inactive, so reactivating it revives none.
-
-    Fixture loading (``raw``) writes rows as given and retires nothing.
-    """
-
-    if raw or instance.is_active or (update_fields is not None and "is_active" not in update_fields):
-        return
-    cast(Any, apps.get_model("iam", "SignInLink")).objects.retire(instance)
-
-
 def connect() -> None:
-    """Replace Django's sign-in stamp with IAM's and retire links on deactivation (idempotent)."""
+    """Replace Django's sign-in stamp with IAM's (idempotent)."""
 
     user_logged_in.disconnect(dispatch_uid=DJANGO_LAST_LOGIN_UID)
     user_logged_in.connect(stamp_last_login, dispatch_uid="angee.iam.stamp_last_login")
-    post_save.connect(retire_sign_in_links, sender=get_user_model(), dispatch_uid="angee.iam.retire_sign_in_links")

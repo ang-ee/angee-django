@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from django.apps import apps
 from django.core import checks
 from django.core.checks.registry import registry
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import isolate_apps
 
 from angee.base.apps import BaseConfig
+from angee.base.build import extension_source_map
 from angee.base.checks import (
     check_database_routers,
     check_ownership,
@@ -29,8 +33,10 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
+from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
 
 @pytest.mark.parametrize("guarded", [False, True])
@@ -216,21 +222,38 @@ def test_native_rebac_database_check_and_base_checks_are_registered() -> None:
     assert sum(check is check_database_routers for check in registry.registered_checks) == 1
 
 
-@pytest.mark.parametrize(
-    "origin,debug,valid",
-    [
-        ("", False, True),
-        ("https://app.example.test", False, True),
-        ("https://app.example.test:8443/", False, True),
-        ("http://localhost:5173", True, True),
-        ("http://app.example.test", False, False),
-        ("https://*.example.test", False, False),
-        ("https://user:secret@app.example.test", False, False),
-        ("https://app.example.test/path", False, False),
-        ("https://app.example.test:notaport", False, False),
-        ("https://exa mple.test", False, False),
-    ],
-)
+ORIGINS = [
+    ("", False, True),
+    ("https://app.example.test", False, True),
+    ("https://app.example.test:8443/", False, True),
+    ("http://localhost:5173", True, True),
+    ("http://app.example.test", False, False),
+    ("https://*.example.test", False, False),
+    ("https://user:secret@app.example.test", False, False),
+    ("https://app.example.test/path", False, False),
+    ("https://app.example.test:notaport", False, False),
+    ("https://exa mple.test", False, False),
+]
+
+
+@pytest.mark.parametrize(("origin", "debug", "valid"), ORIGINS)
+def test_the_configured_public_origin_is_the_one_the_check_accepts_and_none_is_a_coded_refusal(
+    origin: str, debug: bool, valid: bool,
+) -> None:
+    """The accessor asks the owner's rule of the setting: a valid origin comes back bare; an unset or invalid one is
+    refused with the owner's code, as an ``ImproperlyConfigured`` too."""
+
+    with override_settings(ANGEE_PUBLIC_ORIGIN=origin, DEBUG=debug):
+        if origin and valid:
+            assert configured_public_origin() == origin.rstrip("/")
+            return
+        with pytest.raises(PublicOriginUnavailable) as refusal:
+            configured_public_origin()
+    assert (refusal.value.code, str(refusal.value)) == ("PUBLIC_ORIGIN_UNAVAILABLE", "PUBLIC_ORIGIN_UNAVAILABLE")
+    assert isinstance(refusal.value, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(("origin", "debug", "valid"), ORIGINS)
 def test_an_invalid_public_origin_fails_the_system_check(origin: str, debug: bool, valid: bool) -> None:
     """Only a bare public origin is trusted for CSRF and links; any other set value is reported."""
 
@@ -440,14 +463,46 @@ def test_installed_models_spell_ownership_one_way() -> None:
 def test_a_seal_names_an_installed_owner_and_its_declared_permissions() -> None:
     """A seal without its owner or on an undeclared permission is reported, never raised."""
 
-    [missing_owner] = check_sealed_permissions("absent", {"absent/thing": ("read",)}, "tests.E001")
+    [missing_owner] = check_sealed_permissions("absent", {"absent/thing": ("read",)}, "tests.E001", "Unused.")
     assert missing_owner.id == "tests.E001"
     assert "absent declares no permissions schema" in missing_owner.msg
-    [undeclared] = check_sealed_permissions("iam", {"auth/user": ("view_as", "impersonate")}, "tests.E001")
+    [undeclared] = check_sealed_permissions(
+        "iam", {"auth/user": ("view_as", "impersonate")}, "tests.E001", "Unused.",
+    )
     assert undeclared.id == "tests.E001"
     assert "auth/user#impersonate" in undeclared.msg
     assert "auth/user#view_as" not in undeclared.msg
-    assert check_sealed_permissions("iam", {"auth/user": ("view_as",)}, "tests.E001") == []
+    assert check_sealed_permissions("iam", {"auth/user": ("view_as",)}, "tests.E001", "Unused.") == []
+
+
+def test_each_seal_refuses_a_fragment_with_its_own_remedy(tmp_path: Path) -> None:
+    """A fragment that changes two sealed permissions meets each seal's own message and hint."""
+
+    declaration = Path(apps.get_app_config("iam").path, "permissions.zed").read_text(encoding="utf-8")
+    iam = _addon(tmp_path, "iam", "permissions.zed", declaration)
+    contrib = _contrib_addon(
+        tmp_path,
+        "definition auth/user {\n    relation helper: auth/user\n"
+        "    permission view_as = helper\n    permission set_password = helper\n}\n",
+        name="seal_contrib",
+    )
+    sources = extension_source_map([iam, contrib])
+    runtime = tmp_path / "runtime"
+    for relative, text in sources.items():
+        output = runtime / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text)
+    _apply_emitted_schema_paths([iam, contrib], runtime, sources=sources)
+
+    seals = {
+        "auth/user#view_as": ("tests.E002", "Grant preview through the fragment's own record."),
+        "auth/user#set_password": ("tests.E003", "Leave Set password to its two write gates."),
+    }
+    for sealed, (check_id, hint) in seals.items():
+        resource_type, _, name = sealed.partition("#")
+        [error] = check_sealed_permissions("iam", {resource_type: (name,)}, check_id, hint, [iam, contrib])
+        assert (error.id, error.hint) == (check_id, hint)
+        assert error.msg == f"iam: {sealed} differ from angee.iam's declaration (extended by seal_contrib@0)."
 
 
 @pytest.mark.django_db

@@ -1,7 +1,7 @@
 """Source models for the messaging addon.
 
 Messaging is threads and messages built on the parties contacts foundation: a
-message's sender and participants are :class:`~angee.parties.models.Handle` rows,
+message's sender and recipients are :class:`~angee.parties.models.Handle` rows,
 so the dependency points one way (messaging → parties). A :class:`Channel` is an
 ``integrate.Integration`` child (a bridge) that ingests messages from an external
 source; the email/social mapping lands in ``messaging_integrate_*`` backends.
@@ -22,6 +22,7 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -66,6 +67,7 @@ from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
+from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import (
     PairingProjection,
@@ -82,6 +84,7 @@ from angee.messaging.backends import (
 )
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
+from angee.messaging.email import header_text
 from angee.messaging.managers import (
     ChannelManager,
     DeliveryReconciliationBusy,
@@ -97,6 +100,8 @@ from angee.messaging.managers import (
     ThreadFollowerManager,
     ThreadManager,
     ThreadNotificationManager,
+    _require_at_most,
+    normalize_subject,
 )
 from angee.messaging.mixins import (
     AudienceMember as AudienceMember,
@@ -130,6 +135,8 @@ from angee.provenance.statements import (
 from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
+logger = logging.getLogger(__name__)
+
 
 class Channel(Bridge, inherits="integrate.Integration"):
     """A connected message transport for inbound and outbound email or social data.
@@ -145,6 +152,11 @@ class Channel(Bridge, inherits="integrate.Integration"):
     """
 
     rebac_grantable = {"reader": "write", "replier": "write", "annotator": "write"}
+    reply_permission: ClassVar[str] = "reply"
+    """The channel permission that admits sending on it.
+
+    An answer (``Message.require_reply``) and a new message (``MessageManager.compose``) both decide it.
+    """
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field: ClassVar[str | None] = "backend_class"
 
@@ -174,6 +186,12 @@ class Channel(Bridge, inherits="integrate.Integration"):
         """The selected protocol declares whether this channel asserts statements, and as what."""
 
         return self.get_backend_class_impl().source_kind
+
+    @property
+    def system_only(self) -> bool:
+        """Whether this channel's protocol serves the system channel alone (``ChannelBackend.system_only``)."""
+
+        return self.get_backend_class_impl().system_only
 
     def can_reconcile_delivery(self) -> bool:
         """Read the concrete capability's backend declaration without opening it."""
@@ -919,6 +937,23 @@ class MessageReactionGroup:
 
 
 @dataclass(frozen=True)
+class ReplyEnvelope:
+    """Whom an answer to a message goes to, under which subject, from which address (``Message.reply_envelope``).
+
+    An email answer goes to ``addresses`` (the ``Reply-To``'s, each ``(address,
+    display name)``), else to the handle ``handle_id`` names (the sender); it is
+    titled ``subject`` and sent from the channel's default ``sender``, ``(name,
+    address)``. An answer of another kind carries none of these: its transport's
+    own sender answers, and it addresses nobody.
+    """
+
+    addresses: tuple[tuple[str, str], ...] = ()
+    handle_id: Any = None
+    subject: str = ""
+    sender: tuple[str, str] | None = None
+
+
+@dataclass(frozen=True)
 class WebformSubmission:
     """A public form's answers and claimed email; the email proves no identity."""
 
@@ -950,7 +985,7 @@ class Message(
     cross-message relations live on :class:`MessageEdge`. The body — including a
     sparse ``TITLE`` part for the subject and ``HEADER`` parts for retained
     envelope headers — is the :class:`Part` tree; raw envelope recipients are kept
-    in ``metadata`` as the lossless source behind :class:`Participant`.
+    in ``metadata`` as the lossless source behind :class:`Recipient`.
 
     Edits are data, not shadow rows: ``edit_history`` appends newest-first
     ``{edited_at, edited_by_id, prev_fragment_hashes}`` entries while the replaced
@@ -1003,7 +1038,9 @@ class Message(
         Every value has a live producer: ``COMMENT`` is a chatter note *or* a
         public post (disambiguated structurally — ``direction``/thread shape, see
         :meth:`Message.content_edit_error`), ``EMAIL``/``CHAT`` are set by the
-        ingest producers, ``NOTIFICATION`` by the retained system log. Add a value only together with its producer.
+        ingest producers and by ``MessageManager.compose`` (an outgoing message
+        keeps its parent's kind, and a new one is an email), ``NOTIFICATION`` by
+        the retained system log. Add a value only together with its producer.
         """
 
         COMMENT = "comment", "Comment"
@@ -1144,6 +1181,26 @@ class Message(
         local = (self.metadata or {}).get("local")
         return dict(local) if isinstance(local, dict) else {}
 
+    @staticmethod
+    def local_metadata_annotation() -> dict[str, Any]:
+        """Annotate a list's rows with their local facts, which :meth:`local_fact` then reads.
+
+        The ``local`` object is read whole, as JSON, so every fact keeps its
+        stored type on SQLite as on PostgreSQL. Reading one key would not:
+        SQLite decodes a text that looks like JSON (``"0"``) as another value,
+        and renders ``false`` or ``null`` as text.
+        """
+
+        return {"_local_metadata": models.F("metadata__local")}
+
+    def local_fact(self, key: str) -> Any:
+        """The local fact ``key``, from the row's :meth:`local_metadata_annotation` when a list loaded it."""
+
+        local = self.__dict__.get("_local_metadata", models.DEFERRED)
+        if local is models.DEFERRED:
+            return self.local_metadata.get(key)
+        return local.get(key) if isinstance(local, dict) else None
+
     @property
     def is_locally_written(self) -> bool:
         """Local delivery states distinguish authored envelopes from synced own mail."""
@@ -1162,10 +1219,7 @@ class Message(
 
         if self.is_trashed and not self.delivery_needs_reconciliation:
             return True
-        conflict = self.__dict__.get("_delivery_conflict", models.DEFERRED)
-        if conflict is models.DEFERRED:
-            conflict = self.local_metadata.get("delivery_conflict")
-        return bool(conflict)
+        return bool(self.local_fact("delivery_conflict"))
 
     delivery_action_permission: ClassVar[str] = "send_held"
 
@@ -1178,6 +1232,26 @@ class Message(
             action for action in ("retry", "acknowledge")
             if self.delivery_resolution_error(retry=action == "retry") is None
         ]
+
+    def delivery_error(self, permissions: Collection[str]) -> str | None:
+        """Why delivery last failed, for a viewer holding :attr:`delivery_action_permission`; else ``None``.
+
+        Settlement records the refusal in words safe for operators
+        (``safe_integration_failure``), so it is read by those who may act on it,
+        as :meth:`delivery_actions` is. Acceptance clears it; an operator's retry
+        keeps it until the next settlement.
+        """
+
+        if self.delivery_action_permission not in permissions:
+            return None
+        error = self.local_fact("delivery_error")
+        return str(error) if error else None
+
+    @property
+    def delivery_attempts(self) -> int:
+        """The provider attempts settlement has counted, ``0`` before the first; an operator's retry resets it."""
+
+        return int(self.local_fact("delivery_attempts") or 0)
 
     def delivery_resolution_error(self, *, retry: bool) -> ValidationError | None:
         """The retained row's admission for an operator retry or acknowledgement.
@@ -1316,20 +1390,105 @@ class Message(
         ).order_by("position", "pk").values_list("fragment__text", flat=True))
 
     def reply_addresses(self, *, actor: Any = None) -> dict[str, str]:
-        """Return the addresses this message's ``Reply-To`` names, lower-cased, each with its display name.
+        """Return the addresses this message's ``Reply-To`` names, each with its display name.
 
         The header is read through :meth:`source_header_values` with the caller's
-        access, in header order; a repeated address keeps its first display name and
-        an entry without ``@`` is no address. Without a ``Reply-To`` the mapping is
-        empty: whether a reply then goes to the sender is the caller's decision.
+        access, in header order. Which entries are one address is the spelling
+        key's (``Handle.spelling_key_of``); each is returned as the header first
+        spells it, with that entry's display name: what an answer is landed on
+        (``MessageManager.compose``). An address no handle holds yet is stored and
+        sent in that spelling; an address a handle holds is sent as that handle
+        stores it, with its display name, as every recipient is. An entry the
+        handle owner's predicate (``Handle.is_email_address``) rejects is no
+        address. Without a ``Reply-To`` the mapping is empty.
         """
 
         addresses: dict[str, str] = {}
+        named: set[str] = set()
         for name, address in getaddresses(self.source_header_values("reply-to", actor=actor)):
-            address = address.strip().lower()
-            if "@" in address:
-                addresses.setdefault(address, name.strip())
+            address = address.strip()
+            key = Handle.spelling_key_of(Handle.Platform.EMAIL, address)
+            if Handle.is_email_address(address) and key not in named:
+                named.add(key)
+                addresses[address] = name.strip()
         return addresses
+
+    def require_reply(self, actor: Any) -> Channel:
+        """Return the channel ``actor`` answers this message on, once they may read it and reply there.
+
+        Read on the message is decided first, so a refusal reads nothing of a
+        channel the actor may not know of; the channel is then read once, under
+        the actor, and its ``reply`` decided. Who may answer is decided here alone;
+        whether the message can be answered is :meth:`reply_envelope`'s. A
+        refusal raises ``PermissionDenied``.
+        """
+
+        if self.pk is None or self.channel_id is None or not self.with_actor(actor).has_access("read"):
+            raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
+        channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=self.channel_id).first()
+        if channel is None or not channel.has_access(channel.reply_permission):
+            raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
+        return cast(Channel, channel)
+
+    def reply_envelope(self, *, actor: Any = None, channel: Channel | None = None) -> ReplyEnvelope:
+        """Return whom ``MessageManager.compose`` answers this message to, or raise why it cannot.
+
+        An answer needs a saved message with a thread and a channel (``parent``,
+        code ``reply_incomplete``). An email is answered from its channel's default
+        sender (``Channel.outbound_sender``, whose refusal is raised as it is) under
+        ``Re: <thread title>``, to its ``Reply-To`` (:meth:`reply_addresses`, read
+        with ``actor``'s access). A ``Reply-To`` that names no address is refused
+        (``reply_to``, ``reply_to_invalid``) rather than answered at its sender,
+        which may be a relay; only a message with no ``Reply-To`` is answered at
+        its sender (``parent``, ``reply_unaddressed`` when it has none, or one the
+        handle owner's predicate does not take as an address). A
+        ``Reply-To`` naming more than :meth:`MessageManager.recipient_limit` addresses
+        is refused (``reply_to``, ``too_many``), as a typed list of as many is. Any other
+        kind is answered by its transport's own sender: the envelope is empty.
+        ``channel`` is the transport channel when the caller has read it
+        (:meth:`require_reply`); otherwise it is read here. Who may answer is
+        :meth:`require_reply`'s.
+        """
+
+        if self.pk is None or self.thread_id is None or self.channel_id is None:
+            raise ValidationError({"parent": ValidationError(
+                "An answer needs a saved message with a thread and a channel.", code="reply_incomplete",
+            )})
+        if self.message_type != self.MessageKind.EMAIL:
+            return ReplyEnvelope()
+        if channel is None:
+            channel = cast(Channel, self.transport_channel(reason="messaging.reply_envelope"))
+        sender = channel.outbound_sender()
+        addresses = self.reply_addresses(actor=actor)
+        _require_at_most(MessageManager.recipient_limit(), "recipients", (("reply_to", tuple(addresses)),))
+        if not addresses and any(value.strip() for value in self.source_header_values("reply-to", actor=actor)):
+            raise ValidationError({"reply_to": ValidationError(
+                "The message's Reply-To names no address to answer.", code="reply_to_invalid",
+            )})
+        if not addresses and (self.sender is None or not Handle.is_email_address(self.sender.value)):
+            # The sender an answer falls back to is checked as a Reply-To address is.
+            raise ValidationError({"parent": ValidationError(
+                "An email answer needs a Reply-To or a sender to address.", code="reply_unaddressed",
+            )})
+        title = normalize_subject(cast(Thread, self.thread).display_title)
+        return ReplyEnvelope(
+            addresses=tuple(addresses.items()),
+            handle_id=None if addresses else self.sender_id,
+            subject=header_text(f"Re: {title}") if title else "",
+            sender=sender,
+        )
+
+    def reply_error(self, *, actor: Any = None, channel: Channel | None = None) -> ValidationError | None:
+        """Why ``MessageManager.compose`` cannot answer this message (:meth:`reply_envelope`'s refusal), or ``None``.
+
+        Side-effect free; who may answer is :meth:`require_reply`'s.
+        """
+
+        try:
+            self.reply_envelope(actor=actor, channel=channel)
+        except ValidationError as error:
+            return error
+        return None
 
     def webform_submission(self) -> WebformSubmission | None:
         """Read the ``webform`` envelope a form submission's message carries in its metadata.
@@ -1368,19 +1527,30 @@ class Message(
     def delete_error(self) -> str | None:
         """Only comments may be deleted; notes and automatic messages are retained."""
 
-        return self._retained_error("deleted")
+        if self.message_type != self.MessageKind.COMMENT:
+            return "Only comment messages can be deleted."
+        return None
 
     def trash_error(self) -> str | None:
-        """Only comments may be trashed; notes and automatic messages stay on record."""
+        """Only comments and received messages may be trashed; sent mail and system notes stay on record.
 
-        return self._retained_error("removed")
+        Trash is a record moderator's verb, asked on the record's own thread
+        (``ThreadedModelMixin.message_trash``, the chatter's ``can_trash``). A
+        message received there came from outside, whoever sent it (an answer that
+        its threading headers placed on the chatter, or anything mailed with a
+        chatter mail's Message-ID), so its moderator may take it off as a comment.
+        A record's chatter thread has no channel, nor has one a record merge folded
+        in: a message whose own thread has one is mail in a mailbox's conversation
+        that an earlier version merged into the record, and stays its owner's.
+        """
 
-    def _retained_error(self, verb: str) -> str | None:
-        """Return why this message is a retained record that no removal verb may take."""
-
-        if self.message_type != self.MessageKind.COMMENT:
-            return f"Only comment messages can be {verb}."
-        return None
+        if self.message_type == self.MessageKind.COMMENT:
+            return None
+        if self.thread_id is not None and cast(Thread, self.thread).channel_id is not None:
+            return "Mail in its owner's own mailbox conversation stays theirs to remove."
+        if self.direction == self.Direction.INBOUND:
+            return None
+        return "Only comments and received messages can be removed."
 
     def can_trash(self, *, moderate_access: bool) -> bool:
         """Return whether a record moderator may move this comment to the trash."""
@@ -1669,16 +1839,19 @@ class Message(
         self.revision = row.revision
         return row
 
+    # A row's str is its preview, so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.
 
-        This is the consumer seam: callers compose and persist the message,
-        envelope participants, and parts, then call ``message.deliver()``. The
-        transport always runs through ``angee.jobs``, never in the request.
+        The transport always runs through ``angee.jobs``, never in the request.
         """
 
         return queue_message_delivery(self)
 
+    # The operator's verbs hold the row, whose str is its preview: an error report (DEBUG off)
+    # hides every local from here down, the manager's resolution and Django's save included.
+    @sensitive_variables()
     def acknowledge_delivery(self, *, actor: Any, expected_revision: int) -> Any:
         """Confirm an uncertain provider effect as sent without making another call."""
 
@@ -1686,6 +1859,7 @@ class Message(
             self, actor=actor, expected_revision=expected_revision, retry=False,
         )
 
+    @sensitive_variables()
     def retry_delivery(self, *, actor: Any, expected_revision: int) -> Any:
         """Retry FAILED, or explicitly accept repeat-effect risk for UNCERTAIN."""
 
@@ -2043,75 +2217,159 @@ class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.src_id} -{self.kind}-> {self.dst_id}"
 
 
-class Participant(AuditMixin, AngeeDataModel, concrete=True):
-    """A Handle-keyed membership of a thread/message — the queryable recipient row.
+class Recipient(AuditMixin, AngeeDataModel, concrete=True):
+    """A handle a message is addressed to, in one envelope role: the queryable recipient row.
 
-    The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
-    its queryable projection, so the inbox can group/filter by participant.
-    One row states one fact: a handle's role on a message, or, without a message,
-    in a thread. A handle merge keeps the row on the handle it names; readers
-    resolve ``handle`` through the handle's merge redirect.
+    The raw To/Cc/Bcc stays in ``Message.metadata`` as the lossless source; this is
+    its queryable projection, so the inbox can group and filter by recipient. The
+    sender is ``Message.sender``, never a row here. ``thread`` is its message's
+    thread, set by :meth:`save` on insert and moved with the message by
+    ``MessageManager.correct_source_thread``. A handle merge keeps the row on the
+    handle it names; readers resolve ``handle`` through the handle's merge redirect.
+    ``address`` is the spelling a writer was handed for the handle, which the
+    message is mailed at (:attr:`envelope_address`); readers and search still go by
+    the handle.
     """
 
     merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
 
-    class ParticipantRole(models.TextChoices):
-        """The RFC-5322 envelope role of a participant."""
+    class RecipientRole(models.TextChoices):
+        """The RFC-5322 envelope role of a recipient."""
 
-        FROM = "from", "From"
         TO = "to", "To"
         CC = "cc", "Cc"
         BCC = "bcc", "Bcc"
 
-    sqid_prefix = "ptp_"
+    sqid_prefix = "rcp_"
     thread = models.ForeignKey(
         "messaging.Thread",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
-        related_name="participants",
+        related_name="recipients",
     )
     message = models.ForeignKey(
         "messaging.Message",
-        null=True,
-        blank=True,
         on_delete=models.CASCADE,
-        related_name="participants",
+        related_name="recipients",
     )
     handle = models.ForeignKey(
         "parties.Handle",
         on_delete=models.CASCADE,
-        related_name="participations",
+        related_name="recipient_rows",
     )
-    role = StateField(choices_enum=ParticipantRole, default=ParticipantRole.TO)
-    joined_at = models.DateTimeField(null=True, blank=True)
-    left_at = models.DateTimeField(null=True, blank=True)
+    role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
+    address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
+    """The address the caller handed for this recipient, as its recipient rule cleaned it
+    (``MessageManager.clean_recipient``), which the transport carries (one it cannot is refused before anything
+    is written, ``email.require_carried``): a spelling of the handle's address
+    or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``): the bound for every writer,
+    of which system mail alone records a merged handle's address, so it goes there while the row is on the
+    survivor (``MessageManager._land_addressees``); the reader (:attr:`envelope_address`) refuses a system
+    mail whose recorded address its handle's merges no longer name, and mails a person's at the handle.
+    Empty for a recipient no
+    caller handed as an address (one a reply inherits from its parent, one known only as a handle, an
+    ingested one), which is mailed at the handle's own ``value``. It leaves with the row: with its handle,
+    its message and a channel's purge."""
+    addressed_handle: Any = None
+    """Not stored: the handle owning :attr:`address` before the merge redirect the compose writer followed to
+    :attr:`handle` (``HandleManager.find_identity_owners``), given for one save so its check reads nothing."""
 
     class Meta:
-        """Django model options for the participant source model."""
+        """Django model options for the recipient source model."""
 
         abstract = True
         ordering = ("role", "sqid")
-        rebac_resource_type = "messaging/participant"
+        rebac_resource_type = "messaging/recipient"
         constraints = (
             # One row per envelope fact; the write path dedupes a repeated
             # address, the constraint keeps a concurrent rebuild honest.
             models.UniqueConstraint(
                 fields=("message", "handle", "role"),
-                condition=models.Q(message__isnull=False),
-                name="uq_participant_message_handle_role",
-            ),
-            models.UniqueConstraint(
-                fields=("thread", "handle", "role"),
-                condition=models.Q(message__isnull=True),
-                name="uq_participant_thread_handle_role",
+                name="uq_recipient_message_handle_role",
             ),
         )
 
     def __str__(self) -> str:
-        """Return a readable participant label for Django displays."""
+        """Return a readable recipient label for Django displays."""
 
         return f"{self.handle_id} ({self.role})"
+
+    @property
+    def envelope_address(self) -> str:
+        """The address this row is mailed at: :attr:`address` while it spells the handle's address, else the handle's
+        own ``value``.
+
+        A recorded address of a handle merged into this row's handle is read once to confirm it. A recorded address
+        that neither names (the merge it was written under reverted, a row written past :meth:`save`), or that carries
+        surrounding space, is read as its message's channel says. On the system channel (``Channel.system_only``,
+        asked only here, one read of the channel), and for a message whose channel is gone, which the reader cannot
+        tell from system mail, the whole message is refused, an ``IntegrationError`` settled as its stored delivery
+        reason, so system mail is exact or not sent and never reaches the kept handle's mailbox.
+        A person's row, which records only spellings of its own handle and follows the handle, is mailed at its
+        handle's ``value`` with a warning naming the row. Mail never goes where its handle's merges do not name.
+        """
+
+        handle = self.handle
+        if self.address and not self._names_its_handle():
+            channel = self.message.channel
+            if channel is None or channel.system_only:
+                raise IntegrationError("A recipient of this message no longer names the address it was written for.")
+            logger.warning("Recipient %s holds an address its handle does not name; it is mailed at the handle's own.",
+                           self.pk)
+            return str(handle.value)
+        return self.address or str(handle.value)
+
+    def clean(self) -> None:
+        """Validate the row as :meth:`save` does: an ``address`` is a spelling of its handle's address, or of a handle
+        merged into it, as written."""
+
+        super().clean()
+        self._require_its_address()
+
+    def _names_its_handle(self) -> bool:
+        """Whether :attr:`address` is written as itself and spells the handle's address or one merged into it.
+
+        Its own spelling and the writer's :attr:`addressed_handle` are checked in memory: that handle spells the address
+        and redirects to this row's handle, as a fold leaves every handle it merged. Otherwise the handle owner reads
+        the handles merged into the survivor of this row's handle, once: the handle itself while it is live, else its
+        survivor (``canonical``, read only then), since merging the row's handle away re-points every handle merged
+        into it at that survivor.
+        """
+
+        address, handle, owner = self.address, self.handle, self.addressed_handle
+        if address != address.strip():
+            return False
+        if handle.is_spelling_of(address):
+            return True
+        if owner is not None and owner.merged_into_id == handle.pk and owner.is_spelling_of(address):
+            return True
+        survivor = handle if handle.merged_into_id is None else handle.canonical()
+        return bool(survivor.is_spelling_of(address, merged=True))
+
+    def _require_its_address(self) -> None:
+        if self.address and not self._names_its_handle():
+            raise ValidationError({"address": ValidationError(
+                "A recipient's address is a spelling of its handle's address, or of a handle merged into it, as "
+                "written.",
+                code="not_its_handle",
+            )})
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Insert the row on its message's thread; a different ``thread`` raises ``ValueError``.
+
+        Pass ``message=`` (the instance) so the message is not read again, and ``handle=`` when ``address`` is set, so
+        the handle is not read either. An ``address`` that is not a spelling of the handle's address raises
+        ``ValidationError`` on ``address`` before anything is written.
+        """
+
+        self._require_its_address()
+        if self._state.adding:
+            thread_id = self.message.thread_id
+            if self.thread_id is not None and self.thread_id != thread_id:
+                raise ValueError("A recipient row is on its message's thread.")
+            self.thread_id = thread_id
+        super().save(*args, **kwargs)
 
 
 class Reaction(AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):

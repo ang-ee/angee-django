@@ -28,6 +28,12 @@ class ImmutableFieldsMixin(models.Model):
     Donors contribute plain tuples. An owning verb permits its next write through
     ``allow_immutable_save``; unloaded deferred values remain untouched, and a
     partial save checks only the immutable fields its ``update_fields`` writes.
+    A refusal is keyed by the changed field's name, as model validation and
+    ``form.add_error`` key a field: a relation's attname (``recipient_id``) under
+    the relation (``recipient``), any other field (``external_id``) under its own.
+    The guard runs only in an instance's ``save()``: a queryset ``update``,
+    ``bulk_update`` or a ``bulk_create`` that updates on conflict writes declared
+    fields unchecked.
     """
 
     immutable_fields: ClassVar[tuple[str, ...]] = ()
@@ -69,8 +75,9 @@ class ImmutableFieldsMixin(models.Model):
                     if persisted is not None:
                         changed = [name for name in checked if persisted[name] != getattr(self, name)]
                         if changed:
+                            fields = {field.attname: field.name for field in self._meta.concrete_fields}
                             raise ValidationError(
-                                {name.removesuffix("_id"): "This identity or receipt is immutable." for name in changed}
+                                {fields[name]: "This identity or receipt is immutable." for name in changed}
                             )
             super().save(*args, **kwargs)
         finally:

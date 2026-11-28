@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "../feedback";
 import { AppRuntimeProvider } from "../runtime";
 import { createUiTestProviders } from "../testing";
+import { defaultWidgets } from "./index";
 import { VisibilityControl } from "./visibility";
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
@@ -67,4 +68,8 @@ test("shows the server's audience label without exposing a transition formula", 
   expect(button.textContent).toContain("Private");
   expect(screen.getByText("Project participants")).toBeTruthy();
   expect(screen.getByText("Project participants").closest("button")).toBeNull();
+});
+
+test("guard: the visibility widget the registry holds writes its own value, so a record form leaves it its own editability", () => {
+  expect(defaultWidgets.visibility.writesOwnValue).toBe(true);
 });

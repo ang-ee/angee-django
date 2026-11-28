@@ -8,13 +8,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import tablib
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
+from django.utils.text import capfirst
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
@@ -24,6 +25,7 @@ from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.transitions import StateTransitions
+from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256, json_safe
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
@@ -82,6 +84,15 @@ class AngeeResource(resources.ModelResource):
     }
     """Widget map that accepts native JSON values from structured files."""
 
+    never_create_only: ClassVar[Mapping[str, str]] = {}
+    """Columns whose omission this adapter's owner verb does not treat as keeping what is stored, each with why.
+
+    ``create_only`` omits a column from a changed row; such a verb then publishes the stored
+    value or applies a default instead, against the entry. An entry listing one, by field or
+    column name, is refused before any row of that entry, and the load rolls back. A subclass
+    adds to its parents' columns.
+    """
+
     def __init__(
         self,
         *,
@@ -112,7 +123,13 @@ class AngeeResource(resources.ModelResource):
         """Acquire batch-wide domain locks before imports; never import or write rows.
 
         Called once per declared resource class inside the loader's transaction.
-        A subclass may inspect the complete batch solely to order its locks.
+        A subclass may inspect the complete batch solely to order its locks. It suits
+        one owner-level lock taken once, in a fixed order, such as a singleton's row.
+        It does not suit locking every row the batch may touch: those locks are held to
+        commit while the import then locks the rows it re-applies in file order, so the
+        load can hold a later row and wait for an earlier one that another writer, taking
+        the two in order, already holds, and the two deadlock. A row's own lock belongs
+        where the row is saved, taken by its owner in the owner's order.
         """
 
     @classmethod
@@ -137,12 +154,19 @@ class AngeeResource(resources.ModelResource):
         return functools.partial(widget, model=model)
 
     def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
-        """Validate headers and reset any batch-planning state before importing."""
+        """Validate headers and ``create_only`` names, and reset any batch-planning state before importing."""
 
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
         self._validate_headers(list(self.entry.create_only), declared="create_only field(s)")
+        declared = {
+            self._column_name(name): reason
+            for base in reversed(type(self).__mro__)
+            for name, reason in vars(base).get("never_create_only", {}).items()
+        }
+        if refused := sorted(set(self._create_only_columns) & set(declared)):
+            raise ResourceLoadError(f"{self.entry.display}: " + " ".join(declared[name] for name in refused))
         self._hash_skips = set()
         self._creating.clear()
         self._instances.clear()
@@ -203,10 +227,18 @@ class AngeeResource(resources.ModelResource):
                 row.pop(field.column_name, None)
         super().after_init_instance(instance, new, row, **kwargs)
 
+    def is_unchanged(self, row: Mapping[str, Any]) -> bool:
+        """Whether ``row`` matches its ledger hash, so this load leaves its target as it is.
+
+        Known once the native instance loader has resolved the row's target.
+        """
+
+        return row["_xref"] in self._hash_skips
+
     def import_instance(self, instance: models.Model, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Keep hash-skipped instances intact, including operator-authored values."""
 
-        if row["_xref"] not in self._hash_skips:
+        if not self.is_unchanged(row):
             super().import_instance(instance, row, **kwargs)
 
     def skip_row(
@@ -214,7 +246,7 @@ class AngeeResource(resources.ModelResource):
     ) -> bool:
         """Let native import-export record hash skips and all other row outcomes."""
 
-        return row["_xref"] in self._hash_skips or super().skip_row(instance, original, row, import_validation_errors)
+        return self.is_unchanged(row) or super().skip_row(instance, original, row, import_validation_errors)
 
     def after_save_instance(
         self,
@@ -735,9 +767,12 @@ class AngeeResource(resources.ModelResource):
     def _create_only_columns(self) -> tuple[str, ...]:
         """Project the entry's ``create_only`` field names onto import columns."""
 
-        return tuple(
-            self.fields[name].column_name if name in self.fields else name for name in self.entry.create_only
-        )
+        return tuple(self._column_name(name) for name in self.entry.create_only)
+
+    def _column_name(self, name: str) -> str:
+        """Return the import column of field ``name``; a column name is its own."""
+
+        return self.fields[name].column_name if name in self.fields else name
 
     @staticmethod
     def _created_in_this_load(instance: models.Model) -> bool:
@@ -786,7 +821,11 @@ class AngeeResource(resources.ModelResource):
         instance: models.Model,
         row: Mapping[str, Any],
     ) -> None:
-        """Persist explicit values for auto-managed fields when provided."""
+        """Persist explicit values for auto-managed fields when provided.
+
+        A model whose queryset closes collection edits (``ClosedUpdateQuerySet``)
+        takes them through its ``owner_update``, as a retained reference does.
+        """
 
         updates: dict[str, Any] = {}
         for field in self._meta.model._meta.fields:
@@ -806,8 +845,46 @@ class AngeeResource(resources.ModelResource):
 
         if not updates:
             return
-        type(instance)._default_manager.filter(pk=instance.pk).update(**updates)
+        rows = type(instance)._default_manager.filter(pk=instance.pk)
+        # A model that closes collection edits still takes the loader's stamp, an owner write.
+        if isinstance(rows, ClosedUpdateQuerySet):
+            rows.owner_update(**updates)
+        else:
+            rows.update(**updates)
         instance.refresh_from_db(fields=list(updates))
+
+
+class BaselineResource(AngeeResource):
+    """Install every row as a baseline: an addon's shipped row, beside the rows a deployment authors.
+
+    A new row has :attr:`baseline_field` set, and no row states that flag or a
+    column of :attr:`unstated_columns`, which the model derives itself. The
+    entry declares no ``adopt`` key: the flag scopes the baseline's identity
+    constraint, so a natural key could adopt a deployment's row instead.
+    """
+
+    baseline_field: ClassVar[str] = "is_baseline"
+    """The boolean column that marks a shipped row."""
+
+    unstated_columns: ClassVar[tuple[str, ...]] = ()
+    """Further columns the model derives, which a row never states."""
+
+    def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
+        """Refuse a row that states the baseline flag or a derived column."""
+
+        name = capfirst(self._meta.model._meta.verbose_name)
+        if self.baseline_field in row:
+            raise ValidationError({self.baseline_field: f"{name} resources always install baselines."})
+        if stated := [column for column in self.unstated_columns if column in row]:
+            raise ValidationError(dict.fromkeys(stated, f"{name} resources never state this column."))
+        super().before_import_row(row, **kwargs)
+
+    def init_instance(self, row: Mapping[str, Any] | None = None) -> models.Model:
+        """Construct a new row as a baseline."""
+
+        instance = super().init_instance(row)
+        setattr(instance, self.baseline_field, True)
+        return instance
 
 
 class XrefInstanceLoader(BaseInstanceLoader):

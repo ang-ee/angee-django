@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useWatch } from "react-hook-form";
+import { get, useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
@@ -14,7 +14,6 @@ import {
   type DataResourceMetadata,
   type ModelMetadata,
   type Row,
-  holdsPermission,
 } from "@angee/metadata";
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
@@ -44,19 +43,25 @@ import {
   relationListFieldInfo,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
+import { repairChoosable } from "../resource/implementation-fields";
+import { useRepairChoicesOperation } from "../resource/resource-operations";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { useArchiveActions } from "../resource/archive";
 import { useTrashActions } from "../resource/trash";
-import { recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
+import { displayedRailGroups, recordRailGroups, visibleRecordRailGroups, type RecordRailGroupProps } from "./form-view-rail";
 import { rowDependentChildren, useContainerAdmission } from "./container-admission";
 import { resolveFieldLabels, resolveGroupLabels } from "./field-labels";
 import {
   addFieldSelection,
+  displayedFormFields,
   EDITABLE_LINES_SECTION,
   fieldErrorMessages,
   flattenedFormFields,
+  formDisplaysGroup,
+  formFieldLabel,
   formSections,
   formViewFieldLayout,
+  isEmptySection,
   recordRepresentationValue,
   recordSubtitleParts,
   titleText,
@@ -64,10 +69,6 @@ import {
   visibleSections,
   type FormSectionModel,
 } from "./form-view-model";
-import {
-  lineRowErrorsFromDottedPaths,
-  type ValidationErrors,
-} from "./validation-errors";
 import {
   useFormViewRecordChrome,
   type FormViewRecordChromeSurface,
@@ -80,6 +81,7 @@ import {
 } from "./use-form-view-save";
 
 export type {
+  FormNextSave,
   FormSubmit,
   FormSubmitAcknowledgement,
   FormSubmitContext,
@@ -90,7 +92,7 @@ export { acknowledgeFormSubmit } from "./use-form-view-save";
 export type RecordPresentation = "document" | "workspace";
 
 export interface RecordFieldFocusOptions {
-  /** The pane holding the field; a sheet field, or one in the trailing lines, needs none. */
+  /** The pane holding the field; a sheet field, one in the trailing lines or one a pane group declares needs none. */
   recordTabId?: string;
 }
 
@@ -106,8 +108,18 @@ export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
   form: FormViewSaveSurface;
-  /** Focus one registered RHF field: in the sheet, or in the pane `recordTabId` names once it mounts. */
+  /**
+   * Bring one registered RHF field into sight and focus it: select the pane holding it (see
+   * `RecordFieldFocusOptions`), open a collapsed section holding it, and focus its control once
+   * that pane is the selected one.
+   */
   focusField: (path: string, options?: RecordFieldFocusOptions) => void;
+  /**
+   * The text of the label the form shows for its field `name`, so a pane that reports on a field
+   * names it as the form does: undefined for a field the form does not hold, one it shows without
+   * a label, or one whose label is not text.
+   */
+  fieldLabel: (name: string) => string | undefined;
 }
 
 export interface RecordToolbarContext {
@@ -158,6 +170,8 @@ export interface UseFormViewSurfaceProps {
   defaultValues?: Record<string, unknown>;
   acknowledgedSource?: FormViewAcknowledgedSource;
   onSaved?: (row: Row) => void;
+  /** Called after the native trash action succeeds, for example to close a routed record. */
+  onTrashed?: () => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
   /** Additional model caches refreshed after an accepted save. */
@@ -195,6 +209,7 @@ export interface FormViewSurface
   t: UiTranslate;
   /** The selected pane; undefined when the record has none. */
   activeRecordTab: string | undefined;
+  /** The field a reveal names to the sheet's sections until that reveal is done, so a collapsed one holding it opens; null otherwise. */
   requestedFocusPath: string | null;
   setActiveRecordTab: (tab: string) => void;
   isCreate: boolean;
@@ -207,7 +222,6 @@ export interface FormViewSurface
   relationByField: ReadonlyMap<string, RelationFieldInfo>;
   /** Fields rendered by the relation multi-select, with the related model it lists. */
   relationListByField: ReadonlyMap<string, RelationFieldInfo>;
-  requiredMessage: string;
   titleField: FieldDescriptor | undefined;
   titlePlacementField: FieldDescriptor | undefined;
   titleFieldMessages: readonly string[];
@@ -223,7 +237,6 @@ export interface FormViewSurface
   linesTrailing: boolean;
   railGroups: readonly RecordRailGroupProps[];
   subtitleParts: readonly React.ReactNode[];
-  lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
   declaredActions: readonly RecordActionDescriptor[];
   genericActions: readonly RecordActionDescriptor[];
   actionsBlocked: boolean;
@@ -256,6 +269,7 @@ export function useFormViewSurface({
   defaultValues,
   acknowledgedSource,
   onSaved,
+  onTrashed,
   submit,
   createSubmit,
   invalidateModels,
@@ -319,14 +333,22 @@ export function useFormViewSurface({
   const sectionAdmits = useContainerAdmission("form#sections", models, dataResource?.implFields);
   const railAdmits = useContainerAdmission("form#rail", models, dataResource?.implFields);
   const rowDependentSections = React.useMemo(() => rowDependentChildren(sectionEntries), [sectionEntries]);
-  // A create form knows no implementation: originals stand and the row-decided children that
-  // need one leave the form, fields and all, so their required fields and defaults stay out too.
-  const creating = id == null;
+  const isCreate = id == null;
+  // Whether this form displays a declared group for a record: its sections, its panes and its fields
+  // ask this, a contribution's tabs for their child's permission and admission, and its actions for
+  // their child's admission alone.
+  const displaysGroup = React.useCallback(
+    (group: Pick<GroupDescriptor, "savedOnly" | "permission" | "containerChild">, record: Row | null) =>
+      formDisplaysGroup(group, record, { isCreate, admits: sectionAdmits }),
+    [isCreate, sectionAdmits],
+  );
+  // A create form knows no implementation: originals stand and the row-decided children that need
+  // one are no part of it, so they neither number its groups nor raise its sequences.
   const formSectionEntries = React.useMemo(
-    () => creating
-      ? sectionEntries.filter((entry) => !rowDependentSections.has(entry.id) || sectionAdmits(entry.id, null))
+    () => isCreate
+      ? sectionEntries.filter((entry) => displaysGroup(rowDependentSections.has(entry.id) ? { containerChild: entry.id } : {}, null))
       : sectionEntries,
-    [creating, rowDependentSections, sectionAdmits, sectionEntries],
+    [displaysGroup, isCreate, rowDependentSections, sectionEntries],
   );
   React.useEffect(() => {
     if (!developmentMode()) return;
@@ -354,16 +376,16 @@ export function useFormViewSurface({
         const sequence = Math.max(floor, entry.sequence ?? 0);
         // A child the row decides (an `impl` child, a variant or its original) shows on the records that admit it.
         const rowDependent = rowDependentSections.has(entry.id);
+        // A contribution's permission gates every group and tab it declares.
+        const gate = {
+          ...(entry.permission !== undefined ? { permission: entry.permission } : {}),
+          ...(rowDependent ? { containerChild: entry.id } : {}),
+        };
         return { floor: sequence, declarations: [...declarations,
           ...parsePageGroups(entry.content as React.ReactNode).map(
             (group, childOrder) => ({
               kind: "group" as const,
-              // A contribution's permission gates every group and tab it declares.
-              group: {
-                ...group,
-                ...(entry.permission !== undefined ? { permission: entry.permission } : {}),
-                ...(rowDependent ? { containerChild: entry.id } : {}),
-              },
+              group: { ...group, ...gate },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
@@ -372,16 +394,14 @@ export function useFormViewSurface({
             (tab, childOrder) => ({
               kind: "tab" as const,
               tab: entry.permission === undefined && !rowDependent ? tab : { ...tab, visibleWhen: (record: Row, resource: DataResourceMetadata | null) =>
-                (entry.permission === undefined || holdsPermission(record, entry.permission))
-                && (!rowDependent || sectionAdmits(entry.id, record))
-                && (tab.visibleWhen?.(record, resource) ?? true) },
+                displaysGroup(gate, record) && (tab.visibleWhen?.(record, resource) ?? true) },
               sequence,
               order: entryOrder * 1000 + childOrder,
             }),
           ),
         ] };
       }, { floor: Number.NEGATIVE_INFINITY, declarations: [] }).declarations,
-    [formSectionEntries, rowDependentSections, sectionAdmits],
+    [displaysGroup, formSectionEntries, rowDependentSections],
   );
   const contributedGroups = React.useMemo(
     () =>
@@ -429,7 +449,6 @@ export function useFormViewSurface({
             && Boolean(canonicalMetadata?.fields[head]);
         }),
   )], [canonicalMetadata, canonicalResource, contributionFields, modelLabel, modelMetadata]);
-  const isCreate = id == null;
   const { containers = EMPTY_CONTAINERS, i18n } = useAppRuntime();
   // A declared label may be an addon message key; it reads as text from here on.
   const declaredFields = React.useMemo(
@@ -437,6 +456,9 @@ export function useFormViewSurface({
     [childFields, fields, i18n],
   );
   const baseGroups = groups ?? childGroups;
+  // The form's groups are the page's own, then the contributed ones: their sequences, their sections
+  // and the record's fields read that order.
+  const pageGroupCount = baseGroups.length;
   const declaredGroups = React.useMemo(
     () => resolveGroupLabels([...baseGroups, ...contributedGroups], i18n),
     [baseGroups, contributedGroups, i18n],
@@ -457,25 +479,35 @@ export function useFormViewSurface({
     [baseGroups, contributedGroupSequences],
   );
   const pageActions = actions ?? childActions;
-  const resolvedFields = React.useMemo(
-    () =>
-      withModeLockedFields(
-        fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
-        isCreate,
-      ),
-    [declaredFields, isCreate, modelMetadata, schemaMetadata],
+  const declaredResolvedFields = React.useMemo(
+    () => fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
+    [declaredFields, modelMetadata, schemaMetadata],
   );
-  const resolvedGroups = React.useMemo(
-    () =>
-      declaredGroups.map((group) => ({
-        ...group,
-        fields: withModeLockedFields(
-          fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
-          isCreate,
-        ),
+  const declaredResolvedGroups = React.useMemo(
+    () => declaredGroups.map((group) => ({
+      ...group,
+      fields: fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
+    })),
+    [declaredGroups, modelMetadata, schemaMetadata],
+  );
+  // The resource's repair read (its generated document, on the resource's own schema), which the lock and
+  // the save both ask: without it no repair is offered.
+  const repairOperation = useRepairChoicesOperation(dataResource);
+  const repairAvailable = repairOperation.target !== null;
+  // The mode lock for one record: a create-only selector stays choosable on an edit while the key
+  // the record stores is not registered (`repairChoosable`, the one owner of that question). It reads
+  // the stored row only, so a pick does not re-lock it.
+  const lockedFor = React.useCallback((record: Row | null) => {
+    const choosable = (field: FieldDescriptor) => repairChoosable(modelMetadata, record, field.name, repairAvailable);
+    return {
+      fields: withModeLockedFields(declaredResolvedFields, isCreate, choosable),
+      groups: declaredResolvedGroups.map((group) => ({
+        ...group, fields: withModeLockedFields(group.fields, isCreate, choosable),
       })),
-    [declaredGroups, isCreate, modelMetadata, schemaMetadata],
-  );
+    };
+  }, [declaredResolvedFields, declaredResolvedGroups, isCreate, modelMetadata, repairAvailable]);
+  // Every candidate, with no record: each create-only field locked on an edit.
+  const { fields: resolvedFields, groups: resolvedGroups } = React.useMemo(() => lockedFor(null), [lockedFor]);
   const railGroups = React.useMemo(() => isCreate ? [] : recordRailGroups(railEntries).map((group) => ({
     ...group,
     fields: (group.fields ?? []).map((row) => ({
@@ -513,18 +545,22 @@ export function useFormViewSurface({
     modelMetadata,
     schemaMetadata,
   ), [modelMetadata, schemaMetadata]);
-  // `formFields` registers every candidate so any record's values load; one record's form is the
-  // groups no row decides plus the row-decided children it admits. Its layout and its save read these.
+  // `formFields` registers every candidate so any record's values load; one record's form is its own
+  // fields and those of the groups it displays and of its rail rows. Its layout and its save read these.
+  // `basis` is the record the lock reads: the save passes its edit's basis, the record the draft was made against.
   const regularFormFieldsFor = React.useCallback(
-    (record: Row | null) => flattenedFormFields(resolvedFields, resolvedGroups.filter((group) =>
-      group.containerChild === undefined || sectionAdmits(group.containerChild, record))),
-    [resolvedFields, resolvedGroups, sectionAdmits],
+    (record: Row | null, basis: Row | null = record) => {
+      const locked = lockedFor(basis);
+      return displayedFormFields(locked.fields, locked.groups, (group) => displaysGroup(group, record), pageGroupCount);
+    },
+    [displaysGroup, lockedFor, pageGroupCount],
   );
+  // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
-    (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record), railGroups
-      .filter((group) => group.containerChild === undefined || (record != null && railAdmits(group.containerChild, record)))
-      .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
-    [railAdmits, railGroups, regularFormFieldsFor],
+    (record: Row | null, basis: Row | null = record) => flattenedFormFields(regularFormFieldsFor(record, basis),
+      (record ? displayedRailGroups(railGroups, record, railAdmits, modelMetadata) : [])
+        .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
+    [modelMetadata, railAdmits, railGroups, regularFormFieldsFor],
   );
   const defaultSlugSource = React.useMemo(
     () => formFields.find((field) => field.title)?.name,
@@ -657,11 +693,16 @@ export function useFormViewSurface({
     [selection],
   );
 
+  // The save hook runs before this surface knows its panes, so it reaches `revealField` through this ref.
+  const revealRef = React.useRef<(path: string) => void>(() => undefined);
+  const revealForSave = React.useCallback((path: string) => revealRef.current(path), []);
   const save = useFormViewSave({
+    revealField: revealForSave,
     resource,
     id,
     isCreate,
     dataResource,
+    repairOperation,
     modelMetadata,
     formFields,
     formFieldsFor,
@@ -727,23 +768,27 @@ export function useFormViewSurface({
   }
   // The sheet's own declarations for this record, never a group it does not show.
   const sheetFields = React.useMemo(
-    () => regularFormFieldsFor(save.displayRecord),
-    [regularFormFieldsFor, save.displayRecord],
+    () => regularFormFieldsFor(save.displayRecord, save.editBasis),
+    [regularFormFieldsFor, save.displayRecord, save.editBasis],
   );
   const fieldLayout = React.useMemo(
     // Title, status and body come from the sheet's own fields.
-    () => formViewFieldLayout(sheetFields, resolvedFields, resolvedGroups, modelMetadata, isCreate),
-    [isCreate, modelMetadata, resolvedFields, resolvedGroups, sheetFields],
+    () => {
+      // The sheet takes the lock from the record the save's draft was made against, as the save does.
+      const locked = lockedFor(save.editBasis);
+      return formViewFieldLayout(sheetFields, locked.fields, locked.groups, modelMetadata, isCreate);
+    },
+    [isCreate, lockedFor, modelMetadata, save.editBasis, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [
       ...pageActions,
       // Section contributions belong to the subject's menu unless explicitly placed.
-      ...contributedActions.flatMap<RecordActionDescriptor>(({ action, containerChild }) =>
-        containerChild === undefined || sectionAdmits(containerChild, save.displayRecord)
-          ? [{ ...action, placement: action.placement ?? "menu" }] : []),
+      ...contributedActions.flatMap<RecordActionDescriptor>((contributed) =>
+        displaysGroup(contributed, save.displayRecord)
+          ? [{ ...contributed.action, placement: contributed.action.placement ?? "menu" }] : []),
     ],
-    [contributedActions, pageActions, save.displayRecord, sectionAdmits],
+    [contributedActions, displaysGroup, pageActions, save.displayRecord],
   );
   const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
@@ -752,7 +797,7 @@ export function useFormViewSurface({
     t("form.record"),
   ), [modelMetadata, t, titleField]);
   const archiveActions = useArchiveActions(modelMetadata);
-  const trashActions = useTrashActions(dataResource, { name: recordName });
+  const trashActions = useTrashActions(dataResource, { name: recordName, onTrashed });
   const genericActions = React.useMemo(
     () => isCreate || readOnly ? [] : [...(submit ? [] : archiveActions), ...trashActions],
     [archiveActions, isCreate, readOnly, submit, trashActions],
@@ -772,33 +817,39 @@ export function useFormViewSurface({
         gridFields,
         gridGroups,
         declaredGroupSequences,
-        isCreate,
+        (group) => displaysGroup(group, save.displayRecord),
+        pageGroupCount,
       );
-      const permitted = groupSections.filter((section) =>
-        (section.permission === undefined
-          || (save.displayRecord != null && holdsPermission(save.displayRecord, section.permission)))
-        && (section.containerChild === undefined || sectionAdmits(section.containerChild, save.displayRecord))
-        // A declared lines section shows only where the form edits its lines.
-        && (section.key !== EDITABLE_LINES_SECTION || save.linesActive));
-      const unlabelled = permitted.filter((section) => section.label == null);
-      const labelled = permitted
+      // A declared lines section shows only where the form edits its lines.
+      const shown = groupSections.filter((section) => section.key !== EDITABLE_LINES_SECTION || save.linesActive);
+      const unlabelled = shown.filter((section) => section.label == null);
+      const labelled = shown
         .filter((section) => section.label != null)
         .sort(compareFormSections);
       return [...unlabelled, ...labelled];
     },
-    [declaredGroupSequences, gridFields, gridGroups, isCreate, save.displayRecord, save.linesActive, sectionAdmits],
+    [declaredGroupSequences, displaysGroup, gridFields, gridGroups, pageGroupCount, save.displayRecord, save.linesActive],
   );
-  // The values the sheet's sections and the rail decide their conditional fields by, watched while
-  // any field is conditional (`formFields` holds the rail's, so they count) and read only by those.
-  const conditionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
-  const shownSections = hasConditionalFields ? visibleSections(allSections, conditionValues) : allSections;
+  // The values the sheet's sections and the rail decide their conditional fields by, and whether they
+  // display a field by (`displaysField`), watched while any field is conditional (`formFields` holds the
+  // rail's, so they count) or whether a field of the sections the record displays is displayed depends on
+  // its value (the owner, asked of the field holding none, would leave it out), and read only by those.
+  const watchesValues = hasConditionalFields || allSections.some((section) => section.fields.some((field) => !save.displaysField(field, undefined)));
+  const conditionValues = useWatch({ control: save.form.control, disabled: !watchesValues });
+  const shownSections = watchesValues
+    ? visibleSections(allSections, conditionValues, (field) => save.displaysField(field, get(conditionValues, field.name)))
+    : allSections;
   const visibleRailGroups = React.useMemo(
     () => visibleRecordRailGroups(railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields),
     [railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields],
   );
-  // A `pane` group fills its own pane beneath the sheet; every other section is the sheet.
+  // A `pane` group fills its own pane beneath the sheet; every other section is the sheet. A pane with
+  // nothing to show is no pane, as the sheet renders nothing for an empty section (`isEmptySection`).
   const sections = React.useMemo(() => shownSections.filter((section) => section.pane === undefined), [shownSections]);
-  const paneSections = React.useMemo(() => shownSections.filter((section) => section.pane !== undefined), [shownSections]);
+  const paneSections = React.useMemo(
+    () => shownSections.filter((section) => section.pane !== undefined && !isEmptySection(section)),
+    [shownSections],
+  );
   const subtitleParts = React.useMemo(
     () =>
       recordSubtitleParts(
@@ -809,16 +860,6 @@ export function useFormViewSurface({
         developerMode,
       ),
     [developerMode, id, modelMetadata, save.displayRecord, t],
-  );
-  const lineRowErrors = React.useMemo(
-    () =>
-      save.linesActive && save.linesField
-        ? lineRowErrorsFromDottedPaths(
-            save.serverFieldErrors,
-            save.linesField,
-          )
-        : undefined,
-    [save.linesActive, save.linesField, save.serverFieldErrors],
   );
   const recordToolbarContext = React.useMemo<RecordToolbarContext>(
     () => ({
@@ -876,31 +917,47 @@ export function useFormViewSurface({
   });
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
-  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+  /**
+   * Bring the field at `path` into sight, and move no focus: select the pane that holds it (the
+   * visible pane `options.recordTabId` names, else the trailing lines for a path under the lines
+   * field, else the pane group declaring it; none for a field the sheet shows), and name it to the
+   * sheet's sections (`requestedFocusPath`) so a collapsed one holding it opens. The one owner of
+   * which pane holds a field, and the only thing that selects a pane for a refused save; returns the
+   * pane it selected, undefined when it selected none.
+   */
+  const revealField = React.useCallback((path: string, options?: RecordFieldFocusOptions): string | undefined => {
     const { paneIds, linesPane, fieldPanes } = focusPanesRef.current;
     const linePath = save.linesField !== null
       && (path === save.linesField || path.startsWith(`${save.linesField}.`));
-    // The sheet always shows; only a field in a pane selects that pane before it takes focus.
+    // The sheet always shows; only a field in a pane selects that pane.
     const target = options?.recordTabId && paneIds.includes(options.recordTabId) ? options.recordTabId
       : linesPane && linePath ? EDITABLE_LINES_SECTION : fieldPanes.get(path);
-    pendingFocusRef.current = { path, recordTabId: target };
     setRequestedFocusPath(path);
-    if (target !== undefined) setActiveRecordTab(target);
-    setFocusRequest((request) => request + 1);
+    // A lone pane is the one shown, with no strip: selecting it would only write its id for the caller.
+    if (target !== undefined && paneIds.length > 1) setActiveRecordTab(target);
+    return target;
   }, [focusPanesRef, save.linesField, setActiveRecordTab]);
+  revealRef.current = revealField;
+  /** Reveal the field (`revealField`), then focus it through the form library once the pane it selected is the selected one. */
+  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+    pendingFocusRef.current = { path, recordTabId: revealField(path, options) };
+    setFocusRequest((request) => request + 1);
+  }, [revealField]);
   React.useEffect(() => {
     const pending = pendingFocusRef.current;
-    if (!pending || (pending.recordTabId && pending.recordTabId !== activeRecordTab)) return;
+    if (pending?.recordTabId && pending.recordTabId !== activeRecordTab) return;
     pendingFocusRef.current = null;
-    save.form.setFocus(pending.path);
-    setRequestedFocusPath(null);
-  }, [activeRecordTab, focusRequest, save.form]);
+    if (pending) save.form.setFocus(pending.path);
+    // A reveal that asked no focus here (a refusal's, whose own owner focuses) is done too: its section saw it.
+    if (requestedFocusPath !== null) setRequestedFocusPath(null);
+  }, [activeRecordTab, focusRequest, requestedFocusPath, save.form]);
+  const fieldLabel = React.useCallback((name: string) => formFieldLabel(fieldByName, name), [fieldByName]);
   const recordPanelContext = React.useMemo<RecordPanelContext | null>(
     () =>
       !isCreate && id != null
-        ? { recordId: id, reload: save.reload, form: save, focusField }
+        ? { recordId: id, reload: save.reload, form: save, focusField, fieldLabel }
         : null,
-    [focusField, id, isCreate, save],
+    [fieldLabel, focusField, id, isCreate, save],
   );
 
   return {
@@ -917,7 +974,6 @@ export function useFormViewSurface({
     attributionFields,
     relationByField,
     relationListByField,
-    requiredMessage: t("form.required"),
     titleField,
     titlePlacementField,
     titleFieldMessages,
@@ -929,7 +985,6 @@ export function useFormViewSurface({
     linesTrailing,
     railGroups: visibleRailGroups,
     subtitleParts,
-    lineRowErrors,
     declaredActions,
     genericActions,
     actionsBlocked,

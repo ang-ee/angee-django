@@ -23,6 +23,7 @@ from joserfc import jwt
 from joserfc.jwk import ECKey, RSAKey
 from rebac import system_context
 
+from angee.base.serialization import MAX_JSON_DOCUMENT_DEPTH
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
@@ -187,6 +188,8 @@ def test_a_key_file_is_stored_as_provider_neutral_signing_material(key_file: str
         pytest.param("", "This field is required.", id="missing"),
         pytest.param("-----BEGIN PRIVATE KEY-----", "Paste the provider's JSON key file.", id="not-json"),
         pytest.param("[]", "Paste the provider's JSON key file.", id="not-an-object"),
+        pytest.param('{"type": ' + "[" * MAX_JSON_DOCUMENT_DEPTH + "0" + "]" * MAX_JSON_DOCUMENT_DEPTH + "}",
+                     "Paste the provider's JSON key file.", id="nested-past-the-document-bound"),
         pytest.param(neutral_key_file(issuer=None), "The key file has no issuer.", id="neutral-no-issuer"),
         pytest.param(google_key_file(client_email=None), "The key file has no client_email.", id="google-no-issuer"),
         pytest.param(neutral_key_file(private_key="-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----"),

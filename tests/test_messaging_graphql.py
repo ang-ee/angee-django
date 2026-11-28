@@ -37,6 +37,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import create_platform_admin as _platform_admin
+from tests.test_messaging_compose import MAILERS
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -182,7 +183,8 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
     # Connect owns channel creation. Updates include the operator label, spaces'
-    # team and intake's configuration; the generated preview forecasts the purge.
+    # team and intake's configuration, and the create-only selector the model's
+    # save lets change only as a repair; the generated preview forecasts the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
         "display_name",
@@ -190,6 +192,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "intake_queue",
         "intake_field_map",
         "intake_requester_domains",
+        "backend_class",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "channels_delete"
@@ -464,8 +467,8 @@ def test_inbox_labels_coexist_with_guarded_relation_selections(db: None) -> None
         assert hidden == [{"id": message.sqid, "thread_title": "", "channel_vendor_name": ""}]
 
 
-def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
-    """Message and participant handles expose the curated party identity."""
+def test_message_sender_and_recipient_expose_resolved_party(db: None) -> None:
+    """Message sender and recipient handles expose the curated party identity."""
 
     admin = _platform_admin("msg-party-handle-admin")
     thread, message = _seed_thread_and_message(admin)
@@ -483,11 +486,10 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
         party.with_actor(admin).confirm_statement(aspect="handle", handle=handle, values={})
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
-        messaging_models.Participant.objects.create(
-            thread=thread,
+        messaging_models.Recipient.objects.create(
             message=message,
             handle=handle,
-            role=messaging_models.Participant.ParticipantRole.FROM,
+            role=messaging_models.Recipient.RecipientRole.TO,
             created_by_id=admin.pk,
         )
 
@@ -498,7 +500,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             query MessageIdentity($id: String!) {
               messages_by_pk(id: $id) {
                 sender { display_name party_link_confirmed party { display_name } }
-                participants { handle { display_name party_link_confirmed party { display_name } } }
+                recipients { handle { display_name party_link_confirmed party { display_name } } }
               }
             }
             """,
@@ -513,7 +515,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             "party_link_confirmed": True,
             "party": {"display_name": "Ada Curated"},
         },
-        "participants": [
+        "recipients": [
             {
                 "handle": {
                     "display_name": "Ada Envelope",
@@ -3306,7 +3308,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
 
     Fix 2: the inventory (:meth:`ChannelManager.inventory`) counts the channel's
     threads/messages AND their top-level CASCADE children (parts, reactions, stars,
-    edges, participants, notifications, followers), so the count-based
+    edges, recipients, notifications, followers), so the count-based
     forecast matches what ``teardown_for_channel`` + the channel delete remove — no
     under-count from omitted subtrees. Compared against Django's authoritative per-call
     ``.delete()`` totals over the exact same scope.
@@ -3332,16 +3334,18 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
             thread=thread2, channel=channel, external_id="acc-a2", status="synced", created_by_id=owner_id
         )
         # Message-rooted CASCADE children on msg1: a nested part tree, a reaction, a star,
-        # a cross-message edge; and both participant flavors (message- and
-        # thread-attached, to exercise the OR predicate) plus a delivery notification.
+        # a cross-message edge; a recipient on each message, plus a delivery notification
+        # (message- and thread-attached, to exercise the OR predicate).
         root_part = messaging_models.Part._base_manager.create(message=msg1, fragment=fragment, role="body")
         messaging_models.Part._base_manager.create(message=msg1, parent=root_part, fragment=fragment, role="quoted")
         messaging_models.Part._base_manager.create(message=msg2, fragment=fragment, role="body")
         messaging_models.Reaction._base_manager.create(message=msg1, reaction="like", created_by_id=owner_id)
         messaging_models.MessageStar._base_manager.create(message=msg1, user_id=owner_id, created_by_id=owner_id)
         messaging_models.MessageEdge._base_manager.create(src=msg1, dst=msg2, created_by_id=owner_id)
-        messaging_models.Participant._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
-        messaging_models.Participant._base_manager.create(thread=thread2, handle=handle, created_by_id=owner_id)
+        messaging_models.Recipient._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
+        messaging_models.Recipient._base_manager.create(
+            message=msg2, handle=handle, created_by_id=owner_id,
+        )
         # Thread-rooted CASCADE children: a bare follower and a delivery notification.
         messaging_models.ThreadFollower._base_manager.create(
             thread=thread1,
@@ -3368,6 +3372,84 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
     labels = {group.label for group in preview.deleted}
     assert str(messaging_models.Part._meta.verbose_name_plural) in labels
     assert str(messaging_models.Reaction._meta.verbose_name_plural) in labels
+
+
+@pytest.mark.parametrize("purged", ("survivor", "copy"))
+def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, settings: Any, purged: str) -> None:
+    """The preview and the confirmed totals count every recipient row the purge deletes.
+
+    A recipient row cascades from its message and from its thread, and a thread's delete
+    takes its messages too; the inventory counts messages and recipients by the message's
+    channel. That is exact on two premises every writer keeps. A recipient's thread is
+    its message's: ingest, a re-sync that moves a message to the thread its References
+    name, a source-thread correction, an answer ``compose`` addresses, and a merge of one
+    channel's thread and message into another's, which moves no row. A message in a
+    channel's thread belongs to that channel: a reply received through another account
+    answering this channel's message lands in a thread of its own channel.
+    """
+
+    settings.MAILERS = MAILERS
+    channel = make_integration(
+        "purge-recipients", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
+    )
+    other = make_integration("purge-recipients-copy", model=Channel, backend_class="email", owner=channel.owner)
+    parsed = messaging_models._parsed
+    late = parsed("late@example.test", subject="Late", references=("parent@example.test",))
+    messaging_models._ingest(
+        [parsed("request@example.test", subject="Access"), late, parsed("parent@example.test", subject="Parent")],
+        channel=channel,
+    )
+    messaging_models._ingest([late], channel=channel)
+    messaging_models._ingest([parsed("request@example.test", subject="Access")], channel=other)
+    messaging_models._ingest(
+        [parsed("answer@example.test", subject="Elsewhere", in_reply_to="parent@example.test")], channel=other,
+    )
+    messages = messaging_models.Message._base_manager
+    request, copy = (messages.get(channel=source, external_id="request@example.test") for source in (channel, other))
+    with system_context(reason="test.channel.purge_recipients.seed"):
+        first, second = (
+            messaging_models.Thread.objects.create(channel=channel, platform="other", external_id=f"purge-rcp-{index}")
+            for index in range(2)
+        )
+        corrected = parsed("corrected@example.test")
+        messaging_models.Message.objects.ingest([corrected], channel=channel, explicit_thread=first, historical=True)
+        messaging_models.Message.objects.ingest(
+            [corrected], channel=channel, explicit_thread=second, expected_thread=first, historical=True,
+        )
+    request.thread.with_actor(channel.owner).merge(records=[copy.thread.public_id])
+    request.with_actor(channel.owner).merge(records=[copy.public_id])
+    reply = messaging_models.Message.objects.compose(parent=request, text="Which team?", actor=channel.owner)
+    recipients = messaging_models.Recipient._base_manager
+    assert messages.get(external_id="late@example.test").thread_id == messages.get(
+        external_id="parent@example.test"
+    ).thread_id
+    assert messages.get(external_id="corrected@example.test").thread_id == second.pk
+    assert recipients.filter(message=reply).count() == 1
+    assert messages.get(pk=copy.pk).merged_into_id == request.pk
+    pairs = recipients.values_list("pk", "thread_id", "message__thread_id")
+    assert [pair for pair in pairs if pair[1] != pair[2]] == []
+    homes = messages.filter(thread__channel__isnull=False).values_list("pk", "channel_id", "thread__channel_id")
+    assert [home for home in homes if home[1] != home[2]] == []
+
+    target = channel if purged == "survivor" else other
+    before = recipients.count()
+    schema = _schema()
+    document = """mutation Delete($id: ID!, $confirm: Boolean!) {
+      channels_delete(id: $id, confirm: $confirm) { total_deleted_count has_blockers deleted { label count } }
+    }"""
+    shown, reported = (
+        _data(execute_schema(schema, document, {"id": str(target.sqid), "confirm": confirm}, user=channel.owner))[
+            "channels_delete"
+        ]
+        for confirm in (False, True)
+    )
+    assert reported == shown
+    assert not Channel._base_manager.filter(pk=target.pk).exists()
+    counted = {group["label"]: group["count"] for group in shown["deleted"]}
+    deleted = before - recipients.count()
+    assert counted[str(messaging_models.Recipient._meta.verbose_name_plural)] == deleted == (
+        5 if purged == "survivor" else 2
+    )
 
 
 def test_channel_teardown_mutes_per_row_change_broadcasts(db: None) -> None:

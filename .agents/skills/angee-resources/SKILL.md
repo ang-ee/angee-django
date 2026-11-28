@@ -20,11 +20,11 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 | `<addon>/pyproject.toml` `[tool.angee.resources]` | which files load, their tier, `adopt`, `depends_on`, `kind`, `model`; `retired_models` | `[tool.angee.resources]` in `src/angee/money/pyproject.toml` and `examples/src/example/notes/pyproject.toml` |
 | `<addon>/resources/<tier>/NNN_<label>.<model>.yaml` | the rows; the filename names the target model | `src/angee/tags/resources/demo/010_tags.tag.yaml` |
 | `src/angee/resources/entries.py`, `tiers.py` | manifest parsing, filename inference, dependency order, grant rows, the row xref rule; the three tiers and their prerequisite order | `resource_manifest_for`, `retired_models_for`, `ResourceEntry`, `ResourceEntry.normalize_xref`, `infer_model_label`, `EntryGraph.ordered`, `GrantRow`; `ResourceTier`, `with_prerequisites` |
-| `src/angee/resources/loader.py` | resolving rows through the ledger, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash | `AngeeResource`, `after_init_instance`, `after_save_instance`, `_row_content_hash`, `_adoption_fields`, `_unique_adoption_field`, `_validate_headers`, `_validate_catalogue_tier`, `build_resource` |
+| `src/angee/resources/loader.py` | resolving rows through the ledger, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash and its skip | `AngeeResource`, `after_init_instance`, `after_save_instance`, `is_unchanged`, `_row_content_hash`, `_adoption_fields`, `_unique_adoption_field`, `_validate_headers`, `_validate_catalogue_tier`, `build_resource` |
 | `src/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin`, `is_catalogue_model`, `check`, `after_resource_load` |
 | `src/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)` and its target-model compatibility; ledger writes for imports and owner-bound identities; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource`, `Resource.require_target_model`; `retired_seed_keys`, `seeded_record_merge_guard`, `ResourceManager`, `upsert_target`, `bind_instance`, `load_addons`, `load_xref`, `_check_load_tiers`, `_excluded_entry_keys`, `_check_xref_collisions` |
 | `src/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups` and the module docstring; `Command` |
-| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` |
+| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` at authoring, `check_plan_drops` at `migrate` |
 
 ## Reuse first
 
@@ -37,8 +37,13 @@ description: "Declares and loads an addon's master, install and demo data: pypro
   `angee.resources.testing` (the `src/angee/resources/testing/__init__.py` module docstring).
 - Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py`), `money.Currency`
   (`src/angee/money/models.py`); contribute rows with `adopt`.
-- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py`);
-  non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py`).
+- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py`),
+  `FormResource` (`src/angee/webforms/resources.py`: a form, published or `publish: false`, its xref-named config records resolved
+  through `Resource.objects.resolve_config_references`); non-row declarations use `ResourceEntryKind`
+  (`src/angee/resources/kinds.py`).
+- Shipped baselines beside deployment-authored rows: `BaselineResource` (`loader.py`) sets the
+  flag on every loaded row and refuses a row that states it or a derived column (`Dashboard` in
+  `src/angee/dashboards/models.py`, `MessageTemplateResource` in `src/angee/messaging_templates/resources.py`).
 
 ## Steps
 
@@ -100,8 +105,16 @@ description: "Declares and loads an addon's master, install and demo data: pypro
    `create_only = ["<field>", …]` in a row entry of its own: applied only to a row the load
    creates, never on adoption or re-application (`after_init_instance` and `load_scope` in
    `loader.py`; `iam_integrate_oidc/pyproject.toml`). Adding it to a shipped entry re-applies
-   that entry's existing rows once, since their hashes change. If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
-   in a tier at or below yours (`EntryGraph.ordered` in `entries.py`). **Owner rule:** the manifest selects files
+   that entry's existing rows once, since their hashes change. If an adapter's owner verb does not treat an
+   omitted column as keeping what is stored (it publishes the stored value or applies a default instead) → name
+   it, with the reason, in the adapter's `never_create_only` (`AngeeResource` in `loader.py`; `FormResource`,
+   `WorkflowDefinitionResource`); the load refuses an entry listing it before any row of that entry, and rolls back.
+   If a relation names another addon's seed → `depends_on = "<label>:<tier>/<file>"`, the
+   path that addon's manifest declares (`iam_messaging/pyproject.toml` depends on
+   `messaging_templates:install/030_messaging_templates.messagetemplate.yaml`), in a tier at or below yours
+   (`EntryGraph.ordered` in `entries.py`; `_package_resource_entry` prefixes `resources/` to an entry's path and to
+   each dependency's after the label, which `EntryGraph._dependency_key` splits at the first `:`, so a written
+   `resources/` is doubled). **Owner rule:** the manifest selects files
    and keys; the model owns uniqueness, so no field is adoptable without it
    ([addon declarations](../../../docs/composer.md#addon-declarations)).
 

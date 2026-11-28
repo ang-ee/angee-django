@@ -163,14 +163,10 @@ function ConsoleLayoutBody({
                   <div className="contents" data-console-notices>
                     <ContainerOutlet entries={notices} />
                   </div>
-                  <div
-                    ref={setControlHost}
-                    className="contents"
-                    data-console-controls
-                  />
                 </div>
                 <BreadcrumbContentLinks trail={nestedTrail}>
                   <ConsoleWorkbench
+                    controlHostRef={setControlHost}
                     showChatter={showChatter}
                     onPrimaryController={handlePrimaryController}
                     onCompactChatterController={setCompactChatterController}
@@ -233,11 +229,13 @@ function ConsoleLayoutBody({
  * The primary pane exists only while a page publishes a contextual explorer.
  */
 function ConsoleWorkbench({
+  controlHostRef,
   showChatter,
   onPrimaryController,
   onCompactChatterController,
   children,
 }: {
+  controlHostRef: React.RefCallback<HTMLDivElement>;
   showChatter: boolean;
   onPrimaryController: (controller: PaneToggleController | null) => void;
   onCompactChatterController: (controller: PaneToggleController | null) => void;
@@ -319,7 +317,6 @@ function ConsoleWorkbench({
       <Workbench
         className="area-content"
         autoSave="console.workbench.v3"
-        scrollMode="contained"
         primary={
           desktopPrimary != null ? (
             <ControlBandProvider host={undefined}>
@@ -335,7 +332,10 @@ function ConsoleWorkbench({
         onPrimaryController={setDesktopPrimaryController}
         onSecondaryController={desktopChatter ? registerSecondaryController : undefined}
       >
-        <main className={cn("console-content-main", bottomRail && "pb-12")}>{children}</main>
+        <div className="flex h-full min-h-0 min-w-0 flex-col">
+          <div ref={controlHostRef} className="shrink-0" data-console-controls />
+          <main className={cn("console-content-main flex-1", bottomRail && "pb-12")}>{children}</main>
+        </div>
       </Workbench>
       <Drawer.Root
         open={compactPrimary != null && compactPrimaryOpen}

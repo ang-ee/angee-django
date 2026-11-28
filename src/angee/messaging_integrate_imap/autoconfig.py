@@ -6,4 +6,5 @@ SETTINGS = {
     # Contribute the IMAP backend into the channel backend registry. Dotted key
     # so it merges into messaging's default rather than replacing it.
     "ANGEE_CHANNEL_BACKEND_CLASSES.imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
+    "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES.imap_mbox": "angee.messaging_integrate_imap.extractor.MboxExtractor",
 }

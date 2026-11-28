@@ -1,10 +1,12 @@
 import * as React from "react";
-import { Action, Column, Facet, Field, Form, Group, List, PaneToolbarHost, ResourceList, rowValueAtPath, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
+import { Action, Column, Facet, Field, Form, Group, List, PaneToolbarHost, ResourceList, pathnameChanges, rowValueAtPath, type RecordTabDescriptor, type StringIdRow } from "@angee/ui";
 
-import { ThreadTranscript } from "./ThreadTranscript";
+import { ThreadTranscript, type ThreadTranscriptReply } from "./ThreadTranscript";
 import { useMessagingT } from "./i18n";
 
 const MODEL = "messaging.Thread";
+// A record tab stays mounted, so only leaving the thread's page abandons an unsent reply.
+const THREAD_REPLY: ThreadTranscriptReply = { leaves: pathnameChanges };
 interface ThreadListRow extends StringIdRow {
   title?: unknown;
 }
@@ -21,7 +23,7 @@ function threadRecordTabs(
       label: t("threads.tabConversation"),
       presentation: "full-bleed",
       // The transcript's controls publish into this tab's own pane toolbar row.
-      render: (context) => <PaneToolbarHost><ThreadTranscript threadId={context.recordId} order="conversation" /></PaneToolbarHost>,
+      render: (context) => <PaneToolbarHost><ThreadTranscript threadId={context.recordId} order="conversation" reply={THREAD_REPLY} /></PaneToolbarHost>,
     },
   ];
 }

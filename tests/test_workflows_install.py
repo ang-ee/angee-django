@@ -8,8 +8,9 @@ import pytest
 import yaml
 from django.apps import apps
 from django.db import IntegrityError, transaction
-from rebac import system_context
+from rebac import actor_context, system_context
 
+from angee.provenance.context import changeset
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
 from angee.workflows.definition import (
@@ -19,16 +20,71 @@ from angee.workflows.definition import (
     WorkflowExtension,
 )
 from angee.workflows.steps import Step
-from angee.workflows.testing.models import Workflow, WorkflowVersion
-from tests.conftest import make_addon, write_addon_package
+from angee.workflows.testing.models import Trigger, Workflow, WorkflowRun, WorkflowVersion
+from tests.conftest import create_platform_admin, create_user, make_addon, vault_for, write_addon_package
+from tests.test_workflows_triggers import capture, restrict_source_grant_to_record
+from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
+from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
+
+RELEASED = "install/100_workflows.workflow.yaml"
+DRAFT_REFUSAL = (
+    "draft is installed and published on every changed row, so it is never create_only: under create_only "
+    "a changed row would publish the draft staff hold."
+)
+PUBLISH_REFUSAL = (
+    "publish applies on every changed row, so it is never create_only: under create_only a changed row "
+    "would publish, whatever the entry declares."
+)
+REFUSALS = {"draft": DRAFT_REFUSAL, "publish": PUBLISH_REFUSAL}
+STAFF_DRAFT = document("entry", "staff_draft")
+UNPUBLISHABLE_DRAFT = {"nodes": {"entry": {"step": "echo"}, "stray": {"step": "echo"}}, "results": [{"from": "entry"}]}
+"""A draft staff may save but not publish: it has two entry nodes."""
 
 
 class InstallProbe(Step[None, None, None]):
     """Registered graph declaration used by resource installation contracts."""
 
     key = "install_probe"
+
+
+class Release:
+    """An addon shipping one install-tier workflow row, rewritten between loads."""
+
+    def __init__(self, path: Path, **fields: Any) -> None:
+        (path / "resources" / "install").mkdir(parents=True)
+        self.path = path
+        self.fields = {"key": "shipped", "name": "Shipped", "draft": document("entry"), **fields}
+        self.addon = make_addon(path=path, resources={"install": [{"path": RELEASED}]})
+
+    def load(self, *, create_only: tuple[str, ...] = (), **changes: Any) -> Any:
+        """Declare the row with ``changes`` and the entry with ``create_only``, then load the install tier."""
+
+        entry: dict[str, Any] = {"path": RELEASED, **({"create_only": list(create_only)} if create_only else {})}
+        write_addon_package(self.addon, resources={"install": [entry]})
+        row = {"xref": "shipped", "fields": {**self.fields, **changes}}
+        (self.path / "resources" / RELEASED).write_text(yaml.safe_dump({"rows": [row]}, sort_keys=False))
+        return Resource.objects.load_addons((self.addon,), tiers=[Resource.Tier.INSTALL])
+
+    def workflow(self) -> Any:
+        with system_context(reason="tests.workflows.release read"):
+            return Workflow.system_queryset().get(key="shipped")
+
+    def state(self) -> tuple[Any, ...]:
+        """What staff and admission see: the name, the draft, the served version and every version."""
+
+        workflow = self.workflow()
+        with system_context(reason="tests.workflows.release read"):
+            versions = list(WorkflowVersion.system_queryset().filter(workflow=workflow).values_list("pk", flat=True))
+        return workflow.name, workflow.draft, workflow.draft_revision, workflow.published_id, versions
+
+    def save_staff_draft(self, draft: dict[str, Any], actor: Any) -> None:
+        workflow = self.workflow()
+        with actor_context(actor), changeset(fresh=True, change_reason="Staff draft"):
+            Workflow.objects.save_draft(
+                workflow, draft=draft, expected_revision=workflow.draft_revision, actor=actor,
+            )
 
 
 def _extensible_document() -> dict[str, Any]:
@@ -451,3 +507,101 @@ def test_the_installing_user_owns_the_workflow(execution):
         actor=actor,
     )
     assert (workflow.owner_id, workflow.created_by_id) == (actor.pk, actor.pk)
+
+
+@pytest.mark.parametrize(("create_only", "refusal"), [
+    pytest.param(("draft",), DRAFT_REFUSAL, id="draft"),
+    pytest.param(("publish",), PUBLISH_REFUSAL, id="publish"),
+    pytest.param(("publish", "draft"), f"{DRAFT_REFUSAL} {PUBLISH_REFUSAL}", id="both-named"),
+])
+def test_a_first_load_listing_draft_or_publish_under_create_only_is_refused(
+    db: None, tmp_path: Path, create_only: tuple[str, ...], refusal: str,
+) -> None:
+    """The entry is refused before any row: under create_only a changed row would publish against it."""
+
+    release = Release(tmp_path, publish=False)
+
+    with pytest.raises(ResourceLoadError) as refused:
+        release.load(create_only=create_only)
+
+    assert str(refused.value).endswith(f": {refusal}")
+    with system_context(reason="tests.workflows.release ledger"):
+        assert not Workflow.system_queryset().filter(key="shipped").exists()
+        assert not Resource.objects.filter(source_addon=release.addon.name).exists()
+
+
+@pytest.mark.parametrize(("create_only", "changes", "staff_draft"), [
+    pytest.param(("draft",), {"name": "Renamed"}, STAFF_DRAFT, id="draft-on-a-renamed-row"),
+    pytest.param(("draft",), {}, STAFF_DRAFT, id="draft-newly-create-only"),
+    pytest.param(("draft",), {"name": "Renamed"}, UNPUBLISHABLE_DRAFT, id="draft-over-an-unpublishable-staff-draft"),
+    pytest.param(("publish",), {"publish": False}, STAFF_DRAFT, id="publish-newly-create-only"),
+])
+def test_a_reapplied_row_listing_draft_or_publish_under_create_only_is_refused_and_staffs_draft_stays(
+    db: None, tmp_path: Path, create_only: tuple[str, ...], changes: dict[str, Any], staff_draft: dict[str, Any],
+) -> None:
+    """The release's entry is refused on every load, never on what staff hold; nothing is published."""
+
+    staff = create_platform_admin("workflow-release-staff")
+    release = Release(tmp_path)
+    assert release.load().created == 1
+    release.save_staff_draft(staff_draft, staff)
+    before = release.state()
+
+    for _load in ("release load", "the next load"):
+        with pytest.raises(ResourceLoadError) as refused:
+            release.load(create_only=create_only, **changes)
+        assert str(refused.value).endswith(f": {REFUSALS[create_only[0]]}")
+    assert release.state() == before
+
+
+def test_a_refused_release_never_serves_staffs_draft_to_a_run_as_the_workflow_principal(
+    execution, trigger_resource_schema, tmp_path: Path, monkeypatch,
+) -> None:
+    """An editor's draft is not published as system-installed, so admission keeps running the release's version."""
+
+    admin, _sent = execution
+    release = Release(tmp_path, subject_model="knowledge.vault")
+    release.load()
+    workflow = release.workflow()
+    record = vault_for(admin, name="Ready")
+    editor = create_user("workflow-release-editor")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    restrict_source_grant_to_record(monkeypatch, record)
+    with actor_context(admin):
+        trigger = Trigger.objects.create(
+            workflow=workflow, source="record_changed", model_label="knowledge.vault",
+            condition={"name": {"_eq": "Ready"}},
+        )
+    Trigger.objects.enable(trigger, actor=admin)
+    release.save_staff_draft(STAFF_DRAFT, editor)
+    released = release.workflow().published_id
+
+    with pytest.raises(ResourceLoadError, match="never create_only"):
+        release.load(create_only=("draft",), name="Renamed")
+
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    with system_context(reason="tests.workflows.release runs"):
+        assert list(WorkflowRun.system_queryset().values_list("version_id", flat=True)) == [released]
+
+
+def test_a_staff_save_after_a_release_load_takes_the_loads_revert_off_the_workflows_history(
+    db: None, tmp_path: Path, django_capture_on_commit_callbacks,
+) -> None:
+    """A later write refuses reverting the load, so its history no longer offers it; staff's own save reverts."""
+
+    staff = create_platform_admin("workflow-history-staff")
+    release = Release(tmp_path)
+    release.load()
+    release.save_staff_draft(STAFF_DRAFT, staff)
+    with django_capture_on_commit_callbacks(execute=True):
+        release.load(draft=document("entry", "released_next"))
+    with django_capture_on_commit_callbacks(execute=True):
+        release.save_staff_draft(document("entry", "staff_after_release"), staff)
+    workflow = release.workflow()
+    with system_context(reason="tests.workflows.history"):
+        *_, load, save = dict.fromkeys(version.changeset for version in workflow.history.order_by("history_id"))
+    assert (load.change_reason, save.change_reason) == ("resources.load", "Staff draft")
+
+    with actor_context(staff):
+        assert workflow.revertable_changesets((load, save), actor=staff) == {save.pk}

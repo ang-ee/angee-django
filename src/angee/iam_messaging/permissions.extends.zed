@@ -1,0 +1,12 @@
+// Additive REBAC extension of IAM's accounts: the emailed sign-in link action.
+// @rebac_package: iam_messaging
+// @rebac_schema_revision: 3
+
+definition auth/user {
+    // Mails the account a single-use sign-in link as system mail. The action never shows the link,
+    // but its holders read it recorded on the system channel (messaging's README, System mail).
+    permission issue_sign_in_link = admin->member
+    // Its holders see who is active and who is not staff, as the account actions need.
+    permission active_account_granted = issue_sign_in_link
+    permission nonstaff_account_granted = issue_sign_in_link
+}

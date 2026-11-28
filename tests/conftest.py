@@ -32,6 +32,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
+from angee.iam_messaging.testing import models as iam_messaging_models  # noqa: F401 -- register sign-in links
 from angee.intake.models import Need as AbstractNeed
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
@@ -85,6 +86,7 @@ from tests import (
     integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
 )
 from tests.extcontrib.models import Role
+from tests.workflow_steps import child_graph as child_graph
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 # Settings reloads in the suite compose through ProjectContract, which starts
@@ -654,6 +656,10 @@ class ExtcontribRole(Role):
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 # Every installed backing needs its concrete model before native database setup.
+# The brand kit's logos point at the storage File registered above.
+from angee.brandkit.testing import models as brandkit_models  # noqa: E402, F401
+from angee.decisions_messaging.testing import models as decisions_messaging_models  # noqa: E402, F401
+from angee.messaging_templates.testing import models as messaging_templates_models  # noqa: E402, F401
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401

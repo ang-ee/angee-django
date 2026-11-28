@@ -49,7 +49,7 @@ class PairingActionError(ValueError):
 
 
 class OutboundEmailNotConfigured(DomainError, ValidationError):
-    """No channel backend, or not the requested one, offers configured outbound email delivery.
+    """No channel backend, or not the requested one, has outbound email delivery configured.
 
     A validation refusal keyed to ``channel``, so a sending form shows it beside its
     channel choice; the schema projects its code.
@@ -65,7 +65,7 @@ class OutboundEmailNotConfigured(DomainError, ValidationError):
 
 
 class OutboundEmailChannelMissing(DomainError, ValidationError):
-    """Outbound email is configured, but no selected channel is connected on a backend offering it."""
+    """Outbound email is configured, but no selected channel is connected on a backend it is configured for."""
 
     code = "OUTBOUND_EMAIL_CHANNEL_MISSING"
 
@@ -74,6 +74,18 @@ class OutboundEmailChannelMissing(DomainError, ValidationError):
             self,
             {"channel": ValidationError("Select a connected email channel.", code=self.code)},
         )
+
+
+class SystemChannelMissing(DomainError, ValidationError):
+    """The system channel's install row is absent: resources never loaded, or the row deleted until the next load."""
+
+    code = "SYSTEM_CHANNEL_MISSING"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(self, {"channel": ValidationError(
+            "The system channel is not installed. Run `manage.py resources load` (provision runs it).",
+            code=self.code,
+        )})
 
 
 class DeliveryUncertain(IntegrationError):
@@ -126,7 +138,7 @@ class ParsedRecipient:
     """One addressed party on a message and its envelope role."""
 
     handle: ParsedHandle
-    role: str = "to"  # from / to / cc / bcc
+    role: str = "to"  # to / cc / bcc; the sender is ``ParsedMessage.sender``
 
 
 @dataclass(frozen=True)
@@ -235,7 +247,7 @@ class ParsedMessage:
     def sync_hash(self, *, channel_id: Any, metadata: dict[str, Any], received_at: datetime | None = None) -> str:
         """Return a stable digest of everything an ingest of this message into ``channel_id`` would write.
 
-        Covers the message columns, its part tree and its participants, so an
+        Covers the message columns, its part tree and its recipients, so an
         identical re-sync hashes equal and ingest can skip the rewrite. The thread is
         excluded: a re-thread must still reconcile counters even when nothing else
         changed, so ingest compares it separately. ``metadata`` is the envelope
@@ -331,6 +343,13 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     """
 
     registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
+    system_only: ClassVar[bool] = False
+    """Whether this protocol serves the system channel alone, so people never choose it to send from or to watch.
+
+    A channel on a system-only backend is never selected for outbound email
+    (``ChannelQuerySet.outbound_email``) and never accepted as a workflow trigger's
+    source (``Channel.system_only``).
+    """
     delivery_visibility_delay: ClassVar[timedelta] = timedelta()
     """Minimum age of a possibly accepted claim before reconciliation; feeds extend it."""
     source_kind: ClassVar[SourceKind | None] = None
@@ -343,7 +362,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
     @classmethod
     def outbound_email_configured(cls) -> bool:
-        """Whether this backend currently offers configured outbound email delivery.
+        """Whether outbound email delivery is currently configured for this backend.
 
         Read without constructing a transport, so a channel selection can admit
         every backend that declares it.
@@ -354,8 +373,11 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     def outbound_sender(self) -> tuple[str, str]:
         """Return this channel's validated default ``(name, address)`` email sender.
 
-        A backend that offers no outbound email refuses with
-        :class:`OutboundEmailChannelMissing`.
+        A backend without outbound email refuses with
+        :class:`OutboundEmailChannelMissing`. Whatever a backend returns,
+        ``MessageManager.compose`` lands the address in the handle owner's stored form
+        and refuses, under ``channel``, one the handle owner cannot land; the email
+        backend writes From as this returns it, whatever spelling the handle keeps.
         """
 
         raise OutboundEmailChannelMissing

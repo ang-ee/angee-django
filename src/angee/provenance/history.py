@@ -23,6 +23,7 @@ from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
 
+from angee.base.fields.implementation import ImplClassField
 from angee.provenance.bases import ChangesetHistory as ChangesetHistory
 from angee.provenance.context import changeset, changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
@@ -54,6 +55,35 @@ class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
     ``historical_queryset`` subclasses it, so the provenance mypy plugin binds
     the concrete historical row to ``T``.
     """
+
+    def versions_of(self, pk: Any, *, before: Any = None) -> Self:
+        """The versions of tracked row ``pk`` in this table, those recorded before version ``before`` if given.
+
+        The latest comes first: sequence ids order one table's versions, dates may tie.
+        Each argument is a value or an ``OuterRef``, so a reader fetches what a check wraps in ``Exists``.
+        """
+
+        key = cast(_GeneratedHistory, self.model).instance_type._meta.pk.attname
+        rows = self.filter(**{key: pk})
+        if before is not None:
+            rows = rows.filter(history_id__lt=before)
+        return cast(Self, rows.order_by("-history_id"))
+
+    def dated_versions_of(self, pk: Any, *, until: Any = None, excluding_changeset: Any = None) -> Self:
+        """The versions of row ``pk`` dated no later than ``until`` and outside ``excluding_changeset``, if given.
+
+        The latest comes first by date: dates order versions across tables, as an MTI
+        descendant's versions, which carry an ancestor's columns, are read. Each
+        argument is a value or an ``OuterRef``.
+        """
+
+        key = cast(_GeneratedHistory, self.model).instance_type._meta.pk.attname
+        rows = self.filter(**{key: pk})
+        if until is not None:
+            rows = rows.filter(history_date__lte=until)
+        if excluding_changeset is not None:
+            rows = rows.exclude(changeset_id=excluding_changeset)
+        return cast(Self, rows.order_by("-history_date", "-history_id"))
 
 
 class _GeneratedHistory(Protocol):
@@ -237,14 +267,11 @@ class ModelHistory(HistoricalRecords):
 
         target = last.history_object
         model = type(target)
-        key = model._meta.pk.attname
         if previous is UNLOADED:
-            previous = (
-                type(last)
-                .objects.filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
-                .order_by("-history_id")
-                .first()
-            )
+            key = model._meta.pk.attname
+            previous = get_history_manager_for_model(model).versions_of(
+                getattr(last, key), before=first.history_id,
+            ).first()
         fields = {
             field.name: field
             for field in model._meta.concrete_fields
@@ -375,12 +402,7 @@ class ModelHistory(HistoricalRecords):
             return Value(None, output_field=models.CharField())
         latest = [
             Cast(
-                Subquery(
-                    get_history_manager_for_model(table)
-                    .filter(**{table._meta.pk.attname: OuterRef("pk")})
-                    .order_by("-history_id")
-                    .values("history_id")[:1]
-                ),
+                Subquery(get_history_manager_for_model(table).versions_of(OuterRef("pk")).values("history_id")[:1]),
                 models.CharField(),
             )
             for table in self.carriers(model)
@@ -480,10 +502,15 @@ class ModelHistory(HistoricalRecords):
         return options
 
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
-        """Copy MTI identity as a regular historical relation, not an inheritance link."""
+        """Copy MTI identity as a regular historical relation, not an inheritance link.
+
+        An implementation key's copy records the key its row saved, refusing none.
+        """
 
         fields = super().copy_fields(model)
         for name, field in fields.items():
+            if isinstance(field, ImplClassField):
+                field.refuses_unknown_keys = False
             source = model._meta.get_field(name)
             if not isinstance(source, models.ForeignKey):
                 continue

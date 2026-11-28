@@ -7,7 +7,6 @@ import {
 import { canonicalOptionValue, type WidgetOption } from "../../widgets";
 import { useAppRuntime } from "../../runtime";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "../form/form-spec";
-import type { FieldDescriptor } from "../page";
 import { BaseImplChoices, type ImplChoice } from "../resource/documents";
 import { enumValueLabel } from "../resource/resource-view-list-body";
 
@@ -57,7 +56,7 @@ export function useImplChoices(
 }
 
 export interface ImplConfigFields {
-  fields: readonly (FormSpecFieldDescriptor & Pick<FieldDescriptor, "showWhen" | "resolve">)[];
+  fields: readonly FormSpecFieldDescriptor[];
   hasSchema: (value: unknown) => boolean;
 }
 
@@ -67,6 +66,11 @@ export interface ImplConfigFields {
  * engine; choices without a declaration continue to use their native raw JSON
  * field. The fields are named under `configField`, the model's JSON field that
  * holds the chosen implementation's configuration (`config` unless it names another).
+ * Each field is declared from the FIRST implementation that names it and resolved to
+ * the chosen one, and `resolveField` lays the resolved descriptor over the declaration:
+ * a key the chosen implementation's field lacks (`omittable`, `presenceRequired`,
+ * `required`, `nullable`, `format`, a default, options) is inherited from the first. Until that
+ * is repaired here, implementations that share a field name must give it the same keys.
  * @owner RelationFieldWidget
  */
 export function useImplConfigFields(
@@ -84,7 +88,7 @@ export function useImplConfigFields(
       ? []
       : [{ choice, fields: deserializeFormSpec(choice.config_schema, widgets) }]);
     const schemaKeys = new Set(parsed.map(({ choice }) => choice.key));
-    const byName = new Map<string, { descriptor: FieldDescriptor; variants: Map<string, FieldDescriptor> }>();
+    const byName = new Map<string, { descriptor: FormSpecFieldDescriptor; variants: Map<string, FormSpecFieldDescriptor> }>();
     for (const { choice, fields } of parsed) {
       for (const descriptor of fields) {
         const current = byName.get(descriptor.name);
@@ -101,10 +105,9 @@ export function useImplConfigFields(
         name: `${configField}.${descriptor.name}`,
         showWhen: (values) => variants.has(choiceKey(values[field])),
         resolve: (values) => {
-          const selected = variants.get(choiceKey(values[field])) ?? descriptor;
+          const { name: _name, ...selected } = variants.get(choiceKey(values[field])) ?? descriptor;
           return {
             ...selected,
-            name: `${configField}.${selected.name}`,
             showWhen: (current) => variants.has(choiceKey(current[field])),
           };
         },

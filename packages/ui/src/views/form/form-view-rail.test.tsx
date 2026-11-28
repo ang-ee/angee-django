@@ -1,8 +1,8 @@
 import type { ModelMetadata } from "@angee/metadata";
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import type { ComposedContainerChild } from "../../runtime";
-import { RecordRailGroup, recordRailGroups, visibleRecordRailGroups } from "./form-view-rail";
+import { RecordRailGroup, displayedRailGroups, recordRailGroups, visibleRecordRailGroups } from "./form-view-rail";
 
 const metadata = { fields: {
   due_date: { readable: true },
@@ -50,6 +50,65 @@ test("a child's permission gates each group it declares without one of its own",
     visibleRecordRailGroups(groups, { id: "note-1", permissions }, {}, metadata).map((group) => group.id);
   expect(visibleTo(["read"])).toEqual(["public"]);
   expect(visibleTo(["read", "manage"])).toEqual(["private", "public"]);
+});
+
+describe("displayedRailGroups", () => {
+  // `imap.health` is admitted for a record whose kind is imap.
+  const admits = (child: string, record: { kind?: string }) => child !== "imap.health" || record.kind === "imap";
+  const groups = recordRailGroups([
+    railChild("notes.details", {
+      content: <>
+        <RecordRailGroup id="properties" label="Properties" fields={[
+          { field: { name: "due_date" } },
+          { field: { name: "private_note" }, permission: "manage" },
+        ]} />
+        <RecordRailGroup id="settings" label="Settings" permission="manage" fields={[{ field: { name: "due_date" } }]} />
+      </>,
+    }),
+    railChild("notes.private", { permission: "admin", content: <RecordRailGroup id="private" label="Private" content="Private" /> }),
+    railChild("imap.health", { impl: "imap", content: <RecordRailGroup id="health" label="Health" fields={[{ field: { name: "secret" } }]} /> }),
+  ]);
+  const displayed = (record: { id: string; kind?: string; permissions: string[] }) =>
+    displayedRailGroups(groups, record, admits, metadata).map((group) => [group.id, group.fields?.map(({ field }) => field.name)]);
+
+  test.each<[string, { id: string; kind?: string; permissions: string[] }, unknown[]]>([
+    ["a record holding no gate's permission, whose child is not admitted", { id: "n", kind: "mail", permissions: ["read"] },
+      [["properties", ["due_date"]]]],
+    ["a record holding the group's and the row's permission", { id: "n", kind: "mail", permissions: ["read", "manage"] },
+      [["properties", ["due_date", "private_note"]], ["settings", ["due_date"]]]],
+    ["a record holding the child's permission", { id: "n", kind: "mail", permissions: ["read", "admin"] },
+      [["properties", ["due_date"]], ["private", []]]],
+    ["a record admitting the row-decided child, whose one row the metadata does not read", { id: "n", kind: "imap", permissions: ["read"] },
+      [["properties", ["due_date"]], ["health", []]]],
+  ])("%s displays exactly the groups and rows it holds every gate of", (_case, record, expected) => {
+    expect(displayed(record)).toEqual(expected);
+  });
+
+  test.each<[string, ModelMetadata | null, string[]]>([
+    ["reads the row's field", metadata, ["due_date"]],
+    ["marks it unreadable", { fields: { due_date: { readable: false } } } as unknown as ModelMetadata, []],
+    ["lacks it", { fields: {} } as unknown as ModelMetadata, []],
+    ["has not loaded", null, []],
+  ])("holds a row only where the metadata reads its field: where it %s, the save's set and the display agree", (_case, read, expected) => {
+    const record = { id: "n", kind: "mail", permissions: ["read"] };
+    const rows = (found: readonly { id: string; fields?: readonly { field: { name: string } }[] }[]) =>
+      found.find((group) => group.id === "properties")?.fields?.map(({ field }) => field.name) ?? [];
+    expect(rows(displayedRailGroups(groups, record, admits, read))).toEqual(expected);
+    expect(rows(visibleRecordRailGroups(groups, record, {}, read, admits))).toEqual(expected);
+  });
+
+  test("two alternatives a record admits together clash whatever their permissions", () => {
+    const clashing = recordRailGroups([
+      railChild("imap.health", { impl: "imap", content: <RecordRailGroup id="health" label="Health" content="IMAP" /> }),
+      railChild("imap.health-admin", { impl: "imap", permission: "admin", content: <RecordRailGroup id="health" label="Health" content="Admin" /> }),
+    ]);
+    expect(() => displayedRailGroups(clashing, { id: "n", kind: "imap", permissions: ["read"] }, admits, metadata))
+      .toThrow(/duplicate record rail group id "health"/);
+  });
+
+  test("guard: without a record the rail shows no group", () => {
+    expect(visibleRecordRailGroups(groups, null, {}, metadata, admits)).toEqual([]);
+  });
 });
 
 test("rail group ids fail fast on collision", () => {

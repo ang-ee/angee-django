@@ -1,6 +1,9 @@
 """Shared declaration, validation and bounded JSON Schema algebra contracts."""
 
 import copy
+import os
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -8,6 +11,7 @@ from django.core.exceptions import ValidationError
 
 from angee.base.schemas.forms import materialize_schema, relation_positions
 from angee.base.schemas.references import LocalSchemaReferences, schemas_match
+from angee.base.serialization import MAX_JSON_DEPTH, MAX_JSON_MEMBERS
 from angee.base.validators import check_schema, validate, validation_issues, validator
 from angee.workflows.schemas import embed_schema, schema_at, union_schema, unmatched_properties
 
@@ -437,6 +441,44 @@ def test_field_validation_uses_native_additional_property_rules():
     assert set(issues) == {"extra"}
 
 
+def test_field_validation_refuses_a_value_past_the_json_bounds_before_a_keyword_walks_it():
+    """``uniqueItems`` compares items by recursing into them; a deep value is refused before it runs."""
+
+    def nested(levels: int) -> Any:
+        value: Any = "answer"
+        for _ in range(levels):
+            value = [value]
+        return value
+
+    schema = {"type": "array", "uniqueItems": True}
+
+    at_bound = validation_issues(schema, [nested(MAX_JSON_DEPTH - 1)] * 2)
+    assert list(at_bound) == ["__all__"]
+    assert "non-unique" in at_bound["__all__"][0]
+    assert validation_issues(schema, [nested(MAX_JSON_DEPTH)] * 2) == {
+        "__all__": [f"The value nests deeper than {MAX_JSON_DEPTH} levels."],
+    }
+    assert validation_issues(schema, [[0] * MAX_JSON_MEMBERS, 1]) == {
+        "__all__": [f"The value holds more than {MAX_JSON_MEMBERS} members."],
+    }
+
+
+def test_validation_refuses_a_value_past_the_json_bounds_before_a_keyword_walks_it():
+    deep: Any = "answer"
+    for _ in range(MAX_JSON_DEPTH):
+        deep = [deep]
+    schema = {"type": "array", "uniqueItems": True}
+
+    with pytest.raises(ValidationError, match="non-unique"):
+        validate(schema, [deep[0], deep[0]])
+    with pytest.raises(ValidationError) as refused:
+        validate(schema, [deep, deep])
+    assert refused.value.messages == [f"The value nests deeper than {MAX_JSON_DEPTH} levels."]
+    with pytest.raises(ValidationError) as refused:
+        validate(schema, [0] * (MAX_JSON_MEMBERS + 1))
+    assert refused.value.messages == [f"The value holds more than {MAX_JSON_MEMBERS} members."]
+
+
 def test_union_preserves_distinct_local_reference_roots_without_mutation():
     """The same definition name can mean different things in separate alternatives."""
     number = {"$ref": "#/$defs/Value", "$defs": {"Value": {"type": "integer"}}}
@@ -466,3 +508,25 @@ def test_union_reuses_equal_contracts_and_checks_single_or_empty_alternatives():
     assert not validator(union_schema()).is_valid(None)
     with pytest.raises(ValidationError, match="reference"):
         union_schema({"$ref": "#/$defs/missing"})
+
+
+def test_a_form_spec_is_the_same_bytes_whatever_the_hash_seed():
+    """A field's constraints keep one order, so the spec a process emits never depends on its string hashing."""
+    program = (
+        "import json\n"
+        "from angee.base.schemas.forms import config_form_spec\n"
+        "schema = {'type': 'object', 'required': ['name'], 'properties': {\n"
+        "    'name': {'type': 'string', 'minLength': 1, 'maxLength': 64},\n"
+        "    'count': {'type': 'integer', 'minimum': 0, 'maximum': 9},\n"
+        "    'day': {'type': 'string', 'format': 'date', 'title': 'Day', 'default': '2024-01-31'},\n"
+        "    'share': {'type': 'number', 'minimum': 0, 'maximum': 1}}}\n"
+        "print(json.dumps(config_form_spec(schema, owner='Probe')))\n"
+    )
+    specs = {
+        subprocess.run(
+            [sys.executable, "-c", program], env={**os.environ, "PYTHONHASHSEED": str(seed)},
+            capture_output=True, text=True, check=True,
+        ).stdout
+        for seed in range(8)
+    }
+    assert len(specs) == 1

@@ -1,4 +1,5 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { MESSAGE_STATUS_TONES } from "@angee/messaging";
 import { Tab, useRecordChromeContext } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { CalendarClock, Inbox, Radar, Share2 } from "lucide-react";
@@ -37,6 +38,8 @@ const nexus = defineBaseAddon({
     "nexus.cadences": { parent: "nexus", label: "Cadences", route: "nexus.cadences", icon: "cadence", sequence: 40 },
   },
   icons: { cadence: CalendarClock, network: Share2, radar: Radar, "nexus-inbox": Inbox },
+  // The inbox's transcript reads a message's delivery status in messaging's scoped tones.
+  vocabulary: [{ app: "nexus", resources: { "messaging.Message": { fields: { status: { tones: MESSAGE_STATUS_TONES } } } } }],
   i18n: { nexus: enNexusMessages },
   containers: {
     "storage.File#groups": {

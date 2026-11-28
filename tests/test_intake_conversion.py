@@ -1,10 +1,11 @@
 """A need converts into one triage task, once; a refused conversion leaves it on its project."""
 
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from django.core.exceptions import ValidationError
-from rebac import actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.projects.testing.models import Project, Queue, Task
 from tests.conftest import Need, create_user
@@ -44,3 +45,21 @@ def test_conversion_refuses_a_queue_without_triage_and_an_unsaved_need(db: None)
     need.refresh_from_db()
     assert (need.project, need.task) == (project, None)
     assert not Task._base_manager.exists()
+
+
+def test_capture_refuses_a_caller_who_may_not_write_the_target_before_validating(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller without the project's write gets the need save's refusal; the need's validators never run."""
+
+    owner, outsider = create_user("capture-owner"), create_user("capture-outsider")
+    with actor_context(owner):
+        project = Project.objects.create(title="Website")
+    spy = Mock(side_effect=ValidationError("Not a body.", code="invalid"))
+    monkeypatch.setattr(Need._meta.get_field("body"), "validators", [spy])
+
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        Need.objects.capture(target=project, body="Refused request")
+
+    spy.assert_not_called()
+    assert not Need._base_manager.exists()

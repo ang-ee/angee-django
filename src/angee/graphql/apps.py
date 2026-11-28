@@ -6,7 +6,6 @@ from functools import partial
 
 from django.apps import AppConfig
 from django.core import checks
-from sentry_sdk.integrations.logging import ignore_logger
 
 from angee.base.hooks import check_hooks
 from angee.server.checks import SERVING_TAG
@@ -25,9 +24,6 @@ class GraphQLConfig(AppConfig):
         """Register schema checks and connect model-change hooks."""
 
         super().ready()
-        # The schema sanitizer owns the one diagnostic event without resolver
-        # values; Strawberry's ordinary log must not send a second Sentry event.
-        ignore_logger("strawberry.execution")
         # Phase-1 AppConfig loading imports this module before schema declarations
         # and concrete runtime models are safe to resolve; defer these imports until
         # Django calls ready() after app population.
@@ -37,11 +33,16 @@ class GraphQLConfig(AppConfig):
         from django_compose.serving import mode
 
         from angee.graphql import field_types  # noqa: F401
-        from angee.graphql.checks import check_graphql_channel_layer, check_graphql_schemas
+        from angee.graphql.checks import (
+            check_graphql_channel_layer,
+            check_graphql_schemas,
+            check_impl_choices_admission,
+        )
         from angee.graphql.publishing import connect_change_publishers
         from angee.graphql.related_counts import check_related_counts
 
         checks.register(check_settings, checks.Tags.models)
+        checks.register(check_impl_choices_admission, checks.Tags.models)
         checks.register(check_related_counts, checks.Tags.models)
         checks.register(check_graphql_schemas)
         checks.register(check_graphql_channel_layer, SERVING_TAG, deploy=True)

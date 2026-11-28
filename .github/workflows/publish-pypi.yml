@@ -11,7 +11,6 @@ jobs:
   checks:
     uses: ./.github/workflows/reusable-checks.yml
     with:
-      python-version: "3.14"
       pnpm-enabled: false
       stack-enabled: false
 
@@ -25,8 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.14"
       - name: Build each native workspace wheel directly
         run: uv run --only-group dev python scripts/release.py --build
       - name: Validate target channel metadata

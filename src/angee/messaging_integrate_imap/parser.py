@@ -43,6 +43,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any, cast
 
+from celery.exceptions import SoftTimeLimitExceeded
 from mailparser_reply import EmailReplyParser
 
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
@@ -93,7 +94,7 @@ _RECIPIENT_HEADERS = (("To", "to"), ("Cc", "cc"), ("Bcc", "bcc"))
 
 # Headers retained as standalone, queryable HEADER parts (fragment-backed, so a
 # List-Id shared by a whole mailing list is one row). Everything else either has a
-# better owner (addresses → Participant, Message-ID/References → identity/threading,
+# better owner (addresses → Recipient, Message-ID/References → identity/threading,
 # Subject → the TITLE part, Date → sent_at, Content-* → the part tree) or is
 # transport diagnostics that stay in the lossless ``metadata["headers"]`` envelope.
 # They are emitted in this order, which the ingest sync hash covers: reordering
@@ -105,9 +106,9 @@ _RETAINED_HEADERS = ("list-id", "list-unsubscribe", "reply-to", "auto-submitted"
 def parse_message(
     raw: bytes,
     *,
-    mailbox: str,
-    uid: int,
-    uidvalidity: int,
+    mailbox: str = "",
+    uid: int | None = None,
+    uidvalidity: int | None = None,
     flags: tuple[Any, ...] = (),
     internal_date: datetime | None = None,
     own_addresses: frozenset[str] = frozenset(),
@@ -116,14 +117,15 @@ def parse_message(
     """Parse one raw RFC 822 message into a :class:`ParsedMessage`.
 
     ``internal_date`` is the server receipt time (the IMAP INTERNALDATE) and the
-    fallback when the Date header is missing or malformed. ``own_addresses``
+    fallback when the Date header is missing or malformed. ``own_addresses``,
+    the account's addresses by spelling key (``Handle.spelling_key_of``),
     classifies direction (an owned From is outbound; owned From *and* only owned
     recipients is internal). ``truncated_bytes`` marks a header-only fetch of an
     oversized message: the size lands in metadata and the body stays empty rather
     than the message being dropped.
 
-    Raises whatever the MIME layer raises on hopeless input — the caller wraps
-    with :func:`fallback_message` so a poison message still lands.
+    Transport facts are optional for archive messages; absent UIDs are never
+    fabricated. :func:`parse_message_or_fallback` isolates poison messages.
     """
 
     message = cast(EmailMessage, message_from_bytes(raw, policy=email_policy.default))
@@ -162,9 +164,9 @@ def parse_message(
 def fallback_message(
     raw: bytes,
     *,
-    mailbox: str,
-    uid: int,
-    uidvalidity: int,
+    mailbox: str = "",
+    uid: int | None = None,
+    uidvalidity: int | None = None,
     flags: tuple[Any, ...] = (),
     internal_date: datetime | None = None,
     error: Exception | None = None,
@@ -197,14 +199,23 @@ def fallback_message(
             content=raw,
         ),
         metadata={
-            "mailbox": mailbox,
-            "uid": uid,
-            "uidvalidity": uidvalidity,
-            "flags": _flag_names(flags),
-            "size": len(raw),
+            **_source_metadata(mailbox, uid, uidvalidity, flags, len(raw)),
             "parse_error": f"{type(error).__name__}: {error}" if error is not None else "unparseable",
         },
     )
+
+
+def parse_message_or_fallback(raw: bytes, **kwargs: Any) -> ParsedMessage:
+    """Retain unparseable mail as raw bytes; worker cancellation always escapes."""
+
+    try:
+        return parse_message(raw, **kwargs)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as error:  # noqa: BLE001 — retain poison mail without swallowing cancellation.
+        source = {key: value for key, value in kwargs.items()
+                  if key in {"mailbox", "uid", "uidvalidity", "flags", "internal_date"}}
+        return fallback_message(raw, **source, error=error)
 
 
 def synthetic_external_id(raw: bytes) -> str:
@@ -329,6 +340,17 @@ def _references(message: EmailMessage) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _parsed_address(address: str) -> str:
+    """Return an address in the form this parser emits: trimmed and lower-cased.
+
+    Every stored ``ParsedMessage.sync_hash`` covers the addresses in this form,
+    so changing it would change the hash of every message already synced; the
+    handle owner lands it on the handle any spelling of the address names.
+    """
+
+    return address.strip().lower()
+
+
 def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
     """Return the first parsed address from ``headers``, or ``None``."""
 
@@ -336,7 +358,7 @@ def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
         if address:
             return ParsedHandle(
                 platform=_EMAIL_PLATFORM,
-                value=address.strip().lower(),
+                value=_parsed_address(address),
                 display_name=name.strip(),
             )
     return None
@@ -350,7 +372,7 @@ def _recipients(message: EmailMessage) -> tuple[ParsedRecipient, ...]:
     for header, role in _RECIPIENT_HEADERS:
         values = [str(value) for value in message.get_all(header, ())]
         for name, address in getaddresses(values):
-            cleaned = address.strip().lower()
+            cleaned = _parsed_address(address)
             if not cleaned or (cleaned, role) in seen:
                 continue
             seen.add((cleaned, role))
@@ -372,16 +394,19 @@ def _direction(
     recipients: tuple[ParsedRecipient, ...],
     own_addresses: frozenset[str],
 ) -> str:
-    """Classify direction from the account's own addresses.
+    """Classify direction from the account's own addresses, which ``own_addresses`` holds by spelling key.
 
     The string vocabulary is the neutral seam contract
     (:class:`~angee.messaging.backends.ParsedMessage`); without a sender or any
     own-address knowledge everything is inbound.
     """
 
-    if sender is None or sender.value not in own_addresses:
+    def own(value: str) -> bool:
+        return Handle.spelling_key_of(_EMAIL_PLATFORM, value) in own_addresses
+
+    if sender is None or not own(sender.value):
         return "inbound"
-    if recipients and all(recipient.handle.value in own_addresses for recipient in recipients):
+    if recipients and all(own(recipient.handle.value) for recipient in recipients):
         return "internal"
     return "outbound"
 
@@ -432,8 +457,8 @@ def _metadata(
     message: EmailMessage,
     *,
     mailbox: str,
-    uid: int,
-    uidvalidity: int,
+    uid: int | None,
+    uidvalidity: int | None,
     flags: tuple[Any, ...],
     size: int,
 ) -> dict[str, Any]:
@@ -449,14 +474,22 @@ def _metadata(
                 continue
         if values:
             headers[name] = values
-    return {
-        "mailbox": mailbox,
-        "uid": uid,
-        "uidvalidity": uidvalidity,
-        "flags": _flag_names(flags),
-        "size": size,
-        "headers": headers,
-    }
+    return {**_source_metadata(mailbox, uid, uidvalidity, flags, size), "headers": headers}
+
+
+def _source_metadata(
+    mailbox: str, uid: int | None, uidvalidity: int | None, flags: tuple[Any, ...], size: int,
+) -> dict[str, Any]:
+    """Retain only transport facts the source actually supplied."""
+
+    metadata: dict[str, Any] = {"size": size, "flags": _flag_names(flags)}
+    if mailbox:
+        metadata["mailbox"] = mailbox
+    if uid is not None:
+        metadata["uid"] = uid
+    if uidvalidity is not None:
+        metadata["uidvalidity"] = uidvalidity
+    return metadata
 
 
 def _flag_names(flags: tuple[Any, ...]) -> list[str]:

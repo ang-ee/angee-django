@@ -10,7 +10,7 @@ import {
   type WidgetOption,
 } from "../../widgets";
 import type { DescriptorField } from "./DescriptorFieldList";
-import { emptyValueForField } from "./field-values";
+import { emptyValueForField, isFormSpecValueCompatible, refusesSeed } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { statusLabel } from "../../lib/labels";
 import { titleCase } from "../../lib/titleCase";
@@ -29,7 +29,11 @@ export type FormSpecRelationCreate = Pick<
 /**
  * Descriptor produced from a backend-emitted JSON form schema.
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
- * vocabulary. Presentation extensions live on each property: string-only
+ * vocabulary. A `string` whose JSON Schema `format` is `date`, `date-time` or
+ * `time` carries it as the descriptor's `format`, the value's declared type; any
+ * other format, and one on another type, is not carried: where a schema validator
+ * runs (a schema dialog, the server) it reads it from the schema. Presentation
+ * extensions live on each property: string-only
  * `widget`/`label`/`description`/`placeholder` (`label` overrides JSON Schema
  * `title`; an undeclared label is humanized from the field name), list
  * `addLabel`/`removeLabel`,
@@ -125,10 +129,12 @@ function fieldHasControlForPath(field: FormSpecFieldDescriptor, path: string, va
 
 /**
  * Seed each declared form-spec field from its matching payload key, followed by
- * its schema default and then the shared descriptor-kind empty value. The form
+ * its schema default and then its empty value (`initialFormSpecValue`). The form
  * spec remains the whitelist: payload keys absent from it are ignored. An
  * authored structured value retains omitted optional children instead of
- * inventing invalid empty placeholders inside that retained object.
+ * inventing invalid empty placeholders inside that retained object, and a member
+ * that may be left out is not seeded with a value its own declared type refuses
+ * (`refusesSeed`): it stays absent.
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
@@ -149,6 +155,7 @@ function formSpecInitialValuesFrom(
   for (const field of fields) {
     if (Object.hasOwn(payloadValues, field.name)) {
       const payloadValue = payloadValues[field.name];
+      // A retained value of another type than the field declares would reach a widget that cannot render it.
       if (isFormSpecValueCompatible(field, payloadValue)) {
         values[field.name] = field.objectTemplate && payloadValue && typeof payloadValue === "object" && !Array.isArray(payloadValue)
           ? formSpecInitialValuesFrom(field.objectTemplate, payloadValue, true)
@@ -166,31 +173,14 @@ function formSpecInitialValuesFrom(
     }
     if (!field.presenceRequired
         && (field.required || (!field.omittable && !preserveOptionalOmission))) {
-      values[field.name] = initialFormSpecValue(field);
+      const seed = initialFormSpecValue(field);
+      if (!refusesSeed(field, seed)) values[field.name] = seed;
     }
   }
   return values;
 }
 
-/** Keep retained payloads from passing values to widgets that cannot render them. */
-function isFormSpecValueCompatible(
-  field: FormSpecFieldDescriptor,
-  value: unknown,
-): boolean {
-  if (value === null) return Boolean(field.nullable);
-  switch (field.kind) {
-    case "string": return typeof value === "string";
-    case "integer": return typeof value === "number" && Number.isInteger(value);
-    case "number": return typeof value === "number" && Number.isFinite(value);
-    case "boolean": return typeof value === "boolean";
-    case "object": return typeof value === "object" && !Array.isArray(value);
-    case "array": return Array.isArray(value);
-    case "any": return true;
-    default: return false;
-  }
-}
-
-/** Seed one present form-spec value without conflating omission with null. */
+/** Seed one present form-spec value without conflating omission with null: its default, else `null` where it is nullable, else its template's seeds, else its empty value (`emptyValueForField`). */
 export function initialFormSpecValue(field: FormSpecFieldDescriptor): unknown {
   if (field.hasDefault) return field.defaultValue;
   if (field.nullable) return null;
@@ -352,6 +342,7 @@ function deserializeField(
     name,
     kind: type,
     widget,
+    ...(type === "string" && isDeclaredFormat(field.format) ? { format: field.format } : {}),
     ...(label ? { label } : {}),
     ...(addLabel ? { addLabel } : {}),
     ...(removeLabel ? { removeLabel } : {}),
@@ -380,6 +371,11 @@ function deserializeField(
     ...(objectTemplate ? { objectTemplate } : {}),
     ...(itemTemplate ? { itemTemplate } : {}),
   };
+}
+
+/** Whether a wire `format` is one a descriptor carries: a date, a date and time, or a time as text. */
+function isDeclaredFormat(format: string | undefined): format is NonNullable<FormSpecFieldDescriptor["format"]> {
+  return format === "date" || format === "date-time" || format === "time";
 }
 
 /** Project validated wire filters into Refine's required value slot. */

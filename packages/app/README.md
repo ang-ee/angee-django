@@ -29,7 +29,8 @@ with the theme it is declared beside, and boot refuses a lock with no theme. `cr
 command palette and Refine's resources, keeping the personal Settings roots.
 Pages outside the rail stay reachable and sit in the selection's home root; no
 route is guarded. The runtime's `brand` and `rail`, and the appearance's default
-theme, come from the selection; the person's own theme still wins. Every root,
+theme, come from the selection; the person's own theme still wins
+([host and user precedence](../../docs/frontend/appearance.md#host-and-user-precedence)). Every root,
 app and host is checked at boot, selected or not, and an unknown `?app=` warns
 in development and falls back. Only the deployment layer declares `shell`.
 Addons cannot claim the `ui` translation namespace, which belongs to the
@@ -144,6 +145,9 @@ An addon can specialize existing copy and declare named resource views:
 }
 ```
 
+A shipped view's `sort` is one `{ field, dir }`, or a list of them for an order of
+several keys (`sort: [{ field: "status", dir: "asc" }, { field: "title", dir: "asc" }]`).
+A view without `sort` keeps the order the list declares; `sort: null` opens it unordered.
 A shipped view opening on `board` or `gallery` draws the model's registered card
 when the page declares none. An addon registers that card once, for a model it
 may not own; the composer refuses a second card for the same model, besides the
@@ -283,8 +287,10 @@ login page's are `LOGIN_CONTAINERS`. See the
 [frontend guidelines](../../docs/frontend/guidelines.md#containers) and
 [`containers.ts`](src/containers.ts).
 
-Saved dashboards persist through the `dashboardStore` manifest key; at most one
-installed addon provides it.
+Two manifest keys are install-one sets of hooks: at most one installed addon
+provides each, and a second provider fails composition. Saved dashboards persist
+through `dashboardStore`; `hostAppearance` supplies the deployment's appearance at
+run time ([`HostAppearanceSource`](src/define-addon.ts)).
 
 Resource mutation argument names and GraphQL types are projected from generated metadata at
 [`resourceMutationsForSchema`](src/resource-projection.ts) into the metadata-free

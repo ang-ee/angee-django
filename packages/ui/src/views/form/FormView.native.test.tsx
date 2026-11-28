@@ -13,10 +13,11 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
+import { OperationDocumentsProvider, boundedGraphQLTransportError, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import gql from "graphql-tag";
 import { useList, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
+import { useDraftScope } from "../../lib/idempotency-key";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
@@ -27,6 +28,7 @@ import {
   type FormViewSaveSurface,
 } from "./use-form-view-save";
 import type { DescriptorField } from "./DescriptorFieldList";
+import type { FormSpecFieldDescriptor } from "./form-spec";
 import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { RecordTabDescriptor } from "./form-view-surface";
 import { useAuthoredResourceMutation } from "../resource/authored-resource-mutation";
@@ -68,6 +70,28 @@ const preview: RuntimeViewAs = {
   viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
   viewablePeople: [], enter: () => undefined, exit: () => undefined,
 };
+
+test("a bound field marks the stored record's unregistered implementation key by the form's own model; the same name under a scope does not", async () => {
+  const backend = { name: "backend", kind: "enum" as const, values: [{ value: "LOCAL", description: "Local" }], readable: true,
+    filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false };
+  const resourceMetadata = { ...resource, fields: [...(resource.fields ?? []), backend], implFields: ["backend"] };
+  // The third binds through a model this host does not know: the mark still reads the form's own model.
+  for (const [scope, marked, model] of [["", true, "notes.Note"], ["config", false, "notes.Note"], ["", true, "notes.Elsewhere"]] as const) {
+    cleanup();
+    // The form saves the selector, so the bound control takes edits.
+    await fixture({ resourceMetadata, record: { backend: null, config: { backend: null } }, mountedFields: [],
+      viewFields: [...fields, { name: "backend" }],
+      boundFields: [{ field: { name: "backend", label: "Backend", widget: "select", options: [{ value: "LOCAL", label: "Local" }] }, scope, resource: model }] });
+    expect((await screen.findAllByText("Backend")).length).toBeGreaterThan(0);
+    expect(Boolean(screen.queryByLabelText("Not registered: Backend"))).toBe(marked);
+    if (marked) {
+      // The bound control is described by the explanation, as the form's own rows are.
+      const described = (screen.getByRole("combobox", { name: "Backend" }).getAttribute("aria-describedby") ?? "").split(" ")
+        .map((describedBy) => document.getElementById(describedBy)?.textContent ?? "").join(" ");
+      expect(described).toContain("Its implementation cannot run until another is chosen.");
+    }
+  }
+});
 
 test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {
   const submit = vi.fn(async () => ({ status: "ok" as const, data: { id: "created" } }));
@@ -160,7 +184,7 @@ async function fixture(options: {
   presenceValues?: boolean;
   relationValues?: boolean;
   acknowledgedSource?: FormViewAcknowledgedSource;
-  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[];
+  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[];
   publicView?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
@@ -209,7 +233,7 @@ async function fixture(options: {
         }],
       } : resource);
   const formModel = schemaFieldMetadataFromDataResources([formResource]).labels["notes.Note"]!;
-  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: formResource, modelMetadata: formModel, formFields: viewFields, fieldByName, refineFields,
@@ -224,7 +248,7 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[] }) {
     return <Provider resources={[formResource]} dataProvider={provider} queryClient={client}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
@@ -257,7 +281,7 @@ async function fixture(options: {
   if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
     await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
   }
-  return { surface: () => surface, onSaved, getOne, update, client,
+  return { surface: () => surface, onSaved, getOne, update, client, router,
     setRecord: (next: Row) => { record = next; },
     setAcknowledgedSource: (next: FormViewAcknowledgedSource) => { acknowledgedSource = next; },
     rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
@@ -304,6 +328,22 @@ test("registry widgets receive live sibling values in record forms", async () =>
   await waitFor(() => expect(screen.getByLabelText("Sibling title").textContent).toBe("First"));
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
   expect(screen.getByLabelText("Sibling title").textContent).toBe("Changed");
+});
+
+test("a form names its draft to the surfaces inside it: a create form of its resource embedded in it is a draft of its own", async () => {
+  // As a list of the form's own resource, embedded in it, names its inline create form's draft.
+  function Embedded(): React.ReactElement {
+    return <output aria-label="Embedded draft">{useDraftScope("record.create:console:notes.Note")}</output>;
+  }
+  const read: WidgetDefinition["read"] = () => <Embedded />;
+  const f = await fixture({ publicView: true, widgets: { embedded: { read, edit: read } } });
+  const viewFields: FieldDescriptor[] = [{ name: "title", label: "Title" }, { name: "body", widget: "embedded" }];
+  f.rerender({ viewFields });
+  await waitFor(() => expect(screen.getByLabelText("Embedded draft").textContent)
+    .toBe("record.edit:console:notes.Note:note-1/record.create:console:notes.Note"));
+  f.rerender({ recordId: null, viewFields });
+  await waitFor(() => expect(screen.getByLabelText("Embedded draft").textContent)
+    .toBe("record.create:console:notes.Note/record.create:console:notes.Note"));
 });
 
 test("header extras render from the same live record context as the title", async () => {
@@ -439,6 +479,28 @@ test("a pane focuses a sheet field's native control in place", async () => {
 });
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, alone or with the tab, as leaving does", async () => {
+  const f = await fixture();
+  edit("title", "Local edit");
+  // The form publishes its dirty state a render after the value, as the person's next move finds it.
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await f.router.history.push("/?recordTab=activity"); });
+  await waitFor(() => expect(f.router.history.location.search).toBe("?recordTab=activity"));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
+
+  act(() => { void f.router.history.push("/?recordTab=activity&page=2"); });
+  const asked = await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" });
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+  fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+  act(() => { void f.router.history.push("/?recordTab=history&page=2"); });
+  expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
+});
 
 test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
   const f = await fixture({ readOnlyWhen: (record) => record.status === "confirmed" });
@@ -636,6 +698,7 @@ test("bound descriptors scope prefill, null, errors and readonly to the declarin
   const f = await fixture({
     acknowledgedSource: source,
     mountedFields: [],
+    viewFields: [...fields, { name: "definition", hidden: true }],
     boundFields: [
       { field: operation, scope: "definition.node" },
       { field: optional, scope: "definition.node" },
@@ -669,6 +732,7 @@ test("a preset that gives a sibling its loaded value back leaves the form clean,
   const f = await fixture({
     acknowledgedSource: source,
     mountedFields: [],
+    viewFields: [...fields, { name: "kind", hidden: true }, { name: "config", hidden: true }],
     boundFields: [{ field: kind }, { field: { name: "config", label: "Configuration", widget: "json" }, readOnly: true }],
   });
   expect(f.surface().form.formState.isDirty).toBe(false);
@@ -868,7 +932,7 @@ test("a failed save keeps the preset's value for the retry, which writes it once
   stored.update.mockRejectedValueOnce(new Error("Unavailable"));
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(stored.update).toHaveBeenCalledOnce());
-  await waitFor(() => expect(stored.surface().saveError).not.toBeNull());
+  await waitFor(() => expect(stored.surface().saveErrors).not.toEqual([]));
   expect(stored.isDirty()).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(stored.update).toHaveBeenCalledTimes(2));
@@ -1232,9 +1296,7 @@ const undoFields: readonly FieldDescriptor[] = [
   { name: "summary", label: "Summary", omittable: true },
   { name: "note", label: "Note", nullable: true },
   { name: "style.color", label: "Color", omittable: true },
-  // The declared default seeds the draft before the record's values arrive: an object widget
-  // refuses the "" a field without one starts with.
-  { name: "layout", label: "Layout", widget: "object", defaultValue: {}, objectTemplate: [
+  { name: "layout", label: "Layout", widget: "object", objectTemplate: [
     { name: "heading", label: "Heading" }, { name: "caption", label: "Caption", omittable: true },
   ] },
   { name: "config", label: "Config", widget: "json" },
@@ -1276,6 +1338,15 @@ function expectPresence(label: string, shown: { value: string } | { left: "Not s
 function jsonShown(label: string): unknown {
   return JSON.parse(EditorView.findFromDOM(screen.getByRole("textbox", { name: label }))!.state.doc.toString());
 }
+
+/** Replace a JSON editor's whole draft, as typing it does. */
+function typeDraft(editorElement: HTMLElement, text: string) {
+  const editor = EditorView.findFromDOM(editorElement)!;
+  act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } }));
+}
+
+/** Well past every timer: a request that would follow a press has been made by now. */
+const pastEveryTimer = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
 
 type UndoFrame = "loaded" | "changed";
 const undoKinds: readonly {
@@ -1379,7 +1450,9 @@ test.each(undoKinds.filter((row) => !row.lost))("undo and redo land on the frame
 
 // KNOWN DEFECT, expected to fail until it is fixed: react-hook-form reads `undefined` as take-the-default at registration. After the undo the
 // control still shows "Not set" while the form holds the loaded value and counts as unchanged, so a
-// save sends nothing. These rows flip to passing when that is fixed; move them up then.
+// save sends nothing. These two rendered rows are the tripwire: they flip to passing when a field
+// that can be left "Not set" is no longer a registered field of its own (see `useFormHistory`);
+// move them up then.
 test.fails.each(undoKinds.filter((row) => row.lost))("undo and redo lose $kind: react-hook-form reads `undefined` as take-the-default at registration", landsOnItsFrame);
 
 test("undo while a text input has focus leaves it focused, and typing on is recorded and undoable", async () => {
@@ -1403,6 +1476,174 @@ test("undo while a text input has focus leaves it focused, and typing on is reco
   expect(document.activeElement).toBe(body);
 });
 
+// An `object` widget accepts only an object and a `list` widget only an array, so the form gives
+// them one before a record's values arrive and in a create form.
+const structuredResource: DataResourceMetadata = { ...withFields(["layout", "steps"]), createFields: ["title", "layout", "steps"] };
+const structuredFields: readonly FieldDescriptor[] = [
+  { name: "title", label: "Title" },
+  { name: "layout", label: "Layout", widget: "object", objectTemplate: [
+    { name: "heading", label: "Heading" }, { name: "caption", label: "Caption" },
+  ] },
+  { name: "steps", label: "Steps", widget: "list", itemTemplate: { name: "step" } },
+];
+
+function textboxValue(name: string): string {
+  return (screen.getByRole("textbox", { name }) as HTMLInputElement).value;
+}
+
+// A code-split widget's first mount waits for its code, by when the record's values are in; every
+// later form renders it at once, with what the form holds when the record first paints. So each
+// test opens one record, then the next. Each record lacks the other structured field.
+test("an object field shows its members with the values of each record that arrives after the first paint", async () => {
+  for (const opened of ["First", "Next"]) {
+    await presetForm({ layout: { heading: `${opened} heading`, caption: `${opened} caption` } }, { fields: structuredFields, resource: structuredResource });
+    await screen.findByRole("textbox", { name: "Heading" });
+    expect(textboxValue("Heading")).toBe(`${opened} heading`);
+    expect(textboxValue("Caption")).toBe(`${opened} caption`);
+    expect(await screen.findByRole("button", { name: "Add item" })).toBeTruthy();
+    expectClean();
+    cleanup();
+  }
+});
+
+test("a list field shows its items with the values of each record that arrives after the first paint", async () => {
+  for (const opened of ["First", "Next"]) {
+    await presetForm({ steps: [`${opened} step one`, `${opened} step two`] }, { fields: structuredFields, resource: structuredResource });
+    await screen.findByRole("textbox", { name: "Item 1" });
+    expect(textboxValue("Item 1")).toBe(`${opened} step one`);
+    expect(textboxValue("Item 2")).toBe(`${opened} step two`);
+    expect(((await screen.findByRole("textbox", { name: "Heading" })) as HTMLInputElement).value).toBe("");
+    expectClean();
+    cleanup();
+  }
+});
+
+// The form's structured check refuses null in a templated field it declares not nullable, and so
+// every save of that record; a record holding null is read through nullable declarations.
+const nullableStructuredFields = structuredFields.map((field) => field.name === "title" ? field : { ...field, nullable: true });
+
+test.each([
+  ["absent", {}, structuredFields],
+  ["absent from a nullable field", {}, nullableStructuredFields],
+  ["null in a nullable field", { layout: null, steps: null }, nullableStructuredFields],
+] as const)("untouched object and list fields whose record value is %s leave the form clean and out of a save of another field", async (_value, stored, fields) => {
+  const form = await presetForm(stored, { fields, resource: structuredResource });
+  await waitFor(() => expect(textboxValue("Title")).toBe("First"));
+  expectClean();
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(form.update).toHaveBeenCalledOnce());
+  expect((form.update.mock.calls[0]![0] as { variables: Row }).variables).toStrictEqual({ title: "Changed" });
+});
+
+test("a create form renders an object field's members and a list field's add button, and a save sends what they hold", async () => {
+  const f = await fixture({ publicView: true, id: null, resourceMetadata: structuredResource, viewFields: structuredFields });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Heading" }), { target: { value: "New heading" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+  fireEvent.change(await screen.findByRole("textbox", { name: "Item 1" }), { target: { value: "New step" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "New note" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables)
+    .toStrictEqual({ title: "New note", layout: { heading: "New heading" }, steps: ["New step"] });
+});
+
+// A `rows` widget accepts only an array of objects, so the form gives it an empty list as it gives a
+// `list` widget one. Its row count is fixed: an empty list shows the columns and no row.
+const rowsResource: DataResourceMetadata = { ...withFields(["mappings"]), createFields: ["title", "mappings"] };
+const mappingsField: FormSpecFieldDescriptor = { name: "mappings", label: "Mappings", kind: "array", widget: "rows", rowTemplate: [
+  { name: "source", label: "Source" }, { name: "target", label: "Target" },
+] };
+const rowsFields: readonly FieldDescriptor[] = [{ name: "title", label: "Title" }, mappingsField];
+
+function textboxValues(name: string): string[] {
+  return screen.getAllByRole("textbox", { name }).map((input) => (input as HTMLInputElement).value);
+}
+
+test("a rows field shows its rows with the values of each record that arrives after the first paint", async () => {
+  for (const opened of ["First", "Next"]) {
+    await presetForm({ mappings: [
+      { source: `${opened} source one`, target: `${opened} target one` },
+      { source: `${opened} source two`, target: `${opened} target two` },
+    ] }, { fields: rowsFields, resource: rowsResource });
+    await screen.findAllByRole("textbox", { name: "Source" });
+    expect(textboxValues("Source")).toEqual([`${opened} source one`, `${opened} source two`]);
+    expect(textboxValues("Target")).toEqual([`${opened} target one`, `${opened} target two`]);
+    expectClean();
+    cleanup();
+  }
+});
+
+test("a create form renders a rows field's columns each time it opens", async () => {
+  for (let opened = 0; opened < 2; opened += 1) {
+    await fixture({ publicView: true, id: null, resourceMetadata: rowsResource, viewFields: rowsFields });
+    const table = await screen.findByRole("table", { name: "Mappings" });
+    expect(within(table).getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["Source", "Target"]);
+    expect(within(table).queryByRole("textbox")).toBeNull();
+    cleanup();
+  }
+});
+
+// Guards existing behaviour: a rows field names each cell's descriptor by the cell's path
+// (`mappings.1.config`), so a JSON cell's own check is held there and the cell shows it.
+test("guard: an invalid JSON draft in a rows field's cell stops Save at that cell, marked and named there, nothing sent; corrected, it goes out", async () => {
+  const configResource: DataResourceMetadata = {
+    ...rowsResource,
+    fields: rowsResource.fields?.map((field) => field.name === "mappings" ? { ...field, scalar: "JSON" } : field),
+  };
+  const configRows: FormSpecFieldDescriptor = { ...mappingsField, rowTemplate: [
+    { name: "source", label: "Source" }, { name: "config", label: "Config", widget: "json" },
+  ] };
+  const loaded = [{ source: "one", config: { n: 1 } }, { source: "two", config: { n: 2 } }];
+  const f = await presetForm({ mappings: loaded }, { fields: [{ name: "title", label: "Title" }, configRows], resource: configResource });
+  await waitFor(() => expect(screen.getAllByRole("textbox", { name: "Config" })).toHaveLength(2));
+  const [first, second] = screen.getAllByRole("textbox", { name: "Config" }) as [HTMLElement, HTMLElement];
+  typeDraft(second, '{"n": 21}');
+  typeDraft(second, '{"n": 2');
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(second.getAttribute("aria-invalid")).toBe("true"));
+  expect(second.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText("Enter a valid value.").id);
+  expect(first.getAttribute("aria-invalid")).toBeNull();
+  expect(f.surface().form.getFieldState("mappings.1.config").error?.message).toBe("Enter a valid value.");
+  await pastEveryTimer();
+  expect(f.update).not.toHaveBeenCalled();
+
+  typeDraft(second, '{"n": 22}');
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables).toEqual({ mappings: [loaded[0], { source: "two", config: { n: 22 } }] });
+});
+
+// The create rule for a container field, whichever widget holds it: untouched, it is sent as an
+// empty container. The json, object, list and rows fields are JSON scalars, as a model's JSON
+// column is: with that metadata an untouched object, list or rows field used to be left out.
+const containerNames = ["config", "members", "labels", "layout", "steps", "mappings"];
+const jsonColumns = ["config", "layout", "steps", "mappings"];
+const containerBase = withFields(containerNames);
+const containerResource: DataResourceMetadata = {
+  ...containerBase,
+  createFields: ["title", ...containerNames],
+  fields: containerBase.fields?.map((field) => jsonColumns.includes(field.name) ? { ...field, scalar: "JSON" } : field),
+};
+const containerFields: readonly FieldDescriptor[] = [
+  { name: "title", label: "Title" },
+  { name: "config", label: "Config", widget: "json" },
+  { name: "members", label: "Members", widget: "many2many" },
+  { name: "labels", label: "Labels", widget: "tagInput" },
+  ...structuredFields.filter((field) => field.name !== "title"),
+  mappingsField,
+];
+
+test("a create form sends each untouched container field as an empty container: an object for json and object, a list for list, rows, many2many and tagInput", async () => {
+  const f = await fixture({ publicView: true, id: null, resourceMetadata: containerResource, viewFields: containerFields });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "New note" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables).toStrictEqual({
+    title: "New note", config: {}, layout: {}, members: [], labels: [], steps: [], mappings: [],
+  });
+});
+
 test("a stateful bound widget remounts when its nested scope changes", async () => {
   const until: DescriptorField = { name: "until", label: "Until", widget: "datetime" };
   const f = await fixture({
@@ -1420,6 +1661,7 @@ test("a stateful bound widget remounts when its nested scope changes", async () 
       },
     },
     mountedFields: [],
+    viewFields: [...fields, { name: "definition", hidden: true }],
     boundFields: [{ field: until, scope: "definition.nodes.first.config" }],
   });
   await waitFor(() => expect(screen.getByLabelText("Until").textContent).toContain("Sep 10, 2026"));
@@ -1474,12 +1716,14 @@ test("updates send the edit baseline revision and retain a stale draft", async (
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
-test("create retries reuse the form session's idempotency key", async () => {
+test("create retries reuse the form session's idempotency key, and a lost answer says the retry is safe", async () => {
   const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
   edit("title", "New record");
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce(new Error("Unavailable"));
   await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key: the keyed create's lost-answer sentence.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostResend"]);
   await act(async () => f.surface().submitForm());
   expect(f.update).toHaveBeenCalledTimes(2);
   const key = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
@@ -1507,13 +1751,33 @@ test("CREATION_KEY_CONFLICT keeps the draft and renews the next attempt's key", 
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Conflict", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveConflict).toBe(true);
+  // A spent key is no stale edit: the stale banner and its reload are not offered.
+  expect(f.surface().saveConflict).toBe(false);
   expect(f.surface().form.getValues("title")).toBe("My record");
   const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
   await act(async () => f.surface().submitForm());
   const next = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.idempotency_key;
   expect(next).toEqual(expect.any(String));
   expect(next).not.toBe(first);
+});
+
+test("a create whose key an earlier attempt spent is told in the form's own words, with nothing to undo; a stale edit keeps its banner", async () => {
+  const f = await fixture({ id: null, rootArguments: true, publicView: true,
+    viewFields: [{ name: "title", label: "Title" }, { name: "deadline", label: "Deadline" }] });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "My record" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Deadline" }), { target: { value: "2026-09-28" } });
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  expect(await screen.findByText("Created earlier")).toBeTruthy();
+  expect(screen.getByText("An earlier attempt to save from this form already created a record; find it among the existing ones before saving again.")).toBeTruthy();
+  expect(screen.queryByText("CREATION_KEY_CONFLICT")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reload saved record" })).toBeNull();
+  expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("My record");
+
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Changed", extensions: { code: "STALE_REVISION" } }] });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  expect(await screen.findByText("Record changed")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Reload saved record" })).toBeTruthy();
 });
 
 test("custom create owners receive a retry-stable key that clears on acceptance", async () => {
@@ -1530,6 +1794,59 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
   expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
+});
+
+test("a custom create owner's lost answer says only that it may have been sent: the form cannot tell that its owner sends the key", async () => {
+  const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(boundedGraphQLTransportError(new TypeError("Failed to fetch")));
+  const f = await fixture({ id: null, submit, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "One");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostMaybeSent"]);
+});
+
+test("a new record is one draft: a refused create keeps its key for the corrected retry, and discarding it then starts a new draft", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "Refused");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Invalid.", extensions: {
+    code: "VALIDATION", validationErrors: { title: ["Taken."] }, formErrors: [] } }] });
+  await act(async () => f.surface().submitForm());
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Invalid.", extensions: {
+    code: "VALIDATION", validationErrors: { title: ["Taken."] }, formErrors: [] } }] });
+  edit("title", "Corrected");
+  await act(async () => f.surface().submitForm());
+  act(() => f.surface().discardChanges());
+  edit("title", "Another record");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const [refused, corrected, afterDiscard] = f.update.mock.calls.map(([call]) => call.meta?.gqlVariables?.idempotency_key);
+  expect(refused).toEqual(expect.any(String));
+  expect(corrected).toBe(refused);
+  expect(afterDiscard).not.toBe(refused);
+});
+
+test("a create whose answer was lost keeps its key when the form is discarded, or left and returned to: the record may exist, and the identical retry replays to it", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  await act(async () => f.surface().submitForm());
+  act(() => f.surface().discardChanges());
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  f.rerender({ recordId: "note-1" });
+  f.rerender({ recordId: null });
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const keys = f.update.mock.calls.filter(([call]) => call.meta?.gqlVariables?.idempotency_key).map(([call]) => call.meta?.gqlVariables?.idempotency_key);
+  expect(keys).toHaveLength(3);
+  expect(new Set(keys).size).toBe(1);
+  // The server answers the same key with the same content with the record it created: the form lands on it.
+  expect(f.onSaved.mock.lastCall?.[0]).toMatchObject({ id: "note-1", title: "Lost" });
 });
 
 test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and receives corrected retry values without native insert capabilities", async (owner) => {
@@ -1569,7 +1886,7 @@ test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and
   expect(f.update).not.toHaveBeenCalled();
   expect(f.onSaved).toHaveBeenCalledOnce();
   expect(f.surface().formIsDirty).toBe(false);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
 });
 
 test("native create submissions retain their resource-owned writable field restriction", async () => {
@@ -1695,7 +2012,7 @@ test("a missing custom response reports failure and retains the draft", async ()
   const f = await fixture({ submit: async () => savedFormSubmitResult<Row>(undefined, "No record returned.") });
   edit("title", "Unsaved");
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBe("No record returned.");
+  expect(f.surface().saveErrors).toEqual(["No record returned."]);
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
@@ -1716,8 +2033,8 @@ test("nested server errors and root failures share the native form store", async
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
-  expect(f.surface().saveError).toBe("Cannot save lines.0.title: Invalid line");
-  expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
+  // The form-level reason, the line naming the refused field the form shows, then the reason no field shows.
+  expect(f.surface().saveErrors).toEqual(["Cannot save", "form.fixHighlightedFieldsNamed", "lines.0.title: Invalid line"]);
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
 });
@@ -1988,12 +2305,41 @@ test("a bound descriptor whose resolve returns another name reads and writes its
     },
     mountedFields: [],
     boundFields: [{ scope: "settings", field: {
-      name: "retry", label: "Retry", resolve: () => ({ name: "elsewhere", label: "Retry" }),
+      // This cast hides the returned `name` from the compiler; the declared path must still win.
+      name: "retry", label: "Retry", resolve: () => ({ name: "elsewhere", label: "Retry" }) as Omit<DescriptorField, "name">,
     } }],
   });
   expect((await screen.findByLabelText("Retry") as HTMLInputElement).value).toBe("later");
   edit("Retry", "soon");
   expect(f.surface().form.getValues("settings")).toEqual({ retry: "soon" });
+});
+
+test("a scoped bound descriptor's invalid JSON draft stops Save at its own path: marked, named and focused there, nothing sent; corrected, it goes out", async () => {
+  let surface!: FormViewSaveSurface;
+  const f = await fixture({
+    publicView: true, record: { settings: { payload: { n: 1 } } },
+    viewFields: [{ name: "title", label: "Title" }, { name: "settings", label: "Settings", hidden: true }],
+    formExtras: ({ form }) => {
+      surface = form;
+      return <BoundDescriptorField form={form} resource="notes.Note" scope="settings" field={{ name: "payload", label: "Payload", widget: "json" }} />;
+    },
+  });
+  const payload = await screen.findByRole("textbox", { name: "Payload" });
+  await waitFor(() => expect(jsonShown("Payload")).toEqual({ n: 1 }));
+  typeDraft(payload, '{"n": 2}');
+  typeDraft(payload, '{"n": 2');
+  fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+  await waitFor(() => expect(payload.getAttribute("aria-invalid")).toBe("true"));
+  expect(payload.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText("Enter a valid value.").id);
+  await waitFor(() => expect(document.activeElement).toBe(payload));
+  expect([surface.form.getFieldState("settings.payload").error?.message, surface.form.getFieldState("payload").error]).toEqual(["Enter a valid value.", undefined]);
+  await pastEveryTimer();
+  expect(f.update).not.toHaveBeenCalled();
+
+  typeDraft(payload, '{"n": 3}');
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect((f.update.mock.calls[0]![0] as { variables: Row }).variables).toEqual({ settings: { payload: { n: 3 } } });
 });
 
 test("a keystroke in a field without a preset evaluates the form's conditions no more than it has to", async () => {
@@ -2063,7 +2409,7 @@ test.each(["invalid", "conflict"] as const)("a typed %s result keeps the edit ba
   expect(f.onSaved).not.toHaveBeenCalled();
   expect(f.surface().form.formState.errors.root?.server?.type).toBe(status === "conflict" ? "conflict" : "server");
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
   expect(f.surface().formIsDirty).toBe(false);
   expect(f.onSaved).toHaveBeenCalledTimes(1);
@@ -2075,7 +2421,7 @@ test("a post-save callback failure does not convert an acknowledged save into a 
   edit("title", "Accepted");
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow("Continuation failed"); });
   expect(f.surface().formIsDirty).toBe(false);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().form.getValues("title")).toBe("Accepted");
 });
 
@@ -2174,7 +2520,7 @@ test("an outdated custom save result fails loudly without presenting a retry ban
   const f = await fixture({ submit });
   edit("title", "Already saved");
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow(/FormSubmitResult contract/); });
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
 
@@ -2252,7 +2598,7 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
     }
   });
   if (mode === "rejected") {
-    expect(surface.saveError).toBe("Refused");
+    expect(surface.saveErrors).toEqual(["Refused"]);
     expect(write).not.toHaveBeenCalled();
     expect(getList).toHaveBeenCalledTimes(3);
     expect(custom).toHaveBeenCalledTimes(2);
@@ -2265,4 +2611,34 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
     expect(custom.mock.calls.filter(([params]) => params.meta?.gqlQuery === currentSummary)).toHaveLength(2);
   }
   expect(unrelatedTitle).toBe("Before");
+});
+
+test.each([
+  { where: "a field of the sheet", title: false },
+  { where: "the form's title", title: true },
+])("a record form's relation offers inline edit of its selected record, and `relationEdit: null` declines it, on $where", async ({ title }) => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const rows: Record<string, Row> = {
+    "note-1": { id: "note-1", title: "Child", parent: { id: "note-2", title: "Parent note" } },
+    "note-2": { id: "note-2", title: "Parent note" },
+  };
+  const form = (relationEdit?: null) => <Provider resources={[resource]}
+    dataProvider={{ getOne: async ({ id }) => ({ data: rows[String(id)] ?? {} }),
+      getList: async () => ({ data: [rows["note-2"]!], total: 1 }) }}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <FormView resource="notes.Note" id="note-1" fields={[
+        ...(title ? [] : [{ name: "title", label: "Title", title: true }]),
+        { name: "parent", label: "Parent", kind: "relation", widget: "many2one", ...(title ? { title: true } : {}), ...(relationEdit === null ? { relationEdit } : {}) },
+      ]} />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>;
+
+  const view = render(form());
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(await screen.findByRole("button", { name: "Edit record" })).toBeTruthy();
+  view.unmount();
+
+  render(form(null));
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
 });

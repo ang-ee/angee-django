@@ -12,6 +12,7 @@ import { ControlBandProvider } from "../../layouts/ControlBand";
 import { CommandBand } from "../resource/CommandBand";
 import { cn } from "../../lib/cn";
 import { ContainerOutlet } from "../../lib/container-outlet";
+import { DraftScopeProvider } from "../../lib/idempotency-key";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
 import type { RecordHeaderProps } from "../../fragments/RecordHeader";
@@ -38,7 +39,7 @@ import {
 } from "./form-view-surface";
 import {
   FORM_VIEW_COLUMN_CLASS,
-  FormViewLinesPane,
+  FormViewLines,
   FormViewPaneGroup,
   FormViewRail,
   FormViewRecordHeader,
@@ -67,6 +68,7 @@ export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
 
 export type {
+  FormNextSave,
   FormSubmit,
   FormSubmitAcknowledgement,
   FormSubmitContext,
@@ -138,7 +140,12 @@ function FormViewComponent(props: FormViewProps): React.ReactElement {
   />;
 }
 
-/** Existing public FormView export also exposes form-owned declaration seams.
+/** Existing public FormView export also exposes form-owned declaration seams. It guards
+ * unsaved edits against route moves (`useUnsavedChangesNavigationGuard`), so it renders under
+ * the app's router and `ModalsHost`, editable or not: without the router it throws at render
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.` A test or a story
+ * provides both through the shared providers (`createUiTestProviders` or
+ * `AppShellTestProviders` with `router`, the workshop's routed fixtures).
  * @kind surface
  */
 export const FormView = Object.assign(FormViewComponent, {
@@ -148,7 +155,10 @@ export const FormView = Object.assign(FormViewComponent, {
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
   const surface = useFormViewSurface(props);
-  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+  // A create form inside this form (a relation field's, an embedded list's) names its draft under this one's.
+  return <DraftScopeProvider scope={surface.draftScope}>
+    <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>
+  </DraftScopeProvider>;
 }
 
 function FormViewContent({ surface, ...props }: FormViewProps & {
@@ -191,8 +201,10 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     formIsDirty,
     displayRecord,
     loadError,
-    saveError,
+    saveErrors,
+    saveBanner,
     saveConflict,
+    saveKeyConflict,
     declaredActions,
     genericActions,
     actionsBlocked,
@@ -294,7 +306,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const paneContent = (pane: FormViewPane): React.ReactNode => {
     if (awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === pane.id;
-    if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLinesPane surface={surface} {...lineProps} />;
+    if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLines surface={surface} {...lineProps} />;
     const paneSection = surface.paneSections.find((section) => section.pane === pane.id);
     if (paneSection) return <FormViewPaneGroup surface={surface} section={paneSection} />;
     const tab = recordTabById.get(pane.id);
@@ -310,15 +322,17 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
       : content;
   };
-  // Tabbed, each pane is a tab panel; a lone one is the plain region beneath the sheet.
+  // Every pane is a panel of the form's one Tabs root, keyed by its id, however many panes there are:
+  // a pane coming or going never rebuilds another. Tabbed, a panel is labelled by its tab; a lone pane
+  // has no tab, so its panel renders the plain region beneath the sheet, under the pane's heading.
   const paneRegions = panes.map((pane) => {
     const paneClass = fullBleed(pane) ? "flex min-h-0 flex-1 flex-col overflow-hidden pt-0" : cn(FORM_VIEW_COLUMN_CLASS, "pt-3 pb-12");
-    const content = <ControlBandProvider host={undefined}>{renderPane(pane)}</ControlBandProvider>;
     // The lines pane stays mounted so its draft rows and their errors survive switching panes.
     const keepMounted = pane.id === EDITABLE_LINES_SECTION || recordTabById.get(pane.id)?.keepMounted;
-    return tabbed
-      ? <Tabs.Panel key={pane.id} value={pane.id} keepMounted={keepMounted} className={paneClass}>{content}</Tabs.Panel>
-      : <div key={pane.id} className={paneClass}>{content}</div>;
+    return <Tabs.Panel key={pane.id} value={pane.id} keepMounted={keepMounted} className={paneClass}
+      render={tabbed ? undefined : ({ ref, children }) => <div ref={ref} className={paneClass}>{children}</div>}>
+      <ControlBandProvider host={undefined}>{renderPane(pane)}</ControlBandProvider>
+    </Tabs.Panel>;
   });
   const formTitle = awaitingRecord ? undefined : typeof title === "function" ? title(recordToolbarContext) : title;
   const formEyebrow = awaitingRecord ? undefined : typeof eyebrow === "function" ? eyebrow(recordToolbarContext) : eyebrow;
@@ -406,8 +420,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
     <ErrorBanner
-      description={saveError}
-      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      {...saveBanner}
+      // A spent key is told in the form's own words, true however the person got here (a different
+      // record after a discard, or the same one corrected after a lost answer); it offers nothing to
+      // undo, since saving again is the person's call.
+      messages={saveKeyConflict ? [t("form.createdEarlier")] : saveErrors}
+      title={t(saveConflict ? "form.saveConflict" : saveKeyConflict ? "form.createdEarlierTitle" : "form.saveFailed")}
       actions={saveConflict ? (
         <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
           {t("form.reloadSaved")}

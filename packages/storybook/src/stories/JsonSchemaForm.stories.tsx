@@ -21,13 +21,14 @@ function JsonSchemaForm(): React.ReactElement {
   const { form, run } = useActionForm<Values>({
     defaultValues: { title: "", email: "" },
     resolver,
+    shownFieldNames: fields.map((field) => field.name),
     submit: (values) => { setAccepted(values); return { status: "ok", data: null }; },
   });
   return <ActionFormProvider {...form}>
     <form className="grid w-96 gap-4" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <DescriptorFieldList fields={fields} />
       <Button type="submit">Validate</Button>
-      {accepted ? <pre className="rounded-6 bg-surface-inset p-3 text-12">{JSON.stringify(accepted, null, 2)}</pre> : null}
+      {accepted ? <pre className="rounded-6 bg-inset p-3 text-12">{JSON.stringify(accepted, null, 2)}</pre> : null}
     </form>
   </ActionFormProvider>;
 }

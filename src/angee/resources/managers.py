@@ -144,26 +144,40 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     """Orchestrate selected addon resources independently of ledger row filters."""
 
     @overload
-    def resolve[TargetT: models.Model](self, handle: str, *, model: type[TargetT]) -> TargetT: ...
+    def resolve[TargetT: models.Model](
+        self, handle: str, *, model: type[TargetT], addon_aliases: Mapping[str, str] | None = None,
+    ) -> TargetT: ...
 
     @overload
-    def resolve(self, handle: str, *, model: None = None) -> models.Model: ...
+    def resolve(
+        self, handle: str, *, model: None = None, addon_aliases: Mapping[str, str] | None = None,
+    ) -> models.Model: ...
 
-    def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
-        """Resolve a ledger handle under the current actor, optionally checking its type."""
+    def resolve(
+        self, handle: str, *, model: type[models.Model] | None = None, addon_aliases: Mapping[str, str] | None = None,
+    ) -> models.Model:
+        """Resolve a ledger handle under the current actor, optionally checking its type.
 
-        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
+        ``addon_aliases`` scopes the handle's addon to one load's selection, as
+        that load's relation columns are; without it every installed addon is in scope.
+        """
 
-    def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
+        aliases = addon_aliases if addon_aliases is not None else self._addon_aliases(apps.get_app_configs())
+        return resolve_xref(handle, self.model, aliases, model=model)
+
+    def resolve_config_references(
+        self, value: Any, *, schema: dict[str, Any], addon_aliases: Mapping[str, str] | None = None,
+    ) -> Any:
         """Resolve dotted xrefs only at schema-declared relation positions.
 
         Public ids and ordinary strings remain literal. The ledger resolution
-        owner enforces target types, as it does for resource imports.
+        owner enforces target types, as it does for resource imports; a resource
+        adapter passes its load's ``addon_aliases`` (:meth:`resolve`).
         """
 
         resolved = copy.deepcopy(value)
         for path, relation, item in relation_positions(schema, value):
-            public_id = self.resolve_config_reference(item, relation=relation)
+            public_id = self.resolve_config_reference(item, relation=relation, addon_aliases=addon_aliases)
             if not path:
                 resolved = public_id
                 continue
@@ -173,12 +187,16 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
             parent[path[-1]] = public_id
         return resolved
 
-    def resolve_config_reference(self, value: str, *, relation: dict[str, Any]) -> str:
+    def resolve_config_reference(
+        self, value: str, *, relation: dict[str, Any], addon_aliases: Mapping[str, str] | None = None,
+    ) -> str:
         """Resolve one declared relation's xref, preserving literal public ids."""
 
         if not is_xref(value):
             return value
-        target = self.resolve(value, model=ModelLabelField.get_model(relation["resource"]))
+        target = self.resolve(
+            value, model=ModelLabelField.get_model(relation["resource"]), addon_aliases=addon_aliases,
+        )
         return str(public_id_of(target))
 
     def upsert_target(

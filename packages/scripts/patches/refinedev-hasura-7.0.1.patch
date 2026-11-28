@@ -1,0 +1,133 @@
+Upstream @refinedev/hasura 7.0.1 merges a read's sorters into one order_by object:
+generateSorting spreads each sorter's object into the one before it. A GraphQL server
+coerces an input object in its input type's own field order, not in the order its keys
+were written, so an order_by object carries no priority: a list read sorted by two keys
+or more is ordered by whichever key its order_by type declares first, and two sorters
+under one relation overwrite each other. Hasura's own multi-column sort is a list.
+
+This patch makes generateSorting return a list, one object per sorter in the order
+given, a dotted field nested as before; no sorters still give undefined. getList's
+non-default naming path converts each entry of that list. The ESM and CommonJS builds,
+the declarations of generateSorting and the shipped sources change the same lines in
+place, so the source maps keep their positions; the source text they embed still shows
+the stock functions. Remove the patch and its install-policy entry when the first
+@refinedev/hasura release that sends sorters as a list is adopted.
+
+diff --git a/dist/index.cjs b/dist/index.cjs
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -203,10 +203,10 @@
+   if (!sorters) {
+     return void 0;
+   }
+-  let mergedSorting = {};
++  let mergedSorting = [];
+   sorters.forEach((sorter) => {
+     const nestedSorting = generateNestedSorting(sorter);
+-    mergedSorting = { ...mergedSorting, ...nestedSorting };
++    mergedSorting = [...mergedSorting, nestedSorting];
+   });
+   return mergedSorting;
+ };
+@@ -586,7 +586,7 @@
+         mode = "server"
+       } = pagination ?? {};
+       const hasuraPagination = mode === "server" ? { limit, offset: (currentPage - 1) * limit } : {};
+-      const hasuraSorting = defaultNamingConvention ? generateSorting(sorters) : upperCaseValues(camelizeKeys(generateSorting(sorters)));
++      const hasuraSorting = defaultNamingConvention ? generateSorting(sorters) : generateSorting(sorters)?.map((sorting) => upperCaseValues(camelizeKeys(sorting)));
+       let hasuraFilters2 = generateFilters(filters, namingConvention);
+       let query2;
+       let variables;
+diff --git a/dist/index.mjs b/dist/index.mjs
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -159,10 +159,10 @@
+   if (!sorters) {
+     return void 0;
+   }
+-  let mergedSorting = {};
++  let mergedSorting = [];
+   sorters.forEach((sorter) => {
+     const nestedSorting = generateNestedSorting(sorter);
+-    mergedSorting = { ...mergedSorting, ...nestedSorting };
++    mergedSorting = [...mergedSorting, nestedSorting];
+   });
+   return mergedSorting;
+ };
+@@ -542,7 +542,7 @@
+         mode = "server"
+       } = pagination ?? {};
+       const hasuraPagination = mode === "server" ? { limit, offset: (currentPage - 1) * limit } : {};
+-      const hasuraSorting = defaultNamingConvention ? generateSorting(sorters) : upperCaseValues(camelizeKeys(generateSorting(sorters)));
++      const hasuraSorting = defaultNamingConvention ? generateSorting(sorters) : generateSorting(sorters)?.map((sorting) => upperCaseValues(camelizeKeys(sorting)));
+       let hasuraFilters2 = generateFilters(filters, namingConvention);
+       let query2;
+       let variables;
+diff --git a/dist/utils/generateSorting.d.cts b/dist/utils/generateSorting.d.cts
+--- a/dist/utils/generateSorting.d.cts
++++ b/dist/utils/generateSorting.d.cts
+@@ -4,5 +4,5 @@
+     [key: string]: HasuraSorting;
+ };
+ export type HasuraSortingType = Record<string, HasuraSorting>;
+-export declare const generateSorting: (sorters: CrudSorting | undefined) => HasuraSortingType | undefined;
++export declare const generateSorting: (sorters: CrudSorting | undefined) => HasuraSortingType[] | undefined;
+ //# sourceMappingURL=generateSorting.d.ts.map
+\ No newline at end of file
+diff --git a/dist/utils/generateSorting.d.mts b/dist/utils/generateSorting.d.mts
+--- a/dist/utils/generateSorting.d.mts
++++ b/dist/utils/generateSorting.d.mts
+@@ -4,5 +4,5 @@
+     [key: string]: HasuraSorting;
+ };
+ export type HasuraSortingType = Record<string, HasuraSorting>;
+-export declare const generateSorting: (sorters: CrudSorting | undefined) => HasuraSortingType | undefined;
++export declare const generateSorting: (sorters: CrudSorting | undefined) => HasuraSortingType[] | undefined;
+ //# sourceMappingURL=generateSorting.d.ts.map
+\ No newline at end of file
+diff --git a/dist/utils/generateSorting.d.ts b/dist/utils/generateSorting.d.ts
+--- a/dist/utils/generateSorting.d.ts
++++ b/dist/utils/generateSorting.d.ts
+@@ -4,5 +4,5 @@
+     [key: string]: HasuraSorting;
+ };
+ export type HasuraSortingType = Record<string, HasuraSorting>;
+-export declare const generateSorting: (sorters: CrudSorting | undefined) => HasuraSortingType | undefined;
++export declare const generateSorting: (sorters: CrudSorting | undefined) => HasuraSortingType[] | undefined;
+ //# sourceMappingURL=generateSorting.d.ts.map
+\ No newline at end of file
+diff --git a/src/dataProvider/index.ts b/src/dataProvider/index.ts
+--- a/src/dataProvider/index.ts
++++ b/src/dataProvider/index.ts
+@@ -161,7 +161,7 @@
+ 
+       const hasuraSorting = defaultNamingConvention
+         ? generateSorting(sorters)
+-        : upperCaseValues(camelizeKeys(generateSorting(sorters)));
++        : generateSorting(sorters)?.map((sorting) => upperCaseValues(camelizeKeys(sorting)));
+ 
+       let hasuraFilters = generateFilters(filters, namingConvention);
+       let query;
+diff --git a/src/utils/generateSorting.ts b/src/utils/generateSorting.ts
+--- a/src/utils/generateSorting.ts
++++ b/src/utils/generateSorting.ts
+@@ -17,16 +17,16 @@
+ 
+ export const generateSorting: (
+   sorters: CrudSorting | undefined,
+-) => HasuraSortingType | undefined = (sorters) => {
++) => HasuraSortingType[] | undefined = (sorters) => {
+   if (!sorters) {
+     return undefined;
+   }
+ 
+-  let mergedSorting: HasuraSortingType = {};
++  let mergedSorting: HasuraSortingType[] = [];
+ 
+   sorters.forEach((sorter) => {
+     const nestedSorting = generateNestedSorting(sorter);
+-    mergedSorting = { ...mergedSorting, ...nestedSorting };
++    mergedSorting = [...mergedSorting, nestedSorting];
+   });
+ 
+   return mergedSorting;

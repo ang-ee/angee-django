@@ -1,9 +1,14 @@
 import * as React from "react";
+import type { ErrorObject } from "ajv";
 import {
-  extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+  actionOutcomeReasons, extractActionOutcome, failedWriteOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome,
+  type AuthoredMutateOptions, type FailedWriteOutcome,
 } from "@angee/refine";
-import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
+import { get, set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
+import type { UiTranslate } from "../../i18n";
+import type { FieldDescriptor } from "../page";
+import type { FieldRuleError } from "./field-values";
 
 /**
  * The call options of a surface that renders a submission's failure itself (a dialog's
@@ -35,11 +40,165 @@ export interface ValidationErrors {
   formErrors: readonly string[];
 }
 
-/** A save either acknowledges data, reports validation issues, or rejects a stale edit. */
+/**
+ * A failed rule in JSON Schema's vocabulary: its keyword and the keyword's parameters, as an Ajv
+ * error carries them. Read-only, parameters included, since one rule object may be shared
+ * (`REQUIRED_RULE` is frozen).
+ */
+export type JsonSchemaRule = Readonly<Pick<ErrorObject<string, Readonly<Record<string, unknown>>>, "keyword" | "params">>;
+
+function typeLabel(value: unknown, t: UiTranslate): string | undefined {
+  switch (value) {
+    case "string": return t("form.validation.type.text");
+    case "number": return t("form.validation.type.number");
+    case "integer": return t("form.validation.type.integer");
+    case "boolean": return t("form.validation.type.boolean");
+    case "array": return t("form.validation.type.array");
+    case "object": return t("form.validation.type.object");
+    case "null": return t("form.validation.type.null");
+    default: return undefined;
+  }
+}
+
+function formatLabel(value: unknown, t: UiTranslate): string | undefined {
+  switch (value) {
+    case "date": return t("form.validation.format.date");
+    case "time": case "iso-time": return t("form.validation.format.time");
+    case "date-time": case "iso-date-time": return t("form.validation.format.dateTime");
+    case "duration": return t("form.validation.format.duration");
+    case "email": return t("form.validation.format.email");
+    case "hostname": return t("form.validation.format.hostname");
+    case "ipv4": case "ipv6": return t("form.validation.format.ipAddress");
+    case "uri": case "uri-reference": case "url": return t("form.validation.format.address");
+    case "uri-template": return t("form.validation.format.addressTemplate");
+    case "uuid": return t("form.validation.format.identifier");
+    case "regex": return t("form.validation.format.expression");
+    case "json-pointer": case "relative-json-pointer": return t("form.validation.format.jsonPointer");
+    default: return undefined;
+  }
+}
+
+/**
+ * The shared UI copy for a failed rule, whether Ajv reported it or a form checked a descriptor's
+ * own constraints (`structuredFieldErrors`); the caller supplies its active UI translator. It
+ * words the keyword it is given and decides nothing else: whether an empty text counts as missing
+ * is decided where the rule is found. A limit that counts characters or items is the `count` its
+ * message's plural forms are chosen by.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function jsonSchemaErrorMessage({ keyword, params }: JsonSchemaRule, t: UiTranslate): string {
+  switch (keyword) {
+    case "required": return t("form.required");
+    case "enum": case "discriminator": return t("form.validation.choice");
+    case "type": {
+      const type = typeLabel(params.type, t);
+      return type ? t("form.validation.type", { type }) : t("form.invalidValue");
+    }
+    case "minLength": return t("form.validation.minLength", { count: Number(params.limit) });
+    case "maxLength": return t("form.validation.maxLength", { count: Number(params.limit) });
+    case "minimum": return t("form.validation.minimum", { limit: Number(params.limit) });
+    case "maximum": return t("form.validation.maximum", { limit: Number(params.limit) });
+    case "exclusiveMinimum": return t("form.validation.exclusiveMinimum", { limit: Number(params.limit) });
+    case "exclusiveMaximum": return t("form.validation.exclusiveMaximum", { limit: Number(params.limit) });
+    case "minItems": return t("form.validation.minItems", { count: Number(params.limit) });
+    case "maxItems": return t("form.validation.maxItems", { count: Number(params.limit) });
+    case "uniqueItems": return t("form.validation.uniqueItems");
+    case "format": {
+      const format = formatLabel(params.format, t);
+      return format ? t("form.validation.format", { format }) : t("form.validation.pattern");
+    }
+    case "pattern": return t("form.validation.pattern");
+    case "const": return t("form.validation.const");
+    case "additionalProperties": return t("form.validation.additionalProperties");
+    default: return t("form.invalidValue");
+  }
+}
+
+/**
+ * A form's errors for the rules its fields fail, set at each rule's dotted path: an error's
+ * `type` is the failed rule's keyword and its message that rule's shared copy
+ * (`jsonSchemaErrorMessage`).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function fieldErrorsFromRules(
+  failed: readonly FieldRuleError[],
+  t: UiTranslate,
+): FieldErrors<Record<string, unknown>> {
+  const errors: FieldErrors<Record<string, unknown>> = {};
+  for (const error of failed) set(errors, error.path, { type: error.keyword, message: jsonSchemaErrorMessage(error, t) });
+  return errors;
+}
+
+/**
+ * The `type` of an object field's error that is its members' errors. An object field, one that
+ * owns an `objectTemplate`, is one registered control whose members report their errors under
+ * its own node; `markMemberErrors` gives that node this `type` and no message of its own. Its
+ * messages are its members'.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export const MEMBER_ERRORS = "memberErrors";
+
+/**
+ * A resolver's error tree in the shape react-hook-form keeps. At a change the library keeps the
+ * changed field's error only when it has a `type` or a `message`, or is an array, so the node of
+ * an object field whose members failed, a plain object of their errors, would be dropped, and
+ * their messages with it, while the form stays invalid. Of the `fields` a form shows, each object
+ * field (one that owns an `objectTemplate`) whose node is a plain object with neither a `type` nor
+ * a `message` of its own gets `type: MEMBER_ERRORS` and no message: the field error that also
+ * carries its members' errors, as the library's type for an object-valued field describes it. A
+ * field without a template (a `json` field holding an object, a root of dotted fields, a scalar)
+ * is never marked, whatever sits under its path; nor is an object field's leaf error, the root
+ * above it, an object member inside it, or an object field with no error. Returns `errors`,
+ * marked in place.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function markMemberErrors<TErrors extends object>(
+  errors: TErrors,
+  fields: Iterable<Pick<FieldDescriptor, "name" | "objectTemplate">>,
+): TErrors {
+  for (const field of fields) {
+    if (!field.objectTemplate) continue;
+    const node: unknown = get(errors, field.name);
+    if (node && typeof node === "object" && !Array.isArray(node) && !("type" in node) && !("message" in node)) {
+      Object.assign(node, { type: MEMBER_ERRORS });
+    }
+  }
+  return errors;
+}
+
+/** The server's code for a conflict: a stale revision, or an idempotency key spent on other content. */
+export type FormSubmitConflictCode = "STALE_REVISION" | "CREATION_KEY_CONFLICT";
+
+/**
+ * A save either acknowledges data, reports validation issues, or rejects it for a conflict: a
+ * stale edit (`code` `STALE_REVISION`, or none: a custom submit's bare conflict is a stale one),
+ * or a create whose idempotency key an earlier version spent (`CREATION_KEY_CONFLICT`). Issues
+ * marked `outcome: "unconfirmed"` report a lost answer: the save may have been written.
+ */
 export type FormSubmitResult<TData> =
   | { status: "ok"; data: TData; message?: string }
-  | { status: "invalid"; issues: ValidationErrors }
-  | { status: "conflict"; message: string; field?: string };
+  | { status: "invalid"; issues: ValidationErrors; outcome?: "unconfirmed" }
+  | { status: "conflict"; message: string; field?: string; code?: FormSubmitConflictCode };
+
+const CONFLICT_CODES: ReadonlySet<unknown> = new Set<FormSubmitConflictCode>(["STALE_REVISION", "CREATION_KEY_CONFLICT"]);
+
+/**
+ * What a submit's result tells its draft's idempotency key (`useIdempotencyKeys().send`'s
+ * `outcome`): an accepted result confirms it (null), a conflict with the creation-key code says
+ * the key is spent, issues marked unconfirmed keep it as possibly written, and every other
+ * refusal refuses it. The record form and both dialogs pass it.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function formSubmitOutcome(result: FormSubmitResult<unknown>): FailedWriteOutcome | null {
+  if (result.status === "ok") return null;
+  if (result.status === "invalid") return result.outcome ?? "refused";
+  return result.code === "CREATION_KEY_CONFLICT" ? "conflict" : "refused";
+}
 
 /** Decode a wire action response through the transport owner.
  * @kind null
@@ -49,17 +208,25 @@ export function actionFormSubmitResult(data: unknown, root: string): FormSubmitR
   return actionOutcomeSubmitResult(extractActionOutcome(data, root));
 }
 
-/** Adapt an already normalized action outcome without decoding it again.
+/** Adapt an already normalized action outcome without decoding it again. A refusal with a
+ * conflict code is that conflict. Any other keeps its field reasons under their keys, for the form
+ * to bind, and its non-field reasons (Django's `__all__` key) are its form-level reasons, as they
+ * are. Its `message` stands in only when it carries no reason at all (`actionOutcomeReasons`, as
+ * `runActionResult` reads it): the server joins every reason into it, and a refused target's is
+ * only the verb's summary.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefined): FormSubmitResult<ActionOutcome> {
-  return outcome?.ok
-    ? { status: "ok", data: outcome, message: outcome.message }
-    : invalidFormSubmit({
-        fieldErrors: outcome?.validationErrors ?? {},
-        formErrors: outcome?.message ? [outcome.message] : [],
-      });
+  if (outcome && !outcome.ok && CONFLICT_CODES.has(outcome.code)) {
+    return { status: "conflict", code: outcome.code as FormSubmitConflictCode, message: outcome.message };
+  }
+  if (outcome?.ok) return { status: "ok", data: outcome, message: outcome.message };
+  const { __all__: nonField = [], ...fieldErrors } = outcome?.validationErrors ?? {};
+  return invalidFormSubmit({
+    fieldErrors,
+    formErrors: outcome && actionOutcomeReasons(outcome) ? nonField : outcome?.message ? [outcome.message] : [],
+  });
 }
 
 /**
@@ -78,22 +245,31 @@ export function savedFormSubmitResult<TData>(data: TData | null | undefined, mis
   return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
 }
 
-/** Decode a transport failure; contract violations remain developer errors.
+/** Decode a transport failure, or word a caller's own refusal from its message; contract
+ * violations remain developer errors. A lost answer (`failedWriteOutcome` says `unconfirmed`: no
+ * answer says whether it was written) is marked so on its result, returned or thrown alike, and
+ * reads `answerLost` when the surface gives the sentence it reads there.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
+export function formSubmitError(cause: unknown, fallback?: string, answerLost?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
-  if (publicGraphQLErrorsFromUnknown(cause).some((item) =>
-    item.extensions.code === "STALE_REVISION" || item.extensions.code === "CREATION_KEY_CONFLICT")) {
-    return { status: "conflict", message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
+  if (typeof cause !== "string" && failedWriteOutcome(cause) === "unconfirmed") {
+    const issues = answerLost === undefined ? validationErrorsFromError(cause, fallback) : { fieldErrors: {}, formErrors: [answerLost] };
+    return { status: "invalid", issues, outcome: "unconfirmed" };
+  }
+  const codes = publicGraphQLErrorsFromUnknown(cause).map((item) => item.extensions.code);
+  // A spent key outranks a stale revision: it is what the next attempt must change.
+  const code = codes.includes("CREATION_KEY_CONFLICT") ? "CREATION_KEY_CONFLICT" : codes.includes("STALE_REVISION") ? "STALE_REVISION" : null;
+  if (code) {
+    return { status: "conflict", code, message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
   }
   return invalidFormSubmit(validationErrorsFromError(cause, fallback));
 }
 
 class FormSubmitContractError extends TypeError {
   constructor() {
-    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues }, or { status: "conflict", message }.');
+    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues, outcome? }, or { status: "conflict", message, code? }.');
     this.name = "FormSubmitContractError";
   }
 }
@@ -105,6 +281,8 @@ function assertNeverResult(_result: never): never {
 /** Narrow one submit result and bind its issues to RHF; malformed results fail loudly.
  * A failure is shown once: a message bound to a rendered field stays under that field,
  * and `fallback` stands in only for a failure no field and no form-level message names.
+ * The form-level messages stay several: `root.server` holds them as a list (its `types`),
+ * read with `formErrorsFromForm`; its `message` is their text, one per line.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -112,13 +290,34 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
   form: Pick<UseFormReturn<TValues>, "setError">,
   result: FormSubmitResult<TData>,
   options: {
-    fieldNames?: Iterable<string>;
+    /**
+     * The names of the fields the surface shows, in its order (on a descriptor form, the names of
+     * what `shownFields` returns): each claims the reasons under its path and below it. A reason
+     * under any other path also shows on the banner, as `path: reason`; `[]` states the surface
+     * shows no field a reason can sit under, so every reason goes there. Absent, the caller binds
+     * reasons where they are and knows no drawn fields (a schema resolver's errors, an owner's
+     * projection of its issues onto paths): every path keeps its own reason and no field's reason
+     * reaches the banner, which still shows a form-level reason and a conflict's message.
+     */
+    shownFieldNames?: Iterable<string>;
     fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
     fallback?: string;
+    /**
+     * Bring the person to the refusal: the surface's `useRefusalFocus`, which carries it out once
+     * the surface reports its controls ready. A refusal with a reason no field shows (a form-level
+     * one, or one of a field the form does not display) calls it with no field: the banner, which
+     * then also carries the line naming the refused fields, is the one place that says everything.
+     * A refusal with field reasons only calls it with the first rendered field it names, in the
+     * order of `shownFieldNames` (the server's order without them). A submit's answer asks for this;
+     * an owner that projects issues while the person edits elsewhere does not.
+     */
+    focus?: (field?: string) => void;
   } = {},
 ): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
   let issues: ValidationErrors;
-  let type: "server" | "conflict";
+  // A stale edit is a `conflict` (its surface locks the draft); a spent key is not (its next
+  // attempt is a new draft): its own type, which the record form's banner words.
+  let type: "server" | "conflict" | "creationKeyConflict";
   if (result == null || typeof result !== "object") throw new FormSubmitContractError();
   switch (result.status) {
     case "ok":
@@ -126,7 +325,8 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       return false;
     case "invalid":
       if (!result.issues || !isStringListMap(result.issues.fieldErrors)
-        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")) {
+        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")
+        || (result.outcome !== undefined && result.outcome !== "unconfirmed")) {
         throw new FormSubmitContractError();
       }
       issues = result.issues;
@@ -134,13 +334,20 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       break;
     case "conflict":
       if (typeof result.message !== "string" || (result.field !== undefined && typeof result.field !== "string")) throw new FormSubmitContractError();
+      if (result.code !== undefined && !CONFLICT_CODES.has(result.code)) throw new FormSubmitContractError();
       issues = { fieldErrors: result.field ? { [result.field]: [result.message] } : {}, formErrors: [result.message] };
-      type = "conflict";
+      type = result.code === "CREATION_KEY_CONFLICT" ? "creationKeyConflict" : "conflict";
       break;
     default:
       return assertNeverResult(result);
   }
-  const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
+  const shownFieldNames = options.shownFieldNames === undefined ? undefined : [...options.shownFieldNames];
+  const named = Object.keys(issues.fieldErrors).filter((name) => issues.fieldErrors[name]!.length > 0);
+  const claimed = (name: string) => !shownFieldNames || shownFieldNames.some((field) => dottedPathBelongsToField(name, field));
+  // A reason no field shows: the banner is then the one place that says everything, and takes the focus.
+  const bannerOnly = issues.formErrors.length > 0 || named.some((name) => !claimed(name));
+  const focused = !options.focus || bannerOnly ? undefined
+    : shownFieldNames ? shownFieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
   const bound: Record<string, readonly string[]> = {};
   const unclaimed: Record<string, readonly string[]> = {};
   for (const [name, messages] of Object.entries(issues.fieldErrors)) {
@@ -148,50 +355,120 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     form.setError(name as Path<TValues>, {
       type, message: messages.join(" "), types: { [type]: [...messages] },
     });
-    const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
-    target[name] = messages;
+    (claimed(name) ? bound : unclaimed)[name] = messages;
   }
-  const summary = [...issues.formErrors];
-  if (summary.length === 0 && Object.keys(bound).length && options.fieldSummary) {
-    summary.push(options.fieldSummary(bound));
+  const messages = [...issues.formErrors];
+  if (Object.keys(bound).length && options.fieldSummary) messages.push(options.fieldSummary(bound));
+  messages.push(...dottedPathErrorMessages(unclaimed));
+  if (messages.length === 0 && Object.keys(bound).length === 0 && options.fallback) messages.push(options.fallback);
+  if (messages.length > 0) {
+    form.setError("root.server" as Path<TValues>, { type, message: messages.join("\n"), types: { [type]: messages } });
   }
-  const unclaimedSummary = dottedPathErrorSummary(unclaimed);
-  if (unclaimedSummary) summary.push(unclaimedSummary);
-  const message = summary.join(" ") || (Object.keys(bound).length > 0 ? "" : options.fallback);
-  if (message) form.setError("root.server", { type, message });
+  options.focus?.(focused);
   return true;
 }
 
 /**
- * Project `<field>.<row index>.<child field>` errors into the row-indexed
- * validation contract consumed by editable line cells.
+ * The one owner of where a refusal brings the person (`applyFormErrors`'s `focus`): the first
+ * refused field it names, through the form library's own `setFocus`, or the banner. The request
+ * waits while `ready` is false, for a surface whose controls take no focus while it submits (a
+ * dialog's fields lock then), and is carried out once it is true. A field whose control takes no
+ * focus leaves it to the banner. Not asked, the banner also takes focus when a list lands that it
+ * has not handled yet and focus is not in a refused field; the same list still showing moves
+ * nothing. Spread `banner` on the surface's `ErrorBanner` and pass `focus` as `applyFormErrors`'s
+ * `focus`; `messages` is the list the banner renders (`formErrorsFromForm`), whose identity
+ * changes exactly when a new answer lands.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function lineRowErrorsFromDottedPaths(
-  errors: DottedPathFieldErrorMap,
-  field: string,
-): readonly (ValidationErrors | undefined)[] | undefined {
-  const prefix = `${field}.`;
-  const byRow = new Map<number, ValidationErrors>();
-  for (const [path, messages] of Object.entries(errors)) {
-    if (!path.startsWith(prefix)) continue;
-    const match = /^(\d+)\.(.+)$/.exec(path.slice(prefix.length));
-    if (!match) continue;
-    const index = Number(match[1]);
-    const childField = match[2] as string;
-    const entry = byRow.get(index) ?? { fieldErrors: {}, formErrors: [] };
-    entry.fieldErrors[childField] = [
-      ...(entry.fieldErrors[childField] ?? []),
-      ...messages,
-    ];
-    byRow.set(index, entry);
-  }
-  if (byRow.size === 0) return undefined;
-  const rows: (ValidationErrors | undefined)[] = [];
-  const maxIndex = Math.max(...byRow.keys());
-  for (let index = 0; index <= maxIndex; index += 1) rows.push(byRow.get(index));
-  return rows;
+export function useRefusalFocus<TValues extends FieldValues>(messages: readonly string[], { form, ready = true }: {
+  form: Pick<UseFormReturn<TValues>, "setFocus">;
+  /**
+   * Whether the surface reports its controls ready to take focus; false while they are locked.
+   * Default true. The field's focus is asked of the form library's `setFocus`, which focuses on
+   * its next timer, and must: a select's or combobox's trigger is enabled one synchronous render
+   * after `ready` turns true (Base UI copies `disabled` into its store in a layout effect).
+   * No shipped surface takes the waiting path today (each commits the refusal and the end of its
+   * submit in one batch); `ready` is what keeps the hook from depending on that batching.
+   */
+  ready?: boolean;
+}): {
+  banner: { ref: React.RefObject<HTMLDivElement | null>; tabIndex: -1 };
+  focus: (field?: string) => void;
+} {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const asked = React.useRef<{ field?: string } | null>(null);
+  // The last list whose focus was decided: a list is acted on once.
+  const handled = React.useRef<readonly string[] | null>(null);
+  // Set while a field's focus is on its way: nothing else moves focus meanwhile.
+  const landing = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [request, setRequest] = React.useState(0);
+  const { setFocus } = form;
+  const focus = React.useCallback((field?: string) => {
+    asked.current = { field };
+    setRequest((count) => count + 1);
+  }, []);
+  React.useEffect(() => () => {
+    if (landing.current) clearTimeout(landing.current);
+    landing.current = null;
+  }, []);
+  React.useEffect(() => {
+    if (landing.current) {
+      // A list that arrives while a field's focus is on its way is that refusal's own.
+      if (!asked.current) handled.current = messages;
+      return;
+    }
+    if (!ready) return;
+    const wanted = asked.current;
+    // On a refused field's invalid control, or anywhere inside a field shown invalid (a composite's member).
+    const inRefusedField = () => Boolean(document.activeElement?.closest("[aria-invalid='true'], [data-invalid]"));
+    if (wanted?.field !== undefined) {
+      asked.current = null;
+      handled.current = messages;
+      // Deferred to the form library's next timer, which the select's trigger needs (see `ready`).
+      setFocus(wanted.field as Path<TValues>);
+      // This timer runs after `setFocus`'s (timers of one delay keep their order).
+      landing.current = setTimeout(() => {
+        landing.current = null;
+        if (!inRefusedField()) ref.current?.focus();
+        if (asked.current) setRequest((count) => count + 1);
+      });
+      return;
+    }
+    // Asked for the banner, the request waits for the list it shows.
+    if (messages.length === 0) return;
+    if (!wanted && messages === handled.current) return;
+    asked.current = null;
+    handled.current = messages;
+    if (wanted || !inRefusedField()) ref.current?.focus();
+  }, [messages, ready, request, setFocus]);
+  return React.useMemo(() => ({ banner: { ref, tabIndex: -1 as const }, focus }), [focus]);
+}
+
+/** The one-message list of a form-level error that holds no list, one per error object. */
+const SINGLE_MESSAGE_LISTS = new WeakMap<object, readonly string[]>();
+
+/**
+ * The form-level messages a submit left on the form (`root.server`), each its own entry: the list
+ * `applyFormErrors` stored, or the one message another owner set there. Empty when there is none.
+ * One error object reads as the same list while its message is unchanged, so the list's identity
+ * changes exactly when a new answer lands (the form library sets a new error object for each).
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function formErrorsFromForm(errors: object): readonly string[] {
+  const server = "root" in errors && errors.root && typeof errors.root === "object" && "server" in errors.root ? errors.root.server : undefined;
+  if (!server || typeof server !== "object") return EMPTY_FIELD_NAMES;
+  const type = "type" in server && typeof server.type === "string" ? server.type : undefined;
+  const listed = type && "types" in server && server.types && typeof server.types === "object" ? (server.types as Record<string, unknown>)[type] : undefined;
+  // The stored list itself.
+  if (Array.isArray(listed) && listed.every((message) => typeof message === "string")) return listed;
+  if (!("message" in server) || typeof server.message !== "string" || !server.message) return EMPTY_FIELD_NAMES;
+  const known = SINGLE_MESSAGE_LISTS.get(server);
+  if (known?.[0] === server.message) return known;
+  const list = [server.message];
+  SINGLE_MESSAGE_LISTS.set(server, list);
+  return list;
 }
 
 /**
@@ -300,13 +577,13 @@ export function directDottedPathMessages(
 /**
  * Own a field-to-messages map whose keys may address nested values with dotted
  * paths. A field binds its exact key and descendants, editing it clears the
- * same boundary, and keys belonging to no rendered field fold into one form
- * summary.
+ * same boundary, and keys belonging to none of the `shownFieldNames` fold into
+ * one form summary.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useDottedPathFieldErrors(
-  fieldNames: readonly string[] = EMPTY_FIELD_NAMES,
+  shownFieldNames: readonly string[] = EMPTY_FIELD_NAMES,
 ): DottedPathFieldErrors {
   const [errors, setErrors] = React.useState<DottedPathFieldErrorMap>({});
   const replace = React.useCallback(
@@ -338,13 +615,13 @@ export function useDottedPathFieldErrors(
         Object.fromEntries(
           Object.entries(errors).filter(
             ([path]) =>
-              !fieldNames.some((field) =>
+              !shownFieldNames.some((field) =>
                 dottedPathBelongsToField(path, field),
               ),
           ),
         ),
       ),
-    [errors, fieldNames],
+    [errors, shownFieldNames],
   );
   return { replace, clear, messagesFor, clearField, formSummary };
 }
@@ -353,12 +630,15 @@ function dottedPathBelongsToField(path: string, field: string): boolean {
   return path === field || path.startsWith(`${field}.`);
 }
 
+/** One `field: message` entry per message of a path no rendered field claims. */
+function dottedPathErrorMessages(errors: DottedPathFieldErrorMap): string[] {
+  return Object.entries(errors).flatMap(([field, entries]) => entries.map((message) => `${field}: ${message}`));
+}
+
 function dottedPathErrorSummary(
   errors: DottedPathFieldErrorMap,
 ): string | null {
-  const messages = Object.entries(errors).flatMap(([field, entries]) =>
-    entries.map((message) => `${field}: ${message}`),
-  );
+  const messages = dottedPathErrorMessages(errors);
   return messages.length > 0 ? messages.join(" ") : null;
 }
 
@@ -378,6 +658,29 @@ function validationErrorMessage(error: unknown, fallback: string): string {
 }
 
 const EMPTY_FIELD_NAMES: readonly string[] = [];
+
+/**
+ * The dotted path of every field error the form holds (any type: a server refusal, a rule, a
+ * conflict), never the form-level `root` ones, sorted. A re-read reads it to clear exactly the
+ * errors whose value it replaced.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function fieldErrorPaths(errors: object): readonly string[] {
+  const paths: string[] = [];
+  const visit = (value: unknown, path: string): void => {
+    if (!value || typeof value !== "object") return;
+    if ("type" in value && typeof value.type === "string" && "message" in value) {
+      paths.push(path);
+      return;
+    }
+    for (const [name, child] of Object.entries(value)) {
+      if (name !== "ref" && name !== "types" && !(path === "" && name === "root")) visit(child, path ? `${path}.${name}` : name);
+    }
+  };
+  visit(errors, "");
+  return paths.sort();
+}
 
 /** Project RHF server errors into the backend dotted-path display contract. */
 export function serverErrorsFromForm(errors: object): Record<string, readonly string[]> {

@@ -19,7 +19,7 @@ export interface GroupBucket { key?: Readonly<Record<string, unknown>> | null }
 export interface GroupDimension { input: string; key: string; granularity?: string; rangeKey?: string }
 export interface GroupProjection {
   dimensions: readonly GroupDimension[];
-  orderBy: readonly { field: string; direction: "ASC"; nulls: "LAST" }[];
+  orderBy: readonly { field: string; direction: QuerySort["direction"]; nulls: "LAST" }[];
   valueKey: string;
   labelKey?: string;
 }
@@ -293,13 +293,16 @@ export class ResourceQuery {
   }
 
   /**
-   * One level's server group read over `filter`. A `repeated` level reads only the
-   * records with a value on its axis and keeps its groups of more than one record,
-   * both on the server, so its counts and group pages are the repeated groups'.
+   * One level's server group read over `filter`, its groups in the direction the list's
+   * `order` gives the axis (`GroupAxis.direction`: that of a key the axis shares or of the field
+   * it buckets, so a date's months follow the date; `order` as `sortFrom` reads it, the
+   * resource's default when absent, as the rows' `toOrderBy` reads it). A `repeated` level
+   * reads only the records with a value on its axis and keeps its groups of more than one
+   * record, both on the server, so its counts and group pages are the repeated groups'.
    */
-  toGroupRead(group: GroupSpec | GroupAxis, filter?: unknown): GroupRead {
+  toGroupRead(group: GroupSpec | GroupAxis, filter?: unknown, order?: unknown): GroupRead {
     const axis = this.resolveAxis(group);
-    const { dimensions, orderBy } = axis.groupBy();
+    const { dimensions, orderBy } = axis.groupBy(axis.direction(this.sortFrom(order)));
     const repeated = axis.spec.repeated ? axis.valued() : undefined;
     return { dimensions, orderBy, where: this.toWhere(filter, repeated), ...(repeated ? { having: { count_gt: 1 } } : {}) };
   }
@@ -324,8 +327,14 @@ export class ResourceQuery {
     });
   }
 
-  toOrderBy(value?: unknown): Record<string, unknown> {
-    return Object.fromEntries(this.sortFrom(value).map(({ field, direction }) => [this.fields[field]!.sort!.field, direction.toLowerCase()]));
+  /**
+   * A list read's `order_by`: one single-key object per key of `value` (as `sortFrom` reads it,
+   * the resource's default when absent), in its priority order, each on its wire key; an empty
+   * order is an empty list. A list, because a GraphQL server rebuilds an input object in its
+   * type's own field order, so the key order of one object carries no priority.
+   */
+  toOrderBy(value?: unknown): { [wireField: string]: "asc" | "desc" }[] {
+    return this.sortFrom(value).map(({ field, direction }) => ({ [this.fields[field]!.sort!.field]: direction === "ASC" ? "asc" : "desc" }));
   }
 
   toSorters(value?: unknown): { field: string; order: "asc" | "desc" }[] {
@@ -498,6 +507,9 @@ function executableTextSearchFields(
   return fields.filter((name) => contract.fields[name]?.filter?.operators.includes("iContains"));
 }
 
+/** A `Date`'s extractions whose groups are single days, so single values of the date (`dateGroup`). */
+const SINGLE_DAY_EXTRACTIONS: ReadonlySet<string> = new Set(["day", "hour", "minute", "second"]);
+
 /** Resolved group semantics shared by client lanes, server buckets and facets. */
 export class GroupAxis {
   readonly id: string;
@@ -510,6 +522,64 @@ export class GroupAxis {
   }
   get field(): string { return this.spec.field; }
   get granularity(): string | undefined { return this.spec.granularity; }
+  /**
+   * Whether the records of one group of this axis share the value of the query field
+   * `field` (a sort key, `QuerySort.field`), so ordering by it orders nothing within a group.
+   * They share the axis's own field when the axis groups by that field's whole value: with no
+   * extraction, or with one whose groups are single values of the field's scalar (`day`, or a
+   * finer unit, on a `Date`; never on a `DateTime`, whose day holds many instants, and never a
+   * coarser unit or a calendar part such as `day_of_month`). A relation axis's group is one
+   * related record, so they also share each of its members: a field whose row paths all lie
+   * under the related record, its identity path without the last segment (`owner.name` beside
+   * `owner.id`); a relation whose identity path has one segment or none names no members. Its kind (column,
+   * enum, Boolean, JSON, authored) changes nothing else, and `repeated` only lists fewer
+   * groups, each still one value.
+   */
+  shares(field: string): boolean {
+    const scalar = this.query.fields[this.declaration.field]?.scalar;
+    if (this.extraction && !(scalar === "Date" && SINGLE_DAY_EXTRACTIONS.has(this.extraction.name))) return false;
+    if (field === this.declaration.field) return true;
+    const record = this.declaration.kind === "relation" ? this.declaration.identityPath?.split(".").slice(0, -1).join(".") : undefined;
+    const paths = this.query.fields[field]?.row?.paths;
+    return Boolean(record && paths?.length && paths.every((path) => path.startsWith(`${record}.`)));
+  }
+  /**
+   * The direction this axis's groups go in under a list's `order`: the direction of the first
+   * key of `order` this axis shares (`shares`) or that is the field it buckets, else ascending.
+   * A date's months, quarters or weeks follow the date's direction, though their records do not
+   * share it. The one rule for both orderers of a list's groups: a server's groups read
+   * (`ResourceQuery.toGroupRead`) and a browser table, whose axis column compares its groups in
+   * this direction (`compareGroups`). Neither writes it back: a chosen direction lives in the
+   * list's order, as the key held descending.
+   */
+  direction(order: readonly QuerySort[]): QuerySort["direction"] {
+    return order.find(({ field }) => field === this.declaration.field || this.shares(field))?.direction ?? "ASC";
+  }
+  /**
+   * A record's group of this axis as groups compare (`compareGroups`): its label, then its
+   * identity, given when a caller has read it already (a table's grouping value); the label is
+   * read only where the axis has its own, else it is the identity.
+   */
+  groupKey(row: unknown, identity: FilterPrimitive = this.identity(row)): readonly [label: FilterPrimitive, identity: FilterPrimitive] {
+    return [this.declaration.labelPath ? this.label(row) : identity, identity];
+  }
+  /**
+   * How two groups of this axis compare by their keys (`groupKey`), in the groups' `direction`: by
+   * label, then by identity, which breaks ties between labels, each in that direction. A missing
+   * label or identity comes after every other in both directions, and two missing ones tie, so a
+   * comparison goes on to its next key. The same order of keys a server's groups read asks for
+   * (`groupBy`: label, then identity, nulls last); text, though, compares here in the list's natural
+   * text order (`ResourceQuery.comparator`) and there by the database's collation, which can differ
+   * ("item 9" before or after "item 10"). A browser table sorts its groups with it, the direction
+   * inside it, since the table would turn a missing value with a descending key.
+   */
+  compareGroups(
+    left: readonly [FilterPrimitive, FilterPrimitive], right: readonly [FilterPrimitive, FilterPrimitive],
+    direction: QuerySort["direction"] = "ASC",
+  ): number {
+    const sign = direction === "DESC" ? -1 : 1;
+    return compareGroupValues(left[0], right[0], sign) || compareGroupValues(left[1], right[1], sign);
+  }
   /** Whether a server group read can list only this axis's repeated values (`GroupSpec.repeated`). */
   get repeatable(): boolean { return this.valued() !== undefined; }
   /**
@@ -552,7 +622,12 @@ export class GroupAxis {
     if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
     return fail(`groups.${this.field}`, "group label must be a scalar");
   }
-  groupBy(): GroupProjection {
+  /**
+   * This axis's server group projection: its dimensions and its groups' order, label then
+   * identity, each in `direction` (ascending unless a caller asks, as facets and dashboards
+   * leave it) and its missing value last either way.
+   */
+  groupBy(direction: QuerySort["direction"] = "ASC"): GroupProjection {
     const server = this.declaration.server;
     if (!server) return fail(`groups.${this.field}`, "axis does not support server grouping");
     const identity: GroupDimension = {
@@ -563,7 +638,7 @@ export class GroupAxis {
     const label = server.labelInput && server.labelKey ? { input: server.labelInput, key: server.labelKey } : undefined;
     // Labels are not unique: identity breaks ties so bucket pages remain stable.
     const order = label ? [label, identity] : [identity];
-    return { dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}), orderBy: order.map(({ key }) => ({ field: key, direction: "ASC", nulls: "LAST" })) };
+    return { dimensions: label ? [identity, label] : [identity], valueKey: identity.key, ...(label ? { labelKey: label.key } : {}), orderBy: order.map(({ key }) => ({ field: key, direction, nulls: "LAST" })) };
   }
   bucketIdentity(bucket: GroupBucket): FilterPrimitive {
     const key = this.groupBy().valueKey;
@@ -839,6 +914,18 @@ function compareValues(left: unknown, right: unknown, scalar: string, path: stri
     : scalar === "Time" ? clockValue(value) : typeof value === "number" ? value : String(value);
   const a = comparable(left), b = comparable(right);
   return a < b ? -1 : a > b ? 1 : 0;
+}
+/**
+ * Two group values (`GroupAxis.compareGroups`), ascending times `sign`: text naturally, then by code point so distinct
+ * values never tie; a null after every other whatever the sign, and two nulls tied.
+ */
+function compareGroupValues(left: FilterPrimitive, right: FilterPrimitive, sign: 1 | -1): number {
+  if (left === right) return 0;
+  if (left === null || right === null) return left === null ? 1 : -1;
+  const order = typeof left === "string" && typeof right === "string"
+    ? NATURAL_TEXT_COLLATOR.compare(left, right) || (left < right ? -1 : 1)
+    : left < right ? -1 : left > right ? 1 : 0;
+  return order * sign;
 }
 function compareDecimal(left: unknown, right: unknown, path: string): number {
   const parts = (value: unknown) => {

@@ -5,7 +5,10 @@ import type { FieldValues, UseFormReturn } from "react-hook-form";
 export interface FormHistory {
   canUndo: boolean;
   canRedo: boolean;
-  /** Record synchronous changes; return false without running when read-only. */
+  /**
+   * Record synchronous changes as one step, read from the form after the action;
+   * return false without running when read-only.
+   */
   perform: (action: () => void) => boolean;
   /** Begin one undo group, for example when a text field receives focus. */
   start: (group: string) => void;
@@ -25,16 +28,26 @@ export interface FormHistory {
  * different group commits the previous one. Undo/redo preserve the active group
  * so continued typing without a new focus event remains undoable. Wrap other
  * synchronous changes in perform; asynchronous work must finish before that call.
- * Each changed RHF notification creates one immutable frame, reused by stacks
- * and availability checks. Both stacks retain at most limit frames (default 100).
+ * One user intention is one step: a group holds a field's typing, and perform holds
+ * one discrete change. Each changed RHF notification creates one immutable frame,
+ * reused by stacks and availability checks; perform also reads the form's values
+ * after its action, so a change that sends no values notification is still a step.
+ * Both stacks retain at most limit frames (default 100).
  * Call reset when the caller loads another record or accepts a saved baseline.
  * Before binding undo where a field of its own can be left "Not set" over a loaded
  * value (a record form): a replay registers every mounted field again, and React Hook
- * Form gives a field whose frame holds `undefined` or no key the form's default, so a
- * "Not set" and an object's missing member come back with the loaded value. Such
- * members must first bind through their parent object's single registration, as the
- * structured editor does; the expected-failure rows in `use-form-history.test.tsx` and
- * `FormView.native.test.tsx` flip when they do.
+ * Form gives a registered field whose frame holds `undefined` or no key the form's
+ * default, so a "Not set" comes back with the loaded value. Measured: such a member
+ * must first stop being a registered field of its own (its value read by path and
+ * written with `setValue`, "Not set" an own key holding `undefined`). Binding it
+ * through its parent object's registration does not do it: member dirtiness collapses
+ * to the root, and a "Not set" held as an absent key reads as a dropped field and takes
+ * the loaded value back. The form must then supply what registration gave: the member's
+ * focus target and, after a failed save, which error takes focus, since React Hook Form
+ * focuses only registered fields. The expected-failure rows of `FormView.native.test.tsx`
+ * render a record form and are the tripwire; those of `use-form-history.test.tsx` register
+ * their own fields, so they only model the binding. A registered member whose whole
+ * object was replaced by one without it comes back the same way: a separate loss.
  * @owner FormView
  */
 export function useFormHistory<TValues extends FieldValues>(
@@ -57,19 +70,20 @@ export function useFormHistory<TValues extends FieldValues>(
   }
   const frames = framesRef.current;
   const [, redraw] = React.useReducer((value: number) => value + 1, 0);
+  /** Bring the current frame up to `values`; true when that moved it. */
+  const capture = React.useCallback((values: TValues) => {
+    const key = stableSerialize(values);
+    if (key === frames.current.key) return false;
+    frames.current = { values: structuredClone(values), key };
+    return true;
+  }, [frames]);
   const availability = React.useSyncExternalStore(
     React.useCallback((notify) => {
-      const update = (values: TValues) => {
-        const key = stableSerialize(values);
-        if (key !== frames.current.key) {
-          frames.current = { values: structuredClone(values), key };
-          notify();
-        }
-      };
+      const update = (values: TValues) => { if (capture(values)) notify(); };
       const unsubscribe = subscribe({ formState: { values: true }, callback: ({ values }) => update(values) });
       update(getValues());
       return unsubscribe;
-    }, [frames, getValues, subscribe]),
+    }, [capture, getValues, subscribe]),
     React.useCallback(() => {
       const changed = frames.active !== null && frames.active.before.key !== frames.current.key;
       return (frames.past.length > 0 || changed ? 1 : 0) | (!changed && frames.future.length > 0 ? 2 : 0);
@@ -98,11 +112,13 @@ export function useFormHistory<TValues extends FieldValues>(
     finish();
     const before = frames.current;
     try { action(); } finally {
+      // A field-array operation changes the values without a notification.
+      capture(getValues());
       record(before);
       frames.active = group === undefined ? null : { group, before: frames.current };
     }
     return true;
-  }, [frames, finish, readOnly, record]);
+  }, [capture, frames, finish, getValues, readOnly, record]);
   const start = React.useCallback((group: string) => {
     if (readOnly || frames.active?.group === group) return;
     finish();

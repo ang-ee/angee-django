@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSchema, executeSync, print, type DocumentNode } from "graphql";
+import { buildSchema, executeSync, print, validate, type DocumentNode } from "graphql";
 
 import { afterEach, describe, expect, test } from "vitest";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
@@ -21,7 +21,9 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true });
 });
 
-describe("group operation codegen", () => {
+// Each test runs the codegen CLI in a child process, so it gets the 30 s the other
+// CLI-spawning suites give theirs; on a loaded runner one run can exceed 5 s.
+describe("group operation codegen", { timeout: 30_000 }, () => {
   test("derives an ActionResult mutation with one required scalar argument", () => {
     const generated = generateActions(METADATA);
 
@@ -155,6 +157,50 @@ describe("group operation codegen", () => {
   });
 });
 
+describe("repair-choices operation codegen", { timeout: 30_000 }, () => {
+  test("derives one repair read per resource whose roots name it, valid against the schema", () => {
+    const generated = generateActions(repairMetadata("notes_repair_choices"));
+    const document = generatedRepairChoices(generated, "notes.Note");
+
+    expect(print(document).replace(/\s+/g, " ")).toContain(
+      "query AngeeNotes_repair_choices($id: ID!, $field: String!) { "
+        + "notes_repair_choices(id: $id, field: $field) { key category defaults config_schema } }",
+    );
+    expect(validate(buildSchema(SDL), document)).toEqual([]);
+    expect(generated).toContain('export type RepairChoicesResource = "notes.Note";');
+    expect(generated).toContain("  repairChoices: repairChoicesDocuments,");
+  });
+
+  test("derives none for a resource whose roots name no repair read", () => {
+    const generated = generateActions(METADATA);
+
+    expect(generated).toContain("export type RepairChoicesResource = never;");
+    expect(generated).not.toContain("as RepairChoicesDocument,");
+  });
+
+  test("fails by the root's name when the schema has no such read", () => {
+    expect(() => generateActions(repairMetadata("notes_repair_choices_gone"))).toThrow(
+      'Generated operation for "notes_repair_choices_gone" does not validate',
+    );
+  });
+
+  test("refuses a root name that is not a GraphQL name", () => {
+    expect(() => generateActions(repairMetadata("notes_repair_choices { id }"))).toThrow(
+      "Invalid GraphQL field name in operation document metadata: notes_repair_choices { id }",
+    );
+  });
+});
+
+function generatedRepairChoices(generated: string, resource: string): DocumentNode {
+  const match = generated.match(new RegExp(`  "${resource.replace(".", "\\.")}": (\\{[\\s\\S]*?\\}) as RepairChoicesDocument,`));
+  if (!match?.[1]) throw new Error(`Missing generated repair read: ${resource}`);
+  return JSON.parse(match[1]) as DocumentNode;
+}
+
+function repairMetadata(repairChoices: string) {
+  return { angee: { resources: [testDataResource("notes.Note", { roots: { repairChoices } })] } };
+}
+
 function generatedAction(generated: string, field: string): DocumentNode {
   const match = generated.match(new RegExp(`  "${field}": (\\{[\\s\\S]*?\\}) as ActionDocument<"${field}">`));
   if (!match?.[1]) throw new Error(`Missing generated action: ${field}`);
@@ -242,6 +288,15 @@ const SDL = `
       where: notes_bool_exp
       having: NoteHaving
     ): Int!
+    notes_repair_choices(id: ID!, field: String!): [ImplChoice!]!
+  }
+  type ImplChoice {
+    key: String!
+    label: String!
+    icon: String!
+    category: String!
+    defaults: JSON!
+    config_schema: JSON
   }
   input NoteGroupBySpec { field: String! }
   input NoteGroupOrder { field: String! }

@@ -113,9 +113,9 @@ describe("credentialCreateForm", () => {
     const Component = credentialCreateForm.Component;
     render(<Component resource={credentialCreateForm.resource} id="credential-1" />);
     const field = mocks.fields.find((field) => field.name === "name") as unknown as FieldDescriptor;
-    expect(field.resolve?.({ id: "credential-1", editable_fields: ["name"] })).toMatchObject({ name: "name", readOnly: false });
-    expect(field.resolve?.({ id: "credential-1", editable_fields: [] })).toMatchObject({ name: "name", readOnly: true });
-    expect(field.resolve?.({ id: "credential-1" })).toMatchObject({ name: "name", readOnly: true });
+    expect(field.resolve?.({ id: "credential-1", editable_fields: ["name"] })).toMatchObject({ readOnly: false });
+    expect(field.resolve?.({ id: "credential-1", editable_fields: [] })).toMatchObject({ readOnly: true });
+    expect(field.resolve?.({ id: "credential-1" })).toMatchObject({ readOnly: true });
     expect(mocks.fields).toContainEqual(expect.objectContaining({ name: "expires_at", readOnly: true }));
     render(<Component resource={credentialCreateForm.resource} id="credential-2" />);
     expect(mocks.fields.filter((field) => field.name === "name").at(-1)?.resolve).toBe(field.resolve);
@@ -156,7 +156,7 @@ describe("credentialCreateForm", () => {
     const action = mocks.actions.find(({ id }) => id === "replace-secret")!;
     const material = "first line\nsecond line\nthird line\n";
     const record = { id: "credential-1", replacement_fields: [name] };
-    render(<Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
+    render(<Provider router><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
       <ActionFormDialog action={action} context={{ record, selectedIds: [] }} open onOpenChange={vi.fn()} />
     </ToastProvider></AppRuntimeProvider></Provider>);
     const input = screen.getByRole<HTMLTextAreaElement>("textbox");

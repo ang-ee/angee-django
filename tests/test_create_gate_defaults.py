@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 import strawberry
 import strawberry_django
+from django.core.exceptions import ValidationError
 from rebac import (
     RelationshipTuple,
     system_context,
@@ -71,6 +72,21 @@ _SCHEMA = strawberry.Schema(
     mutation=_RESOURCE.mutation,
     types=[ScopedDocType, *_RESOURCE.types],
 )
+
+# The same model on a default editable surface: no public-id decoder, so the
+# scope arrives as a public id string that only strawberry-django's preparation
+# resolves (through the caller's scoped manager).
+_RAW_RESOURCE = hasura_model_resource(
+    ScopedDocType,
+    model=ScopedDoc,
+    name="raw_scoped_docs",
+    filterable=["id", "title"],
+    sortable=["title"],
+    aggregatable=["id"],
+    update=False,
+    delete=False,
+)
+_RAW_SCHEMA = strawberry.Schema(query=_RAW_RESOURCE.query, mutation=_RAW_RESOURCE.mutation)
 
 _INSERT = """
 mutation($object: scoped_docs_insert_input!) {
@@ -175,3 +191,43 @@ def test_supplied_member_scope_create_is_allowed() -> None:
     with system_context(reason="test scope gate read"):
         doc = ScopedDoc.objects.get()
     assert doc.scope_id == scope_a.pk
+
+
+@pytest.mark.django_db
+def test_an_undecoded_relation_is_decided_on_the_resolvers_preparation() -> None:
+    """The decision sees the related row the resolver's own preparation resolves from its public id."""
+
+    member = create_user("scope-raw")
+    with system_context(reason="test scope gate raw setup"):
+        scope = Scope.objects.create(name="Raw Scope")
+    _grant(scope, "direct_member", member)
+
+    result = execute_schema(
+        _RAW_SCHEMA,
+        "mutation($scope: ID!) { insert_raw_scoped_docs_one(object: {title: \"Raw\", scope: $scope}) { id } }",
+        {"scope": scope.public_id},
+        user=member,
+    )
+    result_data(result)
+
+    with system_context(reason="test scope gate read"):
+        assert ScopedDoc.objects.get().scope_id == scope.pk
+
+
+@pytest.mark.django_db
+def test_an_admitted_caller_meets_the_saves_error_before_field_errors() -> None:
+    """The decision runs the model's own ``save()`` first, so its refusal precedes ``full_clean``'s field errors."""
+
+    member = create_user("scope-precedence")
+    with system_context(reason="test scope gate precedence setup"):
+        scope_a = Scope.objects.create(name="Scope A")
+        scope_b = Scope.objects.create(name="Scope B")
+    _grant(scope_a, "direct_member", member)
+    _grant(scope_b, "direct_member", member)
+
+    result = execute_schema(_SCHEMA, _INSERT, {"object": {"title": "x" * 300}}, user=member)
+
+    assert result.errors is not None
+    error = result.errors[0].original_error
+    assert isinstance(error, ValidationError)
+    assert list(error.message_dict) == ["scope"]

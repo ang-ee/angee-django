@@ -532,10 +532,30 @@ function collectHeadlessSources(entry, packageRoot, seen, inputs) {
   return seen;
 }
 
-function stylesheetAssets(source, stylesheet, packageRoot, themeId, inputs) {
+/**
+ * Refuse what a theme stylesheet may not do: import another stylesheet (the definition lists them),
+ * or set an elevation. An elevation is a definition token the theme contract checks, since a
+ * `shadow-*` utility composes it with the focus ring and a value outside the contract's bounds voids
+ * the ring. The check reads the text, comments and strings included: `--elevation-` and a colon
+ * (with only whitespace or comments between them), `@property --elevation-`, or a backslash anywhere,
+ * which is how an escaped name is spelled and which no theme stylesheet needs. A
+ * `var(--elevation-…)` read stays allowed.
+ */
+export function assertThemeStylesheet(source, stylesheet, themeId) {
   if (/@import\s/i.test(source)) {
     throw new Error(`Theme ${themeId} stylesheet ${stylesheet} must declare additional stylesheets through the theme definition.`);
   }
+  const elevation = /(--elevation-[\w-]*)(?:\s|\/\*[\s\S]*?\*\/)*:/.exec(source) ?? /@property\s+(--elevation-[\w-]*)/i.exec(source);
+  if (elevation) {
+    throw new Error(`Theme ${themeId} stylesheet ${stylesheet} declares ${elevation[1]} (refused wherever it appears, a comment included); a theme sets its elevations in its definition, where the theme contract checks them.`);
+  }
+  if (source.includes("\\")) {
+    throw new Error(`Theme ${themeId} stylesheet ${stylesheet} holds a backslash; a theme stylesheet spells its names plainly, with no escapes.`);
+  }
+}
+
+function stylesheetAssets(source, stylesheet, packageRoot, themeId, inputs) {
+  assertThemeStylesheet(source, stylesheet, themeId);
   const assets = [];
   const urls = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
   for (const match of source.matchAll(urls)) {
@@ -629,6 +649,7 @@ function buildOperationDocuments(name, runtimeDir) {
   const names = actions.map((action) => action.name);
   const aggregateResources = aggregateFields(index.resources);
   const deletePreviewResources = deletePreviewFields(index.resources);
+  const repairChoicesResources = repairChoicesFields(index.resources);
   const groupResources = groupFields(index.resources);
   const saveResources = saveFields(index);
   const union = names.length > 0 ? names.map((n) => JSON.stringify(n)).join(" | ") : "never";
@@ -637,6 +658,9 @@ function buildOperationDocuments(name, runtimeDir) {
     : "never";
   const deletePreviewUnion = deletePreviewResources.length > 0
     ? deletePreviewResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
+    : "never";
+  const repairChoicesUnion = repairChoicesResources.length > 0
+    ? repairChoicesResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
     : "never";
   const groupUnion = groupResources.length > 0
     ? groupResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
@@ -668,6 +692,14 @@ function buildOperationDocuments(name, runtimeDir) {
     );
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as DeletePreviewDocument,`;
   });
+  const repairChoicesDocuments = repairChoicesResources.map((resource) => {
+    const ast = JSON.stringify(
+      validatedDocument(schema, repairChoicesDocument(resource.repairChoicesRoot), resource.repairChoicesRoot),
+      null,
+      2,
+    );
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as RepairChoicesDocument,`;
+  });
   const groupDocuments = groupResources.map((resource) => {
     const ast = JSON.stringify(validatedDocument(schema, groupDocument(resource), resource.groupsRoot), null, 2);
     return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as GroupDocument,`;
@@ -681,7 +713,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "// From the web host: `pnpm --config.verify-deps-before-run=false exec angee-web-codegen --runtime ../runtime --web-root .`.",
     "//",
     "// Eligible ActionResult mutation fields, plus authored",
-    "// aggregate, group, delete-preview, and save operation documents.",
+    "// aggregate, group, delete-preview, repair-choices and save operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
     "",
@@ -763,6 +795,31 @@ function buildOperationDocuments(name, runtimeDir) {
     ...deletePreviewDocuments,
     "};",
     "",
+    `export type RepairChoicesResource = ${repairChoicesUnion};`,
+    "",
+    "export interface RepairChoicesVariables {",
+    "  id: string;",
+    "  field: string;",
+    "}",
+    "",
+    "export interface RepairChoice {",
+    "  key: string;",
+    "  category: string;",
+    "  defaults: unknown;",
+    "  config_schema: unknown | null;",
+    "}",
+    "",
+    "export type RepairChoicesDocument = TypedDocumentNode<",
+    "  Record<string, RepairChoice[]>,",
+    "  RepairChoicesVariables",
+    ">;",
+    "",
+    "export const repairChoicesDocuments: {",
+    "  readonly [Resource in RepairChoicesResource]: RepairChoicesDocument;",
+    "} = {",
+    ...repairChoicesDocuments,
+    "};",
+    "",
     `export type GroupResource = ${groupUnion};`,
     "",
     "export interface GroupVariables {",
@@ -811,6 +868,7 @@ function buildOperationDocuments(name, runtimeDir) {
     "  aggregates: aggregateDocuments,",
     "  deletePreviews: deletePreviewDocuments,",
     "  groups: groupDocuments,",
+    "  repairChoices: repairChoicesDocuments,",
     "  saves: saveDocuments,",
     "};",
     "",
@@ -822,6 +880,7 @@ function buildOperationDocuments(name, runtimeDir) {
       `${names.length} action(s), ` +
       `${aggregateResources.length} aggregate query(ies), ` +
       `${deletePreviewResources.length} delete-preview mutation(s), ` +
+      `${repairChoicesResources.length} repair-choices query(ies), ` +
       `${groupResources.length} group query(ies), ` +
       `${saveResources.length} save mutation(s)`,
   );
@@ -873,6 +932,23 @@ function deletePreviewFields(resources) {
         return [];
       }
       return [{ modelLabel, deletePreviewRoot }];
+    })
+    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+function repairChoicesFields(resources) {
+  return resources
+    .flatMap((resource) => {
+      const modelLabel = resource?.modelLabel;
+      const repairChoicesRoot = resource?.roots?.repairChoices;
+      if (
+        typeof modelLabel !== "string" ||
+        typeof repairChoicesRoot !== "string" ||
+        repairChoicesRoot === ""
+      ) {
+        return [];
+      }
+      return [{ modelLabel, repairChoicesRoot }];
     })
     .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
 }
@@ -1117,6 +1193,17 @@ function deletePreviewDocument(root) {
   return parse(
     `mutation ${actionOperationName(root)}($id: ID!, $confirm: Boolean) { ` +
       `${root}(id: $id, confirm: $confirm) { ${DELETE_PREVIEW_SELECTION} } }`,
+    { noLocation: true },
+  );
+}
+
+// The repair read's selection: per choice, what choosing it sets on the record (`defaults`).
+const REPAIR_CHOICES_SELECTION = "key category defaults config_schema";
+
+function repairChoicesDocument(root) {
+  return parse(
+    `query ${actionOperationName(assertGraphQLName(root))}($id: ID!, $field: String!) { ` +
+      `${root}(id: $id, field: $field) { ${REPAIR_CHOICES_SELECTION} } }`,
     { noLocation: true },
   );
 }

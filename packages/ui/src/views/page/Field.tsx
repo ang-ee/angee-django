@@ -35,19 +35,33 @@ export interface FieldDescriptor extends FieldPresentation {
     fromControl: (value: unknown) => unknown;
   };
   readOnly?: boolean;
-  /** Require a value independently of generated model create metadata. */
+  /**
+   * Require a value independently of generated model create metadata. A field with no presence
+   * flag, template or bound fails `required` when it is empty: `null`, `undefined`, a blank text or
+   * an empty list. Inside a structured field (one with a presence flag, a template or a bound) and
+   * for each of its members, `required` means the value must be present: absent, `undefined` or a
+   * `null` the field does not allow fails it, while a blank text or an empty list is a value the
+   * descriptor's own bounds judge.
+   */
   required?: boolean;
   /** A required structured value may explicitly be JSON null. */
   nullable?: boolean;
-  /** Treat required as JSON property presence; emitted only by structured FormSpec. */
+  /**
+   * The value must be present, as a JSON property is: absent, `undefined` or a `null` the field
+   * does not allow fails `required` even where the field is not `required`, and the flag makes the
+   * field structured, so a blank text or an empty list in it is a value, not a missing one.
+   * Emitted only by structured FormSpec, beside `required` for a required property.
+   */
   presenceRequired?: boolean;
   /**
    * The value may be left "Not set": the member is then absent from the saved object. Emitted only
-   * by structured FormSpec. A field of its own holds "Not set" as `undefined`, which React Hook Form
-   * replaces by the form's default whenever the field registers again (an undo or redo replay, a
-   * pane that unmounts). Before such a member is shown as its own field in a pane that unmounts, or
-   * undo is bound in a record form, it must bind through its parent object's single registration,
-   * as the structured editor does (see `useFormHistory` and its expected-failure tests).
+   * by structured FormSpec. In a field of its own, choosing "Not set" writes an own key holding
+   * `undefined`; a member the record never had, and one dropped from the draft, have no key. React
+   * Hook Form replaces a "Not set" by the form's default whenever the field registers again (an
+   * undo or redo replay, a pane that unmounts). Before such a member is shown as its own field in
+   * a pane that unmounts, or undo is bound in a record form, it must stop being a registered field
+   * of its own: `useFormHistory` states the measured shape, what the form must then supply, and the
+   * tests that watch for it.
    */
   omittable?: boolean;
   hasDefault?: boolean;
@@ -59,7 +73,11 @@ export interface FieldDescriptor extends FieldPresentation {
   maxItems?: number;
   objectTemplate?: readonly FieldDescriptor[];
   itemTemplate?: FieldDescriptor;
-  /** Editable only while creating; read-only (and never patched) on an edit. */
+  /**
+   * Editable only while creating; read-only (and never patched) on an edit, except a create-only
+   * implementation selector the model's metadata names, which a record whose stored key is not
+   * registered offers once more (a repair). A page cannot unlock what the model's metadata locks.
+   */
   createOnly?: boolean;
   /** Editable only while editing; read-only (and never sent) on a create. */
   editOnly?: boolean;
@@ -69,8 +87,19 @@ export interface FieldDescriptor extends FieldPresentation {
   showWhen?: (values: Row) => boolean;
   /** Keep this field in form values and mutation data without rendering a control. */
   hidden?: boolean;
-  /** Resolve implementation-dependent presentation from current form values; the field keeps its declared `name`. */
-  resolve?: (values: Row) => FieldDescriptor;
+  /**
+   * Presentation that follows the form's current values (the chosen implementation's, say): everything
+   * it returns is laid over this declaration, except `readOnly`, which stays set when either sets it.
+   * It returns this descriptor's own type without `name`: a dialog field's may return dialog members
+   * alone, and a subtype's own required members are returned with it. A type derived from a
+   * descriptor by `Omit` or `Pick`, the `<Field>` element's props among them, returns the base
+   * descriptor's. It cannot rename the field, which keeps reading and writing its declared `name`:
+   * the compiler refuses a returned value whose type carries a string `name` (a literal giving one, a
+   * spread of a whole descriptor, a value typed as a descriptor), and `resolveField` ignores a name
+   * that gets past it (a value typed without `name` or loosely, as `Record`, `object` or `any`; a
+   * cast; JavaScript).
+   */
+  resolve?: (values: Row) => Omit<this, "name"> & { name?: never };
   /**
    * The preset this field loads onto sibling fields when it changes, from its value, the form's
    * current values and the values the form was loaded with (this field's scope in a nested form),
@@ -78,7 +107,8 @@ export interface FieldDescriptor extends FieldPresentation {
    * the targets it hides are dropped from the draft.
    * On save, each preset field whose value changed writes its preset's value for every target that
    * is hidden now and was loaded with a different value, in declaration order (the later wins).
-   * `prefill` therefore also runs at save and must be pure.
+   * `prefill` therefore also runs at save, and at each read of what Save would write (a record form's
+   * `nextSave`), and must be pure.
    */
   prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
@@ -103,6 +133,13 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Main record body; `document` renders continuous prose without a visible field label or box. */
   body?: boolean | "document";
   kind?: PageFieldKind;
+  /**
+   * The value's declared type as text, by its JSON Schema `format`: a date, a date and time, or a
+   * time. Never its presentation, which the widget owns. A form spec's parser sets it; a field that
+   * holds nothing holds `null` when it declares one (`emptyValueForField`), whatever its kind and
+   * widget, so declare it only on a value held as text.
+   */
+  format?: "date" | "date-time" | "time";
   description?: ReactNode;
 }
 

@@ -85,6 +85,7 @@ export {
 } from "./relation/RelationPicker";
 export {
   MutationDialog,
+  type KeyedMutationDialogProps,
   type MutationDialogParseValues,
   type MutationDialogProps,
   type MutationDialogValues,
@@ -108,8 +109,8 @@ export {
   parseFormSpecPayload,
   type FormSpecWire,
 } from "./form/form-spec-schema";
-export { structuredFieldErrorPaths, textValue } from "./form/field-values";
-export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
+export { structuredFieldErrors, textValue, type FieldRuleError } from "./form/field-values";
+export { pathnameChanges, useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,
@@ -120,24 +121,29 @@ export {
   dirtyControlBandClassName,
   type SaveDiscardActionsProps,
 } from "./form/SaveDiscardActions";
-export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
+export { useController, useWatch, useFormState, type ResolverResult } from "react-hook-form";
 export {
   useActionForm,
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
 export { ActionFormProvider } from "./form/ActionFormProvider";
+export { useLateAnswerReport, type LateAnswer } from "./form/late-answer";
 export {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
   invalidFormSubmit,
   formSubmitError,
+  formSubmitOutcome,
   savedFormSubmitResult,
+  SURFACE_RENDERS_FAILURE,
   applyFormErrors,
+  formErrorsFromForm,
+  useRefusalFocus,
+  type FormSubmitConflictCode,
   type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
-  lineRowErrorsFromDottedPaths,
   messagesForDottedPath,
   validationErrorMessages,
   validationErrorMap,
@@ -273,6 +279,7 @@ export {
   type SectionHeadingProps,
   type RecordRailField,
   type RecordRailGroupProps,
+  type FormNextSave,
   type FormSubmit,
   type FormSubmitAcknowledgement,
   type FormSubmitContext,

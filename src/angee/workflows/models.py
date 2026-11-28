@@ -33,7 +33,7 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import require_rebac_queryset
-from angee.base.prefetch import InstancePrefetch, ReaderMemo
+from angee.base.prefetch import InstancePrefetch, ReaderBatch, ReaderMemo
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
@@ -123,27 +123,6 @@ class RunGraph:
 logger = logging.getLogger(__name__)
 _READER = ReaderMemo("_workflows_reader_answers")
 """A run row's answers from one reader's batch read (graph, write, open work)."""
-
-
-class _ReaderBatch(InstancePrefetch):
-    """Answer one reader's facts for a whole run list through Django's native instance prefetch.
-
-    The named batch classmethod remembers each listed run's answer for the reader
-    the hint's queryset names; each run's own method then answers from its memo. Only
-    the prefetch's ``to_attr`` marker is attached; a list read without a reader is
-    left to answer per run.
-    """
-
-    def __init__(self, batch: str) -> None:
-        self.batch = batch
-
-    def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any],
-    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
-        actor = self.reader(queryset)
-        if actor is not None and instances:
-            getattr(type(instances[0]), self.batch)(instances, actor)
-        return [], id, lambda run: run.pk
 
 
 class _PolicyVersions(InstancePrefetch):
@@ -351,8 +330,8 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     objects = WorkflowRunManager()
 
-    _reader_graphs = _ReaderBatch("graphs_for")
-    _reader_cancel = _ReaderBatch("prepare_cancel")
+    _reader_graphs = ReaderBatch("graphs_for")
+    _reader_cancel = ReaderBatch("prepare_cancel")
     _policy_versions = _PolicyVersions()
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
@@ -1653,10 +1632,40 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             published.definition.validate_input(self.admission_input(None, occurrence=first))
         return first
 
+    def rule_fields(self) -> tuple[str, ...]:
+        """Name the fields that state this trigger's rule: its record scope and condition, or its schedule.
+
+        Changing one disables an enabled trigger (:meth:`clean`); ``workflow`` is never changed.
+        """
+        return (
+            "condition", "source", "model_label", "recurrence", "recurrence_start", "recurrence_zone",
+            *self.source_class.scope_fields,
+        )
+
+    def changes_rule_of(self, stored: Trigger) -> bool:
+        """Whether this trigger states a rule other than ``stored``'s, the row as committed.
+
+        ``model_label`` is compared as :meth:`clean` stores it, so a caller may ask
+        before cleaning: a resource load keeps the activation of a trigger whose
+        rule it re-applies unchanged.
+        """
+        for name in self.rule_fields():
+            field = self._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ImproperlyConfigured(f"Trigger configuration {name!r} must be a forward field.")
+            value = self._stored_model_label() if name == "model_label" else getattr(self, field.attname)
+            if value != getattr(stored, field.attname):
+                return True
+        return False
+
+    def _stored_model_label(self) -> str:
+        """Return ``model_label`` as it is stored: blank for a fixed source, else Django's canonical label."""
+        return "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
+
     def clean(self) -> None:
         """Validate authoring and require disabling before changing an enabled rule."""
         super().clean()
-        self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
+        self.model_label = self._stored_model_label()
         self.validate_configuration()
         previous = type(self).system_queryset().filter(pk=self.pk).first() if self.pk else None
         # Engine-owned activation facts come from the stored row, never from a stale instance.
@@ -1667,29 +1676,19 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             raise ValidationError("A trigger's workflow cannot be changed.")
         if self.enabled and (previous is None or not previous.enabled):
             raise ValidationError("Enable triggers through the manager action.")
-        fields = (
-            "condition", "source", "model_label", "recurrence", "recurrence_start", "recurrence_zone",
-            *self.source_class.scope_fields,
-        )
-        if previous is not None:
-            for name in fields:
-                field = self._meta.get_field(name)
-                if not isinstance(field, models.Field):
-                    raise ImproperlyConfigured(f"Trigger configuration {name!r} must be a forward field.")
-                if getattr(self, field.attname) != getattr(previous, field.attname):
-                    if previous.enabled and self.enabled:
-                        raise ValidationError("Disable the trigger before editing its rule.")
-                    self.disabled_reason = "Trigger configuration changed; enable it again."
-                    break
+        if previous is not None and self.changes_rule_of(previous):
+            if previous.enabled and self.enabled:
+                raise ValidationError("Disable the trigger before editing its rule.")
+            self.disabled_reason = "Trigger configuration changed; enable it again."
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate native saves as well as resource writes."""
         with transaction.atomic():
-            if self.pk:
-                type(self).objects.lock_grants(self.workflow_id)
             previous = None
             if not self._state.adding:
-                previous = type(self).system_queryset().filter(pk=self.pk).lock_if_supported(no_key=True).get()
+                previous = type(self).objects.lock_stored(self)
+            elif self.pk:
+                type(self).objects.lock_grants(self.workflow_id)
             self.clean()
             self.workflow.require_access("write", self.actor())
             if not self.enabled:

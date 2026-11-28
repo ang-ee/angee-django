@@ -1,7 +1,7 @@
 """GraphQL schema contributions for Angee IAM.
 
-Pure identity: the user projection, the password and sign-in link session
-logins, and the REBAC permission hub. The OAuth/OIDC connection substrate
+Pure identity: the user projection, the password session login, and the REBAC
+permission hub. ``iam_messaging`` adds the sign-in link's redemption and action. The OAuth/OIDC connection substrate
 (clients, external accounts, credentials, connect/disconnect) lives in
 ``integrate``; OIDC *login* lives in ``iam_integrate_oidc``.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 from functools import partial
 from itertools import islice
 from operator import methodcaller
+from types import GenericAlias
 from typing import Any, cast
 
 import strawberry
@@ -51,7 +52,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
-from angee.graphql.capabilities import permission_expression
+from angee.graphql.capabilities import permission_enum, permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
@@ -60,7 +61,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
-from angee.iam.auth import authenticate_once, sign_in_credentials
+from angee.iam.auth import authenticate_once
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
@@ -108,7 +109,8 @@ from angee.iam.roles import subject_permitted as _subject_permitted_owner
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
-strawberry.enum(cast(Any, UserAccountAction))
+AccountAction = permission_enum(User.account_actions())
+"""The composed account actions as one GraphQL enum, in offer order, each spelled as its Zed permission."""
 
 
 def _view_as(info: strawberry.Info) -> ViewAs | None:
@@ -118,7 +120,7 @@ def _view_as(info: strawberry.Info) -> ViewAs | None:
 
 
 def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
-    """Return one verb's eligibility, batching annotations within Django HTTP requests."""
+    """Return one account action's eligibility, batching annotations within Django HTTP requests."""
 
     actor = current_actor()
     request = get_request(info)
@@ -129,6 +131,20 @@ def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
         memo = (actor, User.account_action_annotations(actor))
         request.__dict__["_iam_account_action_annotations"] = memo
     return memo[1][action]
+
+
+def _account_actions(root: Any) -> Any:
+    """Account actions the viewer may run on this row, each named by its Zed permission, from their owner."""
+
+    actions = User.account_actions()
+    if all(hasattr(root, f"_iam_{action}") for action in actions):
+        allowed = [action for action in actions if getattr(root, f"_iam_{action}")]
+    else:
+        allowed = root.account_actions_for(current_actor())
+    return [AccountAction(action) for action in allowed]
+
+
+_account_actions.__annotations__["return"] = GenericAlias(list, (AccountAction,))
 
 
 def _preference_object(user: Any) -> JSON:
@@ -162,18 +178,10 @@ class UserType(AngeeNode):
     last_login: auto
     revision: int = strawberry_django.field(field_name="account_revision")
 
-    @strawberry_django.field(
-        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in UserAccountAction.values}
+    account_actions = strawberry_django.field(
+        resolver=_account_actions,
+        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in User.account_actions()},
     )
-    def account_actions(self) -> list[UserAccountAction]:
-        """Account verbs the viewer may run on this row, from the verbs' own owner."""
-
-        user = cast(Any, self)
-        if all(hasattr(user, f"_iam_{action}") for action in UserAccountAction.values):
-            allowed = [action for action in UserAccountAction.values if getattr(user, f"_iam_{action}")]
-        else:
-            allowed = user.account_actions_for(current_actor())
-        return [UserAccountAction(action) for action in allowed]
 
     @strawberry_django.field
     def assignment_subject(self) -> str:
@@ -985,26 +993,6 @@ class IAMMutation:
         return LoginPayload(ok=True, user=cast(UserType, user))
 
     @strawberry.mutation
-    @sensitive_variables("token")
-    def redeem_sign_in_link(self, info: strawberry.Info, token: str) -> LoginPayload:
-        """Sign in with a single-use sign-in link and bind the person to the session.
-
-        The token authenticates through ``authenticate()``, so django-axes
-        throttles failed links as it does passwords; like ``login``, it is the
-        request's only sign-in attempt. Every refusal is the same ``ok: false``,
-        whatever the reason.
-        """
-
-        request = get_request(info)
-        # As for passwords: the anonymous request's sign-in writes are the system work it sanctions.
-        with system_context(reason="iam.sign_in_link.redeem"):
-            user = authenticate_once(request, **sign_in_credentials(token))
-            if user is None:
-                return LoginPayload(ok=False)
-            auth_login(request, user)
-        return LoginPayload(ok=True, user=cast(UserType, user))
-
-    @strawberry.mutation
     def logout(self, info: strawberry.Info) -> bool:
         """Clear the current session."""
 
@@ -1037,7 +1025,7 @@ class IAMMutation:
 
 @strawberry.type
 class IAMUserAccountMutation:
-    """Account verbs gated by the target user's zed permissions and protection."""
+    """Account actions gated by the target user's zed permissions and protection."""
 
     @strawberry.mutation
     @action_guard("Setting the password failed.", camel_case_keys=False)
@@ -1057,15 +1045,6 @@ class IAMUserAccountMutation:
 
         user = authorized_permission_target(info, User, id, str(UserAccountAction.ISSUE_PASSWORD))
         return IssuedUserPassword(username=user.username, password=user.issue_password())
-
-    @strawberry.mutation
-    @action_guard("Sending the sign-in link failed.")
-    def issue_user_sign_in_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Email the account a single-use sign-in link after the account owner's checks; the link is never returned."""
-
-        user = authorized_permission_target(info, User, id, str(UserAccountAction.ISSUE_SIGN_IN_LINK))
-        user.issue_sign_in_link()
-        return ActionResult(ok=True, message="Sign-in link sent to the account's email.")
 
     @strawberry.mutation
     def reset_user_password(

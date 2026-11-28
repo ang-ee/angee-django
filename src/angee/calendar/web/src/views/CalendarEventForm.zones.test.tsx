@@ -106,8 +106,11 @@ function renderSavedEvent(
   return { getOne, update };
 }
 
+// A saved event's calendar is a read-only reference, since the event never moves to another calendar. The
+// reference has no role or accessible name of its own here (no routed calendar page), so the wait is on its
+// text outside any picker: a picker showing it would not satisfy it.
 async function calendarControl(): Promise<HTMLElement> {
-  return screen.findByRole("combobox", { name: /Calendar/ });
+  return screen.findByText("Personal", { ignore: '[role="combobox"], [role="combobox"] *, script, style' });
 }
 
 describe("CalendarEventForm", () => {

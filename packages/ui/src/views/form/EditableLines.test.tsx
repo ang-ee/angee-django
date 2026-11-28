@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { StrictMode } from "react";
+import { useForm, type FieldErrors, type UseFormReturn } from "react-hook-form";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type DataResourceLinesMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { describe, expect, test } from "vitest";
@@ -12,7 +13,12 @@ import { CLIENT_LINE_KEY } from "./editable-lines";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets, type WidgetRenderProps } from "../../widgets";
 import { EditableLines } from "./EditableLines";
-import type { ValidationErrors } from "./validation-errors";
+import { useFormHistory, type FormHistory } from "./use-form-history";
+
+/** The first line's quantity refused, as a save's answer leaves it in the form. */
+const QUANTITY_REFUSED: FieldErrors<Record<string, unknown>> = {
+  lines: [{ quantity: { type: "server", message: "Must be positive" } }] as never,
+};
 
 const LINES = {
   field: "lines",
@@ -34,13 +40,14 @@ function Host({
   compact = false,
   readOnly = false,
   empty = false,
-  rowErrors,
+  errors,
 }: {
   inspectContext?: boolean;
   compact?: boolean;
   readOnly?: boolean;
   empty?: boolean;
-  rowErrors?: readonly ValidationErrors[];
+  /** Errors the form holds, as a refused save leaves them (the form library's own `errors` option). */
+  errors?: FieldErrors<Record<string, unknown>>;
   footer?: (rows: readonly Record<string, unknown>[]) => React.ReactNode;
 }): React.ReactElement {
   const form = useForm<Record<string, unknown>>({
@@ -50,6 +57,7 @@ function Host({
         { id: "two", label: "Gadget", quantity: 5, amount_subtotal: "25.00", position: 1 },
       ],
     },
+    errors,
   });
   const contextWidget = {
     read: ({ row, parentRow, field }: WidgetRenderProps) => (
@@ -76,7 +84,6 @@ function Host({
         parentRow={{ company: "Acme" }}
         footer={footer}
         readOnly={readOnly}
-        rowErrors={rowErrors}
         primaryFields={compact ? ["label"] : undefined}
         supplementalColumns={compact ? [{
           key: "subtotal",
@@ -90,8 +97,9 @@ function Host({
   );
 }
 
-function rowPatchFixture() {
+function rowPatchFixture({ recorded = false }: { recorded?: boolean } = {}) {
   let form!: UseFormReturn<Record<string, unknown>>;
+  let history!: FormHistory;
   const callbacks = new Map<string, NonNullable<WidgetRenderProps["onRowChange"]>>();
   const metadata = schemaFieldMetadataFromDataResources([testDataResource("demo.Product")]);
   const lines: DataResourceLinesMetadata = { ...LINES, fields: [
@@ -100,16 +108,18 @@ function rowPatchFixture() {
   ] };
   const productWidget = {
     read: ({ row }: WidgetRenderProps) => <span>Locked {String((row as { label: string }).label)}</span>,
-    edit: ({ row, onRowChange }: WidgetRenderProps) => {
+    edit: ({ row, onChange, onRowChange }: WidgetRenderProps) => {
       const label = String((row as { label: string }).label);
-      return <button type="button" onClick={() => callbacks.set(label, onRowChange!)}>Preview {label}</button>;
+      return <>
+        <button type="button" onClick={() => callbacks.set(label, onRowChange!)}>Preview {label}</button>
+        <button type="button" onClick={() => {
+          onChange?.({ id: "picked", name: "Picked" });
+          onRowChange?.({ label: "Picked label", quantity: 1 });
+        }}>Pick for {label}</button>
+      </>;
     },
   };
-  function PatchHost({ readOnly = false }: { readOnly?: boolean }) {
-    form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
-      { id: "one", label: "Widget", quantity: 2, position: 0 },
-      { id: "two", label: "Gadget", quantity: 5, position: 1 },
-    ] } });
+  function PatchLines({ readOnly, history }: { readOnly: boolean; history?: FormHistory }) {
     return <ModelMetadataProvider metadata={metadata}>
       <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, "demo.product": productWidget } }}>
         <ModalsHost><EditableLines
@@ -118,12 +128,27 @@ function rowPatchFixture() {
           name="lines"
           lines={lines}
           readOnly={readOnly}
+          history={history}
         /></ModalsHost>
       </AppRuntimeProvider>
     </ModelMetadataProvider>;
   }
+  function RecordedPatchLines({ readOnly }: { readOnly: boolean }) {
+    history = useFormHistory(form);
+    return <PatchLines readOnly={readOnly} history={history} />;
+  }
+  function PatchHost({ readOnly = false }: { readOnly?: boolean }) {
+    form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ] } });
+    return recorded ? <RecordedPatchLines readOnly={readOnly} /> : <PatchLines readOnly={readOnly} />;
+  }
   const view = render(<PatchHost />);
-  return { form: () => form, callbacks, lock: () => view.rerender(<PatchHost readOnly />), unmount: view.unmount };
+  return {
+    form: () => form, history: () => history, callbacks,
+    lock: () => view.rerender(<PatchHost readOnly />), unmount: view.unmount,
+  };
 }
 
 async function toggleField(label: string) {
@@ -135,6 +160,33 @@ async function toggleField(label: string) {
 }
 
 describe("EditableLines", () => {
+  test("a line cell drawn by a registered widget receives the authored `relationEdit`", () => {
+    const seen: unknown[] = [];
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("demo.Product")]);
+    const lines: DataResourceLinesMetadata = { ...LINES, fields: [
+      { ...LINES.fields[0]!, name: "product", kind: "relation", scalar: null, relationModelLabel: "demo.Product", widget: "demo.product" },
+      ...LINES.fields,
+    ] };
+    const productWidget = {
+      read: () => null,
+      edit: ({ field }: WidgetRenderProps) => { seen.push(field?.relationEdit); return <span>custom product</span>; },
+    };
+    function Host({ declining }: { declining?: boolean }) {
+      const form = useForm<Record<string, unknown>>({ defaultValues: { lines: [{ id: "one", label: "Widget", quantity: 2, position: 0 }] } });
+      return <ModelMetadataProvider metadata={metadata}>
+        <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, "demo.product": productWidget } }}>
+          <ModalsHost><EditableLines control={form.control} setValue={form.setValue} name="lines" lines={lines}
+            fields={declining ? [{ name: "product", relationEdit: null }] : undefined} /></ModalsHost>
+        </AppRuntimeProvider>
+      </ModelMetadataProvider>;
+    }
+    const view = render(<Host />);
+    expect(screen.getByText("custom product")).toBeTruthy();
+    expect(seen.at(-1)).toBeUndefined();
+    view.rerender(<Host declining />);
+    expect(seen.at(-1)).toBeNull();
+  });
+
   test("list-owned drag reorder keeps pending patches bound to the same child", () => {
     const f = rowPatchFixture();
     fireEvent.click(screen.getByRole("button", { name: "Preview Widget" }));
@@ -272,10 +324,10 @@ describe("EditableLines", () => {
     expect(screen.queryByRole("button", { name: "Add line" })).toBeNull();
   });
 
-  test("retains invalid cell chrome and messages in the plain presentation", () => {
-    render(<Host rowErrors={[{ fieldErrors: { quantity: ["Must be positive"] }, formErrors: [] }]} />);
+  test("retains invalid cell chrome and messages in the plain presentation", async () => {
+    render(<Host errors={QUANTITY_REFUSED} />);
     const input = screen.getAllByRole("textbox", { name: "Quantity" })[0]!;
-    expect(input.getAttribute("aria-invalid")).toBe("true");
+    await waitFor(() => expect(input.getAttribute("aria-invalid")).toBe("true"));
     expect(input.parentElement?.className).toContain("border-danger");
     expect(screen.getByText("Must be positive")).toBeTruthy();
   });
@@ -302,8 +354,8 @@ describe("EditableLines", () => {
     const view = render(<Host compact />);
     await toggleField("Quantity");
     await toggleField("Quantity");
-    view.rerender(<Host compact rowErrors={[{ fieldErrors: { quantity: ["Must be positive"] }, formErrors: [] }]} />);
-    expect(screen.getByText("Must be positive")).toBeTruthy();
+    view.rerender(<Host compact errors={QUANTITY_REFUSED} />);
+    expect(await screen.findByText("Must be positive")).toBeTruthy();
     expect(screen.getAllByRole("textbox", { name: "Quantity" })[0]!.getAttribute("aria-invalid")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Visible fields" }));
     expect((await screen.findByRole("menuitemcheckbox", { name: "Quantity" })).getAttribute("aria-disabled")).toBe("true");
@@ -374,6 +426,111 @@ describe("EditableLines", () => {
     render(<Host />);
     expect(screen.queryByRole("columnheader", { name: "System" })).toBeNull();
     expect(screen.queryByRole("img", { name: "Locked row" })).toBeNull();
+  });
+
+  test("without the form's history every cell edit and row operation writes the lines and nothing throws", async () => {
+    let form!: UseFormReturn<Record<string, unknown>>;
+    // The host builds no history at all, so there is nothing the editor could call.
+    function UnrecordedHost(): React.ReactElement {
+      form = useForm<Record<string, unknown>>({ defaultValues: { lines: [
+        { id: "one", label: "Widget", quantity: 2, position: 0 },
+        { id: "two", label: "Gadget", quantity: 5, position: 1 },
+      ] } });
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <ModalsHost><EditableLines control={form.control} setValue={form.setValue} name="lines" lines={LINES} /></ModalsHost>
+      </AppRuntimeProvider>;
+    }
+    const thrown: unknown[] = [];
+    const report = (event: ErrorEvent) => { thrown.push(event.error); };
+    window.addEventListener("error", report);
+    const shown = () => (form.getValues("lines") as Record<string, unknown>[]).map(({ id, label }) => ({ id, label }));
+    try {
+      render(<UnrecordedHost />);
+      const label = screen.getAllByRole("textbox", { name: "Label" })[0]!;
+      fireEvent.change(label, { target: { value: "Widget edited" } });
+      fireEvent.blur(label);
+      expect(shown()).toEqual([{ id: "one", label: "Widget edited" }, { id: "two", label: "Gadget" }]);
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add line" })); });
+      expect(shown()).toEqual([
+        { id: "one", label: "Widget edited" }, { id: "two", label: "Gadget" }, { id: undefined, label: "" },
+      ]);
+      await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Duplicate line" })[0]!); });
+      await act(async () => {
+        fireEvent.keyDown(screen.getAllByRole("button", { name: "Reorder row" })[1]!, { key: "ArrowUp", altKey: true });
+      });
+      await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Remove line" })[2]!); });
+    } finally {
+      window.removeEventListener("error", report);
+    }
+    expect(thrown).toEqual([]);
+    expect(shown()).toEqual([
+      { id: undefined, label: "Widget edited" }, { id: "one", label: "Widget edited" }, { id: undefined, label: "" },
+    ]);
+    expect(form.getFieldState("lines").isDirty).toBe(true);
+  });
+
+  test("with the form's history a cell change and the row patch its widget sends in the same click are one step", () => {
+    const f = rowPatchFixture({ recorded: true });
+    fireEvent.click(screen.getByRole("button", { name: "Pick for Gadget" }));
+    const picked = { product: { id: "picked", name: "Picked" }, label: "Picked label", quantity: 1 };
+    expect(f.form().getValues("lines.1")).toMatchObject(picked);
+    act(() => f.history().undo());
+    expect(f.form().getValues("lines")).toEqual([
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ]);
+    expect(f.history().canUndo).toBe(false);
+    act(() => f.history().redo());
+    expect(f.form().getValues("lines.1")).toMatchObject(picked);
+    expect(f.history().canRedo).toBe(false);
+  });
+
+  test("under StrictMode a cell's change stays one open group while the editor is mounted, and unmounting the editor ends it", () => {
+    const commits: string[] = [];
+    const loaded = [
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ];
+    let form!: UseFormReturn<Record<string, unknown>>;
+    let history!: FormHistory;
+    function StrictHost({ shown }: { shown: boolean }): React.ReactElement {
+      form = useForm<Record<string, unknown>>({ defaultValues: { lines: loaded } });
+      history = useFormHistory(form);
+      return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <ModalsHost>{shown ? <EditableLines control={form.control} setValue={form.setValue} name="lines" lines={LINES}
+          history={{
+            perform: history.perform, start: history.start,
+            commit: (path) => { commits.push(path); history.commit(path); },
+          }} /> : null}</ModalsHost>
+      </AppRuntimeProvider>;
+    }
+    const view = render(<StrictMode><StrictHost shown /></StrictMode>);
+    const label = screen.getAllByRole("textbox", { name: "Label" })[0]!;
+    fireEvent.change(label, { target: { value: "Widget 1" } });
+    fireEvent.change(label, { target: { value: "Widget 12" } });
+    // StrictMode ran the editor's effects and their cleanups twice at mount, before any cell changed.
+    expect(commits).toEqual([]);
+    view.rerender(<StrictMode><StrictHost shown={false} /></StrictMode>);
+    expect(commits).toEqual(["lines.0.label"]);
+    act(() => history.undo());
+    expect(form.getValues("lines")).toEqual(loaded);
+    expect(history.canUndo).toBe(false);
+  });
+
+  test("with the form's history a widget's row patch sent while no cell group is open is one step of its own", () => {
+    const f = rowPatchFixture({ recorded: true });
+    fireEvent.click(screen.getByRole("button", { name: "Preview Gadget" }));
+    const patched = { product: { id: "new-product", name: "New" }, label: "Patched" };
+    act(() => f.callbacks.get("Gadget")!(patched));
+    expect(f.form().getValues("lines.1")).toMatchObject(patched);
+    act(() => f.history().undo());
+    expect(f.form().getValues("lines")).toEqual([
+      { id: "one", label: "Widget", quantity: 2, position: 0 },
+      { id: "two", label: "Gadget", quantity: 5, position: 1 },
+    ]);
+    expect(f.history().canUndo).toBe(false);
+    act(() => f.history().redo());
+    expect(f.form().getValues("lines.1")).toMatchObject(patched);
   });
 });
 

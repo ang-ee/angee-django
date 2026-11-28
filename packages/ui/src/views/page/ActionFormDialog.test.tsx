@@ -12,6 +12,7 @@ import {
 import { testDataResource } from "@angee/metadata/testing";
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -23,6 +24,8 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
 import { useState, type ReactElement } from "react";
 import { useFormContext, useFormState } from "react-hook-form";
@@ -33,6 +36,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type FormOverrideMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { ActionFormDialog, serializeActionArgValues } from "../form/ActionFormDialog";
+import { deserializeFormSpec } from "../form/form-spec";
 import { jsonSchemaActionArgs } from "../form/json-schema";
 import { registerForm, type RegisteredFormProps } from "../form/registered-form";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from ".";
@@ -191,6 +195,20 @@ function Harness({ action, onSucceeded }: {
   );
 }
 
+/** A resolver-less definition of one integer field, "Size", holding 3. */
+function sizeDefinition(size: Readonly<Record<string, boolean>>) {
+  return {
+    fields: deserializeFormSpec({ type: "object", properties: { size: { type: "integer", label: "Size", ...size } } }, defaultWidgets),
+    defaultValues: { size: 3 },
+  };
+}
+
+function clearNumber(label: string): void {
+  const input = screen.getByLabelText(label);
+  fireEvent.change(input, { target: { value: "" } });
+  fireEvent.blur(input);
+}
+
 /** Open the collection relation picker and select an option by its label. */
 async function pickCollection(label: string): Promise<void> {
   fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
@@ -287,7 +305,7 @@ describe("ActionFormDialog", () => {
       { name: "hidden", label: "Hidden", required: true, hidden: true },
     ] as const;
     renderDialog({ id: "collect", label: "Collect", submit, args: {
-      fields: dynamic ? () => fields : fields, fieldNames: ["name", "retained", "hidden"],
+      fields: dynamic ? () => fields : fields,
       defaultValues: { name: "" }, resolver,
     } });
     const button = screen.getByRole<HTMLButtonElement>("button", { name: "Collect" });
@@ -470,6 +488,53 @@ describe("ActionFormDialog", () => {
     expect(args).toHaveBeenCalledTimes(1);
   });
 
+  test("a schema dialog words a cleared required slug by its length rule, where a record form and a schema-less dialog say it is required: both are true", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "rename", label: "Rename", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["slug"], properties: {
+        slug: { type: "string", label: "Slug", minLength: 1, maxLength: 64 },
+        handle: { type: "string", label: "Handle", minLength: 3 },
+      },
+    }, defaultWidgets, { initialValues: { slug: "", handle: "" } }) });
+    await screen.findByRole("textbox", { name: "Slug" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    await screen.findByText("Enter at least 3 characters.");
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    expect(messageUnder("Slug")).toContain("Enter at least 1 character.");
+    expect(messageUnder("Slug")).not.toContain("This field is required.");
+    expect(messageUnder("Handle")).not.toContain("This field is required.");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog says an optional empty text under a minimum length of one is too short", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "rename", label: "Rename", submit, args: jsonSchemaActionArgs({
+      type: "object", properties: { nick: { type: "string", label: "Nick", minLength: 1, omittable: true } },
+    }, defaultWidgets, { initialValues: { nick: "" } }) });
+    await screen.findByRole("textbox", { name: "Nick" });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(await screen.findByText("Enter at least 1 character.")).toBeTruthy();
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog says each alternative a cleared nullable text fails, its length rule first, and does not submit it", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "rename", label: "Rename", submit, args: jsonSchemaActionArgs({
+      type: "object", properties: { caption: { label: "Caption", anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] } },
+    }, defaultWidgets, { initialValues: { caption: "hi" } }) });
+    fireEvent.change(await screen.findByRole("textbox", { name: "Caption" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent;
+    await waitFor(() => expect(messageUnder("Caption"))
+      .toContain("Enter at least 1 character. Enter a valid empty value. Enter a valid value."));
+    expect(messageUnder("Caption")).not.toContain("This field is required.");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   test("reports a malformed record schema inside the action dialog", async () => {
     renderDialog({ id: "review", label: "Review", args: () => {
       throw new Error("The saved schema is invalid.");
@@ -590,6 +655,150 @@ describe("ActionFormDialog", () => {
     expect(onSucceeded).toHaveBeenCalledWith(outcome);
   });
 
+  test("a resolver-less definition's cleared optional number is not submitted: the submit stops at the number message", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: sizeDefinition({ omittable: true }) });
+    clearNumber("Size");
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Resize" });
+    await waitFor(() => expect(button.disabled).toBe(true));
+    fireEvent.submit(button.closest("form")!);
+
+    expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a resolver-less definition submits a cleared nullable number with no bound or presence flag as an empty string", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: sizeDefinition({ nullable: true }) });
+    clearNumber("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ size: "" });
+  });
+
+  test("a resolver-less definition sends a filled number as the number", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: sizeDefinition({ omittable: true }) });
+    const size = screen.getByLabelText("Size");
+    fireEvent.change(size, { target: { value: "7" } });
+    fireEvent.blur(size);
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ size: 7 });
+  });
+
+  test("a cleared required number argument is not submitted and says the field is required", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({ id: "size", label: "Resize", submit, args: [{ name: "size", label: "Size", kind: "integer", defaultValue: 3 }] });
+    clearNumber("Size");
+    fireEvent.submit(screen.getByRole("button", { name: "Resize" }).closest("form")!);
+
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog refuses a cleared optional number before submit", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", properties: { size: { type: "integer", label: "Size", omittable: true } },
+    }, defaultWidgets, { initialValues: { size: 3 } }) });
+    await screen.findByLabelText("Size");
+    clearNumber("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+
+    expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("an optional date argument left untouched reaches the submit as null, never an empty text", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Filed." });
+    renderDialog({ id: "file", label: "File", submit, args: [
+      { name: "title", label: "Title", widget: "text", defaultValue: "A pain" },
+      { name: "due_date", label: "Due", widget: "date", optional: true },
+    ] });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "File" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ title: "A pain", due_date: null });
+  });
+
+  test("guard: a required date argument left empty, holding null, says the field is required, never that it wants another type", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "post", label: "Post", submit, args: [{ name: "date", label: "Date", widget: "date" }] });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Post" });
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message is the check's answer to this submit, which it refused; the form calls the action's
+    // submit only when the check passes, so the submit never started and a slow one cannot land later.
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: a schema dialog's required number left empty, holding null, says the field is required, never that it wants another type", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["size"], properties: { size: { type: "integer", label: "Size" } },
+    }, defaultWidgets) });
+    await screen.findByLabelText("Size");
+    fireEvent.submit(screen.getByRole("button", { name: "Resize" }).closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message is the check's answer to this submit, which it refused; the form calls the action's
+    // submit only when the check passes, so the submit never started and a slow one cannot land later.
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog leaves an optional number untouched out, as its own type refuses the empty null, and submits", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Resized." });
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["name"], properties: { name: { type: "string", label: "Name" }, size: { type: "integer", label: "Size" } },
+    }, defaultWidgets, { initialValues: { name: "Main" } }) });
+    await screen.findByLabelText("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ name: "Main" });
+  });
+
+  test("a schema dialog's date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
+    renderDialog({ id: "plan", label: "Plan", submit: vi.fn(), args: jsonSchemaActionArgs({
+      type: "object", properties: { due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" } },
+    }, defaultWidgets) });
+    await screen.findByText("Left empty");
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  test("a schema dialog treats Add item on a list of dates carried as text as it treats a list of integers", async () => {
+    const stateAfterAddItem = async (items: Record<string, unknown>) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Planned." });
+      renderDialog({ id: "plan", label: "Plan", submit, args: jsonSchemaActionArgs({
+        type: "object", properties: { days: { type: "array", widget: "list", label: "Days", items } },
+      }, defaultWidgets) });
+      const messages = () => screen.queryAllByText(/^(This field is required\.|Enter a valid)/).map((node) => node.textContent);
+      fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+      const button = screen.getByRole("button", { name: "Plan" }) as HTMLButtonElement;
+      // The gate read the new item's rule: it disabled the submit. A dialog with a resolver shows a rule's
+      // message only on a submit attempt, so none can appear before one.
+      await waitFor(() => expect(button.disabled).toBe(true));
+      const added = { disabled: button.disabled, messages: messages() };
+      fireEvent.submit(button.closest("form")!);
+      // The message is the check's answer to this attempt, which it refused: the form calls the action's
+      // submit only when the check passes, so it never started and a slow one cannot land later.
+      await screen.findByText("This field is required.");
+      const attempted = { submitted: submit.mock.calls.length, messages: messages() };
+      cleanup();
+      return { added, attempted };
+    };
+    const dates = await stateAfterAddItem({ type: "string", format: "date", widget: "date" });
+    const integers = await stateAfterAddItem({ type: "integer" });
+    expect(integers.added).toStrictEqual({ disabled: true, messages: [] });
+    expect(integers.attempted.submitted).toBe(0);
+    expect(dates).toStrictEqual(integers);
+  });
+
   test("serializes datetime args with the picked local UTC offset", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Snoozed." });
     renderDialog({
@@ -693,7 +902,7 @@ describe("ActionFormDialog", () => {
         { name: "collection", label: "Collection", relation: {
           resource: "Collection", optionDescriptionField: "description", optionStatusField: "verification_state",
           optionStatusArguments: [{ name: "company_id", type: "ID!", value: "company_7" }],
-        }, resolve: (values) => ({ name: "collection", filters: [{ field: "scope", operator: "eq", value: values.scope }] }) },
+        }, resolve: (values) => ({ filters: [{ field: "scope", operator: "eq", value: values.scope }] }) },
       ] },
     });
     fireEvent.click(screen.getByRole("combobox", { name: "Collection" }));
@@ -899,6 +1108,140 @@ describe("ActionFormDialog", () => {
     );
   });
 
+  test("while its submit runs, Escape and Close are refused, and the answer then shows and closes it", async () => {
+    let answer!: (outcome: { ok: boolean; message: string }) => void;
+    const submit = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { answer = resolve; }));
+    renderDialog(registerReviewAction(submit));
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByRole("dialog", { name: "Register review" })).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await act(async () => { answer({ ok: true, message: "Review registered." }); });
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+    // The accepted close is the dialog's own: it asks nothing, though a value was picked. (The
+    // dialog is named: the success toast it raises is a dialog too.)
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Register review" })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("an accepted action whose onSucceeded navigates moves on, asking nothing, though a value was typed", async () => {
+    const seen: { router?: ReturnType<typeof useRouter> } = {};
+    function Following(): ReactElement {
+      const navigate = useNavigate();
+      seen.router = useRouter();
+      const [open, setOpen] = useState(true);
+      return <>
+        <ActionFormDialog action={registerReviewAction(vi.fn().mockResolvedValue({ ok: true, message: "Review registered." }))}
+          context={context} open={open} onOpenChange={setOpen} onSucceeded={() => { void navigate({ to: "/reviews" }); }} />
+      </>;
+    }
+    renderDialog(registerReviewAction(vi.fn()), undefined, undefined, { dialog: <Following /> });
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), { target: { value: "500" } });
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(seen.router!.history.location.pathname).toBe("/reviews"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("an accepted action whose dialog went away while it ran still toasts its message", async () => {
+    let answer!: (outcome: { ok: boolean; message: string }) => void;
+    const submit = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { answer = resolve; }));
+    function Pane(): ReactElement {
+      const [shown, setShown] = useState(true);
+      return <>
+        <button type="button" onClick={() => setShown(false)}>Leave the pane</button>
+        {shown ? <Harness action={registerReviewAction(submit)} /> : null}
+      </>;
+    }
+    renderDialog(registerReviewAction(submit), undefined, undefined, { dialog: <Pane /> });
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Leave the pane", hidden: true }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => { answer({ ok: true, message: "Review registered." }); });
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+  });
+
+  test("an action declaring its draft sends one key through every attempt of its dialog, a lost answer and a refusal included, until an ok answer", async () => {
+    const keys: Array<string | undefined> = [];
+    const submit = vi.fn(async (_values: Record<string, unknown>, context: ActionFormContext) => {
+      keys.push(context.idempotencyKey);
+      if (keys.length === 1) throw new TypeError("Failed to fetch");
+      return keys.length === 2 ? { ok: false, message: "Fix the amount." } : { ok: true, message: "Review registered." };
+    });
+    function Reopening(): ReactElement {
+      const [open, setOpen] = useState(true);
+      return <ActionFormDialog action={{ ...registerReviewAction(submit), idempotencyScope: ({ record }) => `register-review:${String(record?.id)}` }}
+        context={context} open={open} onOpenChange={setOpen} />;
+    }
+    renderDialog(registerReviewAction(submit), undefined, undefined, { dialog: <Reopening /> });
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    const register = async (count: number) => {
+      fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(count));
+    };
+    await register(1);
+    // The lost answer is told as one: the kept key makes the resend safe.
+    expect(await screen.findByText("No answer came back, so it may have been sent. Sending again from this page sends it once.")).toBeTruthy();
+    await register(2);
+    await screen.findByText("Fix the amount.");
+    await register(3);
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Register review" })).toBeNull());
+    expect(keys.slice(0, 3)).toEqual([keys[0], keys[0], keys[0]]);
+    expect(keys[0]).toEqual(expect.any(String));
+  });
+
+  test.each([
+    // As the server answers: its message joins every reason, the non-field one under `__all__`.
+    ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field",
+      { message: "Too early.; The period is closed.", validationErrors: { date: ["Too early."], __all__: ["The period is closed."] } }, "banner"],
+    ["a refusal of a field only brings the person to that field",
+      { message: "Too early.", validationErrors: { date: ["Too early."] } }, "field"],
+  ] as const)("%s", async (_name, refusal, focused) => {
+    const submit = vi.fn(async () => ({ ok: false, ...refusal }));
+    renderDialog(registerReviewAction(submit));
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    // The field's reason is said once, under the field, whatever else the refusal carries.
+    expect(await screen.findAllByText("Too early.")).toHaveLength(1);
+    const date = screen.getByRole("textbox", { name: "Date" });
+    if (focused === "field") {
+      // Asked once the dialog has stopped submitting, when its fields take focus again.
+      await waitFor(() => expect(document.activeElement).toBe(date));
+    } else {
+      const banner = (await screen.findByText("The period is closed.")).closest("[tabindex='-1']");
+      await waitFor(() => expect(document.activeElement).toBe(banner));
+      expect(banner?.textContent).toContain("Date");
+    }
+  });
+
+  test("Cancel with typed values asks first, and Stay keeps them", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByText("DOC-1");
+    fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), { target: { value: "500" } });
+    // The form publishes its dirty state a render after the value, as the person's next event finds it.
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect((screen.getByRole("textbox", { name: "Amount" }) as HTMLInputElement).value).toBe("500");
+  });
+
   test("an explicit relation-list edit wins over the context prefill", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
     renderDialog(registerReviewAction(submit));
@@ -913,5 +1256,573 @@ describe("ActionFormDialog", () => {
 
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ documentIds: ["doc-2"] });
+  });
+});
+
+describe("an action's refusal, as the server answers it, says each reason once and lands where the reason is", () => {
+  // The server's `message` joins every reason (`ActionResult.from_error`); non-field ones sit under
+  // `__all__`, and a refused target's message is the verb's summary.
+  const TO = "Enter one email address.";
+  const SUBJECT = "Write a subject.";
+  const CHANNEL = "The channel cannot send now.";
+  const TOKEN = "The token has expired.";
+  const DENIED = "You are not allowed to modify this task.";
+  const textFields = [{ name: "to", label: "To", widget: "text" }, { name: "subject", label: "Subject", widget: "text" }];
+  const branched = {
+    type: "object", discriminator: { propertyName: "mode" }, required: ["mode"],
+    properties: { mode: { type: "string", enum: ["email", "note"], widget: "text", label: "Mode" } },
+    oneOf: [
+      { properties: { mode: { const: "email" }, to: { type: "string", label: "To" }, subject: { type: "string", label: "Subject" } } },
+      { properties: { mode: { const: "note" }, token: { type: "string", label: "Token" } } },
+    ],
+  };
+  type Dialog = (submit: ActionDescriptor["submit"]) => ActionDescriptor;
+  const typed: Dialog = (submit) => ({ id: "send", label: "Send", submit, args: textFields.map((field) => ({ ...field, optional: true })) });
+  const schema: Dialog = (submit) => ({ id: "send", label: "Send", submit,
+    args: jsonSchemaActionArgs(branched, defaultWidgets, { initialValues: { mode: "email", to: "ana", subject: "" } }) });
+  const definition: Dialog = (submit) => ({ id: "send", label: "Send", submit, args: {
+    fields: [...textFields, { name: "token", label: "Token", hidden: true }], defaultValues: { to: "ana", subject: "", token: "t" },
+  } });
+  const answering = (refusal: { message: string; validationErrors: Record<string, string[]> }) => vi.fn(async () => ({ ok: false, ...refusal }));
+  async function send() {
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Send" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    // A real click puts focus on the button; the dialog opened with it on its first field, so
+    // without this a row that expects focus there passes with nothing moving it.
+    button.focus();
+    fireEvent.click(button);
+  }
+  async function refuse(dialog: Dialog, refusal: { message: string; validationErrors: Record<string, string[]> }) {
+    renderDialog(dialog(answering(refusal)));
+    await send();
+  }
+  const banner = () => screen.getByRole("dialog", { name: "Send" }).querySelector<HTMLElement>("[role='alert']");
+  /** The banner's lines: one message is its body, several a list. */
+  const bannerLines = () => {
+    const node = banner();
+    const items = [...node?.querySelectorAll("li") ?? []];
+    return items.length ? items.map((item) => item.textContent) : node ? [node.textContent] : [];
+  };
+
+  // Focus goes to the refused field on every kind: it is asked once the dialog has stopped
+  // submitting, so the fieldset a schema or definition dialog disables while the submit runs is
+  // enabled again. The test DOM would focus into a disabled fieldset all the same (a browser does
+  // not), so the proof that the call is made on a control that takes focus is
+  // `validation-errors.focus.test.tsx`, which records each call's target at that moment.
+  describe.each([
+    ["typed arguments", typed],
+    ["a schema's arguments", schema],
+    ["a definition's fields", definition],
+  ] as const)("on a dialog of %s", (_kind, dialog) => {
+    const expectFocusOn = (field: HTMLElement) => expect(document.activeElement).toBe(field);
+
+    test("one refused field: its reason once, under it; the banner names the field without repeating it, and focus is on the field", async () => {
+      await refuse(dialog, { message: TO, validationErrors: { to: [TO] } });
+      expect(await screen.findAllByText(TO)).toHaveLength(1);
+      const to = screen.getByRole("textbox", { name: "To" });
+      expect(to.getAttribute("aria-invalid")).toBe("true");
+      expect(to.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText(TO).id);
+      expect(bannerLines()).toEqual(["Please fix the highlighted fields: To."]);
+      await waitFor(() => expectFocusOn(to));
+    });
+
+    test("two refused fields: focus on the first in the dialog's order, not the server's", async () => {
+      await refuse(dialog, { message: `${SUBJECT}; ${TO}`, validationErrors: { subject: [SUBJECT], to: [TO] } });
+      expect(await screen.findAllByText(TO)).toHaveLength(1);
+      expect(screen.getAllByText(SUBJECT)).toHaveLength(1);
+      await waitFor(() => expectFocusOn(screen.getByRole("textbox", { name: "To" })));
+    });
+
+    test("a refused field and a non-field reason: that reason on the banner, beside the line naming the field, and focus on the banner", async () => {
+      await refuse(dialog, { message: `${TO}; ${CHANNEL}`, validationErrors: { to: [TO], __all__: [CHANNEL] } });
+      expect(await screen.findAllByText(TO)).toHaveLength(1);
+      expect(bannerLines()).toEqual([CHANNEL, "Please fix the highlighted fields: To."]);
+      await waitFor(() => expect(document.activeElement).toBe(banner()));
+    });
+
+    test("a refused target: its reason on the banner, not the verb's summary", async () => {
+      await refuse(dialog, { message: "Send failed.", validationErrors: { __all__: [DENIED] } });
+      expect(await screen.findByText(DENIED)).toBeTruthy();
+      expect(bannerLines()).toEqual([DENIED]);
+      expect(screen.queryByText("Send failed.", { exact: false })).toBeNull();
+    });
+  });
+
+  test("a schema branch the person switched to before the submit: a reason under its field shows once, under that field", async () => {
+    renderDialog(schema(answering({ message: TOKEN, validationErrors: { token: [TOKEN] } })));
+    fireEvent.change(screen.getByRole("textbox", { name: "Mode" }), { target: { value: "note" } });
+    await send();
+    expect(await screen.findAllByText(TOKEN)).toHaveLength(1);
+    expect(screen.getAllByText(TOKEN, { exact: false })).toHaveLength(1);
+    const token = screen.getByRole("textbox", { name: "Token" });
+    expect(token.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText(TOKEN).id);
+    expect(bannerLines()).toEqual(["Please fix the highlighted fields: Token."]);
+  });
+
+  test("a field the person's edit hid (its showWhen) is not one the dialog renders: its reason shows once on the banner, by its key", async () => {
+    const DETAIL = "Describe the change.";
+    renderDialog({ id: "send", label: "Send", submit: answering({ message: DETAIL, validationErrors: { detail: [DETAIL] } }), args: {
+      defaultValues: { kind: "more", detail: "x" },
+      fields: [
+        { name: "kind", label: "Kind", widget: "text" },
+        { name: "detail", label: "Detail", widget: "text", showWhen: (values) => values.kind === "more" },
+      ],
+    } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Kind" }), { target: { value: "less" } });
+    await send();
+    await waitFor(() => expect(bannerLines()).toEqual([`detail: ${DETAIL}`]));
+    expect(screen.getAllByText(DETAIL, { exact: false })).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(banner()));
+  });
+
+  test.each([["an inactive schema branch", schema], ["a hidden field", definition]] as const)(
+    "a reason under %s, which the dialog does not render, shows once on the banner, by its key, and the banner takes focus",
+    async (_case, dialog) => {
+      await refuse(dialog, { message: TOKEN, validationErrors: { token: [TOKEN] } });
+      await waitFor(() => expect(bannerLines()).toEqual([`token: ${TOKEN}`]));
+      expect(screen.getAllByText(TOKEN, { exact: false })).toHaveLength(1);
+      await waitFor(() => expect(document.activeElement).toBe(banner()));
+    },
+  );
+});
+
+describe("an object argument's member messages", () => {
+  // An object argument with a constrained member, beside a top-level text with the same rule.
+  const memberSpec = { type: "object", properties: {
+    retry: { type: "object", widget: "object", label: "Retry", properties: {
+      handle: { type: "string", label: "Handle", minLength: 3 },
+    } },
+    code: { type: "string", label: "Code", minLength: 3 },
+  } } as const;
+  const valid = { retry: { handle: "abc" }, code: "abc" };
+  const rule = "Enter at least 3 characters.";
+  const input = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const messageUnder = (label: string) => screen.getByText(label).closest('[data-layout="stack"]')?.textContent ?? "";
+  const tune = () => screen.getByRole<HTMLButtonElement>("button", { name: "Tune" });
+  // The change's validation runs after the event; a macrotask lets it settle before asserting what stays.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+  const definitions = {
+    "a definition without a resolver": () => ({ fields: deserializeFormSpec(memberSpec, defaultWidgets), defaultValues: valid }),
+    "a schema definition": () => jsonSchemaActionArgs(memberSpec, defaultWidgets, { initialValues: valid }),
+  };
+
+  test.each([["a top-level field", "Code"], ["a member", "Handle"]])(
+    "a definition without a resolver checks every change: %s edited to break its rule shows its message under it before any submit, the submit disabled, and corrected, the message goes and the submit is enabled",
+    async (_shape, label) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions["a definition without a resolver"]() });
+      await screen.findByLabelText("Handle");
+      await waitFor(() => expect(tune().disabled).toBe(false));
+
+      fireEvent.change(input(label), { target: { value: "ab" } });
+      await waitFor(() => expect(tune().disabled).toBe(true));
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(messageUnder(label)).toContain(rule);
+      expect(input(label).getAttribute("aria-invalid")).toBe("true");
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input(label), { target: { value: "abc" } });
+      await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+      expect(input(label).getAttribute("aria-invalid")).toBeNull();
+      await waitFor(() => expect(tune().disabled).toBe(false));
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([["a top-level field", "Code"], ["a member", "Handle"]])(
+    "guard: a schema definition checks from the first submit: before it, %s that breaks only its rule shows no message and leaves the submit enabled",
+    async (_shape, label) => {
+      const submit = vi.fn();
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions["a schema definition"]() });
+      await screen.findByLabelText("Handle");
+
+      fireEvent.change(input(label), { target: { value: "ab" } });
+      await settle();
+      expect(screen.queryByText(rule)).toBeNull();
+      expect(input(label).getAttribute("aria-invalid")).toBeNull();
+      expect(tune().disabled).toBe(false);
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each<[string, string, Record<string, unknown>]>([
+    ["a top-level field", "Code", { ...valid, code: "ab" }],
+    ["a member", "Handle", { ...valid, retry: { handle: "ab" } }],
+  ])(
+    "a definition without a resolver opened with %s that already breaks its rule shows no message, its submit disabled, until the person edits that field",
+    async (_shape, label, defaultValues) => {
+      renderDialog({ id: "tune", label: "Tune", submit: vi.fn(), args: { fields: deserializeFormSpec(memberSpec, defaultWidgets), defaultValues } });
+      await screen.findByLabelText("Handle");
+      await settle();
+      expect(screen.queryByText(rule)).toBeNull();
+      expect(input(label).getAttribute("aria-invalid")).toBeNull();
+      expect(tune().disabled).toBe(true);
+
+      fireEvent.change(input(label), { target: { value: "a" } });
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(messageUnder(label)).toContain(rule);
+      expect(input(label).getAttribute("aria-invalid")).toBe("true");
+      expect(tune().disabled).toBe(true);
+    },
+  );
+
+  test("a definition without a resolver checks an object field as one: editing one member shows a failing sibling member's message too, while a failing top-level field the person did not touch stays silent", async () => {
+    const pairSpec = { type: "object", properties: {
+      retry: { type: "object", widget: "object", label: "Retry", properties: {
+        handle: { type: "string", label: "Handle", minLength: 3 },
+        alias: { type: "string", label: "Alias", minLength: 3 },
+      } },
+      code: { type: "string", label: "Code", minLength: 3 },
+    } } as const;
+    renderDialog({ id: "tune", label: "Tune", submit: vi.fn(), args: {
+      fields: deserializeFormSpec(pairSpec, defaultWidgets), defaultValues: { retry: { handle: "abc", alias: "x" }, code: "ab" },
+    } });
+    await screen.findByLabelText("Alias");
+    await settle();
+    expect(screen.queryByText(rule)).toBeNull();
+    expect(tune().disabled).toBe(true);
+
+    fireEvent.change(input("Handle"), { target: { value: "abcd" } });
+    await waitFor(() => expect(messageUnder("Alias")).toContain(rule));
+    expect(input("Alias").getAttribute("aria-invalid")).toBe("true");
+    expect(messageUnder("Handle")).not.toContain(rule);
+    expect(input("Handle").getAttribute("aria-invalid")).toBeNull();
+    expect(messageUnder("Code")).not.toContain(rule);
+    expect(input("Code").getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getAllByText(rule)).toHaveLength(1);
+    expect(tune().disabled).toBe(true);
+  });
+
+  test.each(Object.keys(definitions) as (keyof typeof definitions)[])(
+    "%s: after a blocked submit, an edit that still fails keeps the member's message, and correcting it lets the submit through",
+    async (kind) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+      renderDialog({ id: "tune", label: "Tune", submit, args: definitions[kind]() });
+      await screen.findByLabelText("Handle");
+      fireEvent.change(input("Handle"), { target: { value: "ab" } });
+      fireEvent.submit(tune().closest("form")!);
+      expect(await screen.findByText(rule)).toBeTruthy();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input("Handle"), { target: { value: "a" } });
+      await settle();
+      expect(messageUnder("Handle")).toContain(rule);
+      expect(input("Handle").getAttribute("aria-invalid")).toBe("true");
+      fireEvent.submit(tune().closest("form")!);
+      await settle();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(input("Handle"), { target: { value: "abcd" } });
+      await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+      await waitFor(() => expect(tune().disabled).toBe(false));
+      fireEvent.click(tune());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { handle: "abcd" }, code: "abc" });
+    },
+  );
+
+  test("a schema definition: a member named `type` shows its message after a refused submit, keeps it through an edit that still fails, and correcting it lets the submit through", async () => {
+    const typeSpec = { type: "object", properties: {
+      retry: { type: "object", widget: "object", label: "Retry", properties: {
+        type: { type: "string", label: "Kind", minLength: 3 },
+      } },
+    } } as const;
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+    renderDialog({ id: "tune", label: "Tune", submit, args: jsonSchemaActionArgs(typeSpec, defaultWidgets, { initialValues: { retry: { type: "abc" } } }) });
+    await screen.findByLabelText("Kind");
+    fireEvent.change(input("Kind"), { target: { value: "ab" } });
+    fireEvent.submit(tune().closest("form")!);
+    expect(await screen.findByText(rule)).toBeTruthy();
+    expect(messageUnder("Kind")).toContain(rule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "a" } });
+    await settle();
+    expect(messageUnder("Kind")).toContain(rule);
+    expect(input("Kind").getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getAllByText(rule)).toHaveLength(1);
+    fireEvent.submit(tune().closest("form")!);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+
+    fireEvent.change(input("Kind"), { target: { value: "abcd" } });
+    await waitFor(() => expect(screen.queryByText(rule)).toBeNull());
+    await waitFor(() => expect(tune().disabled).toBe(false));
+    fireEvent.click(tune());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { type: "abcd" } });
+  });
+});
+
+describe("a required field in a dialog without a resolver", () => {
+  const required = "This field is required.";
+  const button = (name: string) => screen.getByRole<HTMLButtonElement>("button", { name });
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("an argument typed and then cleared says it is required while the submit is disabled", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "review", label: "Review", submit, args: [{ name: "reason", label: "Reason", widget: "text" }] });
+    const reason = await screen.findByLabelText("Reason");
+    fireEvent.change(reason, { target: { value: "Late" } });
+    await waitFor(() => expect(button("Review").disabled).toBe(false));
+    expect(screen.queryByText(required)).toBeNull();
+
+    fireEvent.change(reason, { target: { value: "" } });
+    await waitFor(() => expect(button("Review").disabled).toBe(true));
+    expect(await screen.findByText(required)).toBeTruthy();
+    expect(reason.getAttribute("aria-invalid")).toBe("true");
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: opened empty, it shows no message, even while another field is typed in, and the submit stays disabled until it is filled", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "review", label: "Review", submit, args: { fields: [
+      { name: "reason", label: "Reason", widget: "text", required: true },
+      { name: "note", label: "Note", widget: "text" },
+    ], defaultValues: { reason: "", note: "" } } });
+    const reason = await screen.findByLabelText("Reason");
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(reason.getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review").disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Note"), { target: { value: "Later" } });
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(reason.getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review").disabled).toBe(true);
+
+    fireEvent.change(reason, { target: { value: "Late" } });
+    await waitFor(() => expect(button("Review").disabled).toBe(false));
+    expect(screen.queryByText(required)).toBeNull();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: the form checks at a change, not at a blur: tabbing through an untouched empty required field and an untouched value that breaks a bound shows no message", async () => {
+    renderDialog({ id: "review", label: "Review", submit: vi.fn(), args: { fields: [
+      { name: "reason", label: "Reason", widget: "text", required: true },
+      { name: "code", label: "Code", widget: "text", minLength: 3 },
+    ], defaultValues: { reason: "", code: "ab" } } });
+    for (const label of ["Reason", "Code"]) {
+      const field = await screen.findByLabelText(label);
+      fireEvent.focus(field);
+      fireEvent.blur(field);
+    }
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(screen.queryByText("Enter at least 3 characters.")).toBeNull();
+    expect(screen.getByLabelText("Reason").getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getByLabelText("Code").getAttribute("aria-invalid")).toBeNull();
+    expect(button("Review").disabled).toBe(true);
+  });
+
+  test("guard: an argument dialog opened with an empty required relation beside prefilled ones shows no message and keeps the submit disabled", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByText("DOC-1");
+    await screen.findByLabelText("Date");
+    await settle();
+    expect(screen.queryByText(required)).toBeNull();
+    expect(button("Register review").disabled).toBe(true);
+  });
+});
+
+describe("where focus is when the dialog opens", () => {
+  // A popup or a validation that a focus started runs after the event; a macrotask lets it settle before asserting.
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test("an argument dialog puts focus on its first argument's input; no message shows and the submit stays disabled, as it opened", async () => {
+    renderDialog({ id: "rename", label: "Rename", submit: vi.fn(), args: [
+      { name: "name", widget: "text", label: "Name" },
+      { name: "note", widget: "text", label: "Note", optional: true },
+    ] });
+    const dialog = await screen.findByRole("dialog", { name: "Rename" });
+    const submit = screen.getByRole<HTMLButtonElement>("button", { name: "Rename" });
+    expect(submit.disabled).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Name" })));
+    await settle();
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(dialog.querySelector("[aria-invalid='true']")).toBeNull();
+    expect(submit.disabled).toBe(true);
+  });
+
+  test("guard: an action whose arguments could not be resolved shows only its banner, and focus is where Base UI puts it: on Close", async () => {
+    renderDialog({ id: "review", label: "Review", submit: vi.fn(), args: () => {
+      throw new Error("The saved schema is invalid.");
+    } });
+    await screen.findByRole("dialog", { name: "Review" });
+    expect(screen.getByText("The saved schema is invalid.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" })));
+  });
+
+  test.each<[string, ActionArg, () => HTMLElement]>([
+    ["a relation picker (many2one)", { name: "collection", argKind: "relation", resource: "Collection", label: "Collection" },
+      () => screen.getByRole("combobox", { name: "Collection" })],
+    ["a select (select)", { name: "kind", widget: "select", label: "Kind", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] },
+      () => screen.getByRole("combobox", { name: "Kind" })],
+    ["a switch (switch)", { name: "flag", widget: "switch", label: "Flag" }, () => screen.getByRole("switch", { name: "Flag" })],
+  ])("%s first: its control has focus and no popup opens", async (_kind, arg, control) => {
+    renderDialog({ id: "pick", label: "Pick", submit: vi.fn(), args: [arg, { name: "note", widget: "text", label: "Note", optional: true }] });
+    await screen.findByRole("dialog", { name: "Pick" });
+    await waitFor(() => expect(document.activeElement).toBe(control()));
+    await settle();
+    expect(document.activeElement).toBe(control());
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(control().getAttribute("aria-expanded")).not.toBe("true");
+  });
+
+  test("a date field (date) first, whose control is a plain button with no input role, is passed over: the next field has focus and no popup opens", async () => {
+    renderDialog({ id: "pick", label: "Pick", submit: vi.fn(), args: [
+      { name: "day", widget: "date", label: "Day" },
+      { name: "note", widget: "text", label: "Note", optional: true },
+    ] });
+    await screen.findByRole("dialog", { name: "Pick" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Note" })));
+    await settle();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Day" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("a prefilled many-to-many first field: its picker's own field has focus, not a chip's Remove button, and no popup opens", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByRole("dialog", { name: "Register review" });
+    expect(await screen.findByRole("button", { name: "Remove DOC-1" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Documents" })));
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Documents" }));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+});
+
+describe("a required member of an object argument", () => {
+  // A FormSpec object whose `required` names a member: the member is `required`, without a presence flag.
+  const authSpec = (token: Readonly<Record<string, unknown>>) => ({ type: "object", properties: {
+    auth: { type: "object", widget: "object", label: "Auth", required: ["token"], properties: {
+      token: { label: "Token", ...token }, note: { type: "string", label: "Note" },
+    } },
+  } });
+  const definitions = {
+    "a definition without a resolver": (token: Readonly<Record<string, unknown>>, auth: Record<string, unknown>) => (
+      { fields: deserializeFormSpec(authSpec(token), defaultWidgets), defaultValues: { auth } }),
+    "a schema definition": (token: Readonly<Record<string, unknown>>, auth: Record<string, unknown>) => (
+      jsonSchemaActionArgs(authSpec(token), defaultWidgets, { initialValues: { auth } })),
+  };
+  const requiredMessage = "This field is required.";
+  const connect = () => screen.getByRole<HTMLButtonElement>("button", { name: "Connect" });
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test(
+    "a definition without a resolver, the member absent: the submit is disabled from the opening with no message, a submit is refused with the member's message under it, and filled, it submits with the member",
+    async () => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+      renderDialog({ id: "connect", label: "Connect", submit, args: definitions["a definition without a resolver"]({ type: "string" }, {}) });
+      const token = await screen.findByLabelText("Token") as HTMLInputElement;
+      await settle();
+      // Measured: the submit's gate counts the member's `required` flag from the opening, silently.
+      expect(connect().disabled).toBe(true);
+      expect(screen.queryByText(requiredMessage)).toBeNull();
+
+      fireEvent.submit(connect().closest("form")!);
+      expect(await screen.findByText(requiredMessage)).toBeTruthy();
+      expect(screen.getByText("Token").closest('[data-layout="stack"]')?.textContent).toContain(requiredMessage);
+      expect(token.getAttribute("aria-invalid")).toBe("true");
+      await settle();
+      expect(submit).not.toHaveBeenCalled();
+
+      fireEvent.change(token, { target: { value: "abc" } });
+      await waitFor(() => expect(screen.queryByText(requiredMessage)).toBeNull());
+      await waitFor(() => expect(connect().disabled).toBe(false));
+      fireEvent.click(connect());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token: "abc" } });
+    },
+  );
+
+  test("a definition without a resolver: a required member holding a blank text is a value: the submit is enabled and sends it as held", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+    renderDialog({ id: "connect", label: "Connect", submit, args: definitions["a definition without a resolver"]({ type: "string" }, { token: " " }) });
+    await screen.findByLabelText("Token");
+    await waitFor(() => expect(connect().disabled).toBe(false));
+    fireEvent.click(connect());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token: " " } });
+    expect(screen.queryByText(requiredMessage)).toBeNull();
+  });
+
+  test.each([
+    ["left out of its initial values, which it seeds with an empty text", {}, ""],
+    ["holding a blank text", { token: " " }, " "],
+  ] as const)(
+    "guard: a schema definition leaves a required member %s to its resolver, which accepts it: the submit is enabled and goes with the member as it is",
+    async (_shape, auth, token) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+      renderDialog({ id: "connect", label: "Connect", submit, args: definitions["a schema definition"]({ type: "string" }, { ...auth }) });
+      await screen.findByLabelText("Token");
+      await waitFor(() => expect(connect().disabled).toBe(false));
+      fireEvent.click(connect());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token } });
+      expect(screen.queryByText(requiredMessage)).toBeNull();
+    },
+  );
+
+  test.each(Object.keys(definitions) as (keyof typeof definitions)[])(
+    "guard: %s accepts a member that is required and nullable, holding null",
+    async (kind) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Connected." });
+      renderDialog({ id: "connect", label: "Connect", submit,
+        args: definitions[kind]({ anyOf: [{ type: "string" }, { type: "null" }] }, { token: null, note: "n" }) });
+      await screen.findByLabelText("Note");
+      await waitFor(() => expect(connect().disabled).toBe(false));
+      fireEvent.click(connect());
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+      expect(submit.mock.calls[0]![0]).toStrictEqual({ auth: { token: null, note: "n" } });
+      expect(screen.queryByText(requiredMessage)).toBeNull();
+    },
+  );
+});
+
+describe("a member of an object argument the person cannot see or change", () => {
+  // A hand-declared object field: `handle` holds a value, `secret` is required and left out.
+  const retry = (secret: Readonly<Record<string, unknown>>) => ({
+    fields: [{ name: "retry", label: "Retry", widget: "object", objectTemplate: [
+      { name: "handle", label: "Handle", required: true },
+      { name: "secret", label: "Secret", required: true, ...secret },
+    ] }],
+    defaultValues: { retry: { handle: "abc" } },
+  });
+  const requiredMessage = "This field is required.";
+  const tune = () => screen.getByRole<HTMLButtonElement>("button", { name: "Tune" });
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+
+  test.each<[string, Readonly<Record<string, unknown>>]>([
+    ["hidden", { hidden: true }],
+    ["read-only", { readOnly: true }],
+  ])("a definition without a resolver: a %s required member left out does not block: after an edit of a sibling no message shows, the submit is enabled, and it sends exactly the values held", async (_state, secret) => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Tuned." });
+    renderDialog({ id: "tune", label: "Tune", submit, args: retry(secret) });
+    const handle = await screen.findByLabelText("Handle");
+    fireEvent.change(handle, { target: { value: "abcd" } });
+    await settle();
+    expect(screen.queryByText(requiredMessage)).toBeNull();
+    expect(document.querySelector('[aria-invalid="true"]')).toBeNull();
+    await waitFor(() => expect(tune().disabled).toBe(false));
+    fireEvent.click(tune());
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ retry: { handle: "abcd" } });
+  });
+
+  test("guard: a definition without a resolver: a visible, editable required member left out still blocks: after an edit of a sibling its message shows under it and the submit stays disabled", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "tune", label: "Tune", submit, args: retry({}) });
+    const handle = await screen.findByLabelText("Handle");
+    fireEvent.change(handle, { target: { value: "abcd" } });
+    expect(await screen.findByText(requiredMessage)).toBeTruthy();
+    expect(screen.getByText("Secret").closest('[data-layout="stack"]')?.textContent).toContain(requiredMessage);
+    expect(tune().disabled).toBe(true);
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,8 @@ from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
+from angee.brandkit.testing.models import BrandKit
+from angee.messaging_templates.testing.models import MessageTemplate
 from angee.portfolio.testing.models import Initiative, InitiativeProject, Product, Release, Update
 from angee.projects.testing.models import Project
 from angee.tags.testing.models import Tag
@@ -29,8 +31,17 @@ def reference_rows(db):
         placement = InitiativeProject.objects.create(initiative=initiative, project=project)
         update = Update.objects.create(target=initiative, health="on_track", body="Reference")
         release = Release.objects.create(product=product, name="Reference")
+        kit = BrandKit.objects.create(
+            name="Reference", brand="#e7b008", accent="#6366f1", neutral="#71717a", canvas="#fafaf9",
+            surface="#ffffff", rail="#09090b", success="#22c55e", warning="#eab308", danger="#dc2626",
+            info="#4f46e5", font_heading="system-ui", font_body="system-ui",
+        )
+        layout = MessageTemplate.objects.create(
+            kind="layout", key="reference", language="en", name="Reference", format="html",
+            source="<p>Reference</p>", text_source="Reference", is_baseline=True,
+        )
     # A tag assignment is not reference data: its record authorizes it (tests/test_tags.py).
-    return [tag, category, unit, product, initiative, placement, update, release]
+    return [tag, category, unit, product, initiative, placement, update, release, kit, layout]
 
 
 def test_signed_in_reads_include_every_reference_and_the_dependent_arrow(reference_rows):

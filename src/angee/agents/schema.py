@@ -20,9 +20,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from rebac import current_actor
 from strawberry import auto
-from strawberry.permission import BasePermission, PermissionExtension
+from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
-from strawberry.types import get_object_definition
 from strawberry_django.utils.requests import get_request
 
 from angee.agents import provisioning
@@ -428,11 +427,12 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     groupable=["backend_class", "lifecycle", "runtime_status", "vendor", "vendor__display_name"],
     delete=True,
     insertable=["vendor", "credential", "account", "backend_class", "lifecycle", "config", "name", "base_url"],
-    updatable=["vendor", "credential", "account", "backend_class", "lifecycle", "config", "name", "base_url"],
+    updatable=["vendor", "credential", "account", "lifecycle", "config", "name", "base_url"],
     write_backend=IntegrationWriteBackend(
         InferenceProvider,
         public_id_fields=("vendor", "owner", "credential", "account"),
     ),
+    write_permission_classes=_ADMIN_PERMISSION_CLASSES,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "owner": public_pk_decoder(User),
@@ -440,16 +440,6 @@ _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
         "account": public_pk_decoder(ExternalAccount),
     },
 )
-for _field in get_object_definition(_INFERENCE_PROVIDER_RESOURCE.mutation, strict=True).fields:
-    if _field.python_name in (
-        _INFERENCE_PROVIDER_RESOURCE.insert_one_root,
-        _INFERENCE_PROVIDER_RESOURCE.update_by_pk_root,
-    ):
-        _field.extensions.append(
-            PermissionExtension(
-                permissions=[permission() for permission in _ADMIN_PERMISSION_CLASSES],
-            )
-        )
 
 _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
     InferenceModelType,

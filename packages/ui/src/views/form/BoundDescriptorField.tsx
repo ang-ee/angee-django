@@ -4,9 +4,11 @@ import { useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 
 import type { DescriptorField } from "./DescriptorFieldList";
 import { LabeledDescriptorField } from "./DescriptorFieldList";
-import { fieldErrorMessages, isFieldVisible, resolveField, type FormValues } from "./form-view-model";
+import { fieldErrorMessages, isFieldVisible, isFormValues, resolveField, type FormValues } from "./form-view-model";
 import type { FormViewSaveSurface } from "./use-form-view-save";
 import { fieldsWithMetadataDefaults } from "../resource/model-metadata-defaults";
+import { isUnregisteredImplementationField } from "../resource/implementation-fields";
+import { UnregisteredImplementationField } from "./record-field-marks";
 import type { WidgetFocusTarget } from "../../widgets";
 
 export interface BoundDescriptorFieldProps {
@@ -70,7 +72,9 @@ export function useFormViewValues<T = FormValues>(form: FormViewSaveSurface, pat
   return watched as T;
 }
 
-/** Bind one descriptor to a nested path in FormView's existing RHF tree.
+/** Bind one descriptor to a nested path in FormView's existing RHF tree. Its control is read-only
+ * where the form's `fieldReadOnly` says so for that path; declare a field for the path, hidden if
+ * need be, to let the form's own save write it.
  * @kind surface
  */
 export function BoundDescriptorField({
@@ -88,23 +92,30 @@ export function BoundDescriptorField({
   ) as DescriptorField;
   const scopedValues = useWatch({ control: surface.form.control, name: (scope || undefined) as string });
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
-  // Resolving lays `resolve`'s descriptor over the declared one, so its DescriptorField members stay.
-  const resolved = resolveField(declared, siblingValues) as DescriptorField;
+  const resolved = resolveField(declared, siblingValues);
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
+  // The control's descriptor is named by its path in the form, as every descriptor is: its own
+  // validation registers there and the form's write rules read it.
+  const descriptor = { ...resolved, name };
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
+  // The record form's own descriptor for the path, the one its save reads, carries the mode lock.
+  const recordField = { ...(surface.recordField(name) ?? resolved), name };
+  const fieldReadOnly = readOnly || surface.fieldReadOnly(recordField);
+  const repair = surface.repairState(recordField);
 
-  return <BoundFormValue form={surface} name={name}>{(bound) => <LabeledDescriptorField
-    field={resolved}
+  return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
+    field={name} marked={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value)}
+    readOnly={fieldReadOnly} once={repair.repairing} refusal={repair.refusal}
+  ><LabeledDescriptorField
+    field={descriptor}
+    loading={repair.loading}
     value={bound.value}
     dialogValues={siblingValues}
-    readOnly={readOnly || surface.fieldReadOnly(resolved)}
+    readOnly={fieldReadOnly}
     controlRef={bound.controlRef}
     messages={bound.messages}
     onCommit={bound.onCommit}
     onChange={(next) => { bound.onChange(next); surface.afterFieldChange(resolved, next, scope); }}
-  />}</BoundFormValue>;
+  /></UnregisteredImplementationField>}</BoundFormValue>;
 }
 
-function isFormValues(value: unknown): value is FormValues {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}

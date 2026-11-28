@@ -1,5 +1,5 @@
 import { ResourceQuery, isClientRowModel, type DataResourceMetadata } from "@angee/metadata";
-import { MAX_PAGE_SIZE } from "@angee/refine";
+import { MAX_PAGE_SIZE, stableSerialize } from "@angee/refine";
 import { RECORD_NAVIGATION_SEARCH_KEY as SEARCH_KEY, RECORD_TAB_SEARCH_KEY, routeSearchString } from "../../runtime/route-href";
 import * as v from "valibot";
 import { isResourceViewFilter } from "./model/filter";
@@ -40,6 +40,16 @@ export function parseRecordNavigationScope(
   } catch {
     return null;
   }
+}
+
+/**
+ * A navigation scope's identity: its query facts, its order's keys in their priority. The order
+ * is an object whose key order is its priority, which a serialization of sorted keys drops.
+ * @kind null
+ * @reason Codec and transport infrastructure: translates runtime data and addresses.
+ */
+export function navigationScopeKey(scope: ListViewNavigationScope | null | undefined): string {
+  return stableSerialize(scope && { ...scope, order: scope.order && Object.entries(scope.order) });
 }
 
 /** Preserve the collection search verbatim, replacing only the record's navigation context.

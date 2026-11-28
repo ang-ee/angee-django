@@ -19,7 +19,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import storage from "../index";
 import { StorageFileById, StorageFoldersPage, StorageFolderById, StorageDriveById } from "../data/documents";
 import { ALL_SCOPE, TRASH_SCOPE } from "../data/file-rows";
-import { useFileActions } from "../data/use-file-actions";
 import { FilePreviewFrame } from "./FilePreviewFrame";
 import type { StorageExplorerController } from "./StorageExplorer";
 import { StorageListContent } from "./StorageListContent";
@@ -112,7 +111,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   const view = render(
     <Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
       <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.Folder": "mutation DeleteFolders($id: ID!) { delete_folders_preview(id: $id) { deleted } }" } } }}>
-      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []),
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, forms: storage.forms, routeHref: createRouteHref(storage.routes ?? []),
         // The composed containers: the record aside and its Related groups.
         containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers }}>
         <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
@@ -134,38 +133,35 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   expect(within(navigator).getByText("All files")).toBeTruthy();
   expect(within(navigator).getByText("Trash")).toBeTruthy();
   expect(navigatorToolbar.contains(within(navigator).getByRole("combobox", { name: "Filter records" }))).toBe(false);
-  const header = screen.getAllByRole("heading", { level: 1, name: "Alpha" })[0]!;
-  const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
+  const main = screen.getByRole("main");
   const tree = screen.getAllByRole("tree")[0];
-  const pager = screen.getByRole("navigation", { name: "Record navigation" });
-  // The lifecycle verbs reach the control band once the desktop shell has mounted its host.
-  await waitFor(() => expect(view.container.querySelector(".area-control")?.contains(screen.getByRole("button", { name: "Move to trash" }))).toBe(true));
-  const control = view.container.querySelector(".area-control");
-  const trash = screen.getByRole("button", { name: "Move to trash" }) as HTMLButtonElement;
+  const control = view.container.querySelector("[data-console-controls]");
+  expect(main.previousElementSibling).toBe(control);
+  expect(view.container.querySelector(".area-control")?.textContent).toBe("");
+  expect(main.querySelectorAll("form")).toHaveLength(1);
+  expect(control?.querySelectorAll("[role=toolbar]")).toHaveLength(1);
+  expect(main.querySelectorAll("[role=toolbar]")).toHaveLength(0);
+  expect(control?.contains(screen.getByRole("navigation", { name: "Record navigation" }))).toBe(true);
+  expect(screen.getByRole("tab", { name: "Preview" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getAllByRole("tab", { name: "Preview" })).toHaveLength(1);
+  fireEvent.click(within(control as HTMLElement).getByRole("button", { name: "Actions" }));
+  expect(await screen.findByRole("menuitem", { name: "Move to trash" })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
   await waitFor(() => expect((screen.getByRole("button", { name: "Next record" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Next record" }));
   await waitFor(() => expect(forms.has("file-b") && previews.has("file-b")).toBe(true));
   expect(router.state.location.pathname).toBe("/storage/file-b");
   expect(screen.queryByDisplayValue("Alpha")).toBeNull();
   expect(screen.getAllByRole("tree")[0]).toBe(tree);
-  expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
-  expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header);
-  expect(frame.isConnected).toBe(true);
-  expect(screen.getByRole("button", { name: "Move to trash" })).toBe(trash);
-  expect(trash.disabled).toBe(true);
-  expect(control?.contains(trash)).toBe(true);
   expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
 
-  // A form response can arrive before its independent preview response.
+  // The record form can load and expose its actions while the preview is still pending.
   await act(async () => forms.get("file-b")!.resolve({ data: records[1]! }));
   await screen.findByDisplayValue("Beta");
-  expect(trash.disabled).toBe(true);
+  expect(control?.querySelectorAll("[role=toolbar]")).toHaveLength(1);
   await act(async () => previews.get("file-b")!.resolve({ data: { files_by_pk: records[1] } }));
-  await waitFor(() => expect(header.textContent).toBe("Beta"));
-  expect(trash.disabled).toBe(false);
-  expect(control?.contains(trash)).toBe(true);
   expect(update).not.toHaveBeenCalled();
-  // The metadata form lives in the page body, so each record owns one form read.
   expect(getOne.mock.calls.filter(([request]) => request.resource !== "drives").map(([request]) => String(request.id))).toEqual(["file-a", "file-b"]);
 
   const folderSearch = screen.getByRole("combobox", { name: "Filter records" });
@@ -183,21 +179,12 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   await screen.findByRole("combobox", { name: "Drive: Archive" });
   expect(screen.getByRole("combobox", { name: "Filter records" })).not.toBe(folderSearch);
   expect(screen.getAllByRole("tree")[0]).toBe(tree);
-  await act(async () => router.navigate({ to: "/storage/file-b", search: (current: Record<string, unknown>) => current }));
-  await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header));
-  await act(async () => {
-    forms.get("file-b")!.resolve({ data: records[1]! });
-    previews.get("file-b")!.resolve({ data: { files_by_pk: records[1] } });
-  });
-  await screen.findByDisplayValue("Beta");
-  await screen.findByRole("combobox", { name: "Drive: Assets" });
 
   for (const missing of [false, true]) {
     const id = missing ? "file-missing" : "file-denied";
     await act(async () => router.navigate({ to: `/storage/${id}`, search: (current: Record<string, unknown>) => current }));
     await waitFor(() => expect(forms.has(id) && previews.has(id)).toBe(true));
-    expect(screen.queryByDisplayValue("Beta")).toBeNull();
-    expect(trash.disabled).toBe(true);
+    expect(screen.queryByDisplayValue("Gamma")).toBeNull();
     await act(async () => {
       if (missing) {
         previews.get(id)!.resolve({ data: { files_by_pk: null } });
@@ -207,16 +194,9 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
         forms.get(id)!.reject(new Error("Metadata access denied"));
       }
     });
-    // The header names an unavailable record; the body's own surface says why.
-    await waitFor(() => expect(header.textContent).toBe("Record unavailable"));
-    expect(await screen.findByText(missing ? "File not found" : "Could not load this preview.")).toBeTruthy();
-    if (!missing) expect(await screen.findByText("Preview access denied")).toBeTruthy();
+    expect(await screen.findByText(missing ? "Record unavailable" : "Metadata access denied")).toBeTruthy();
     expect(screen.getAllByRole("tree")[0]).toBe(tree);
-    expect(screen.getByRole("navigation", { name: "Record navigation" })).toBe(pager);
-    expect(trash.disabled).toBe(true);
-    expect(control?.contains(trash)).toBe(true);
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
-    fireEvent.click(trash);
     expect(update).not.toHaveBeenCalled();
     expect(provider.deleteOne).not.toHaveBeenCalled();
   }
@@ -351,7 +331,7 @@ function mountStorage(path: string, { visibleDrives = drives, folderRead }: {
     history: createMemoryHistory({ initialEntries: [path] }), parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
   render(<Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
     <OperationDocumentsProvider documents={{ console: { groups: { "storage.File": "query Groups { files_groups { key } totalCount }" } } }}>
-      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []),
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, forms: storage.forms, routeHref: createRouteHref(storage.routes ?? []),
         containers: composeAddons([storage], { canonicalModelLabel: (model) => model }).containers }}>
         <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
       </AppRuntimeProvider>
@@ -425,7 +405,7 @@ test("a folder scope's collection header carries the drive picker, New and the f
 
 test("a directly shared file opens when no drive is visible", async () => {
   mountStorage("/storage/file-a", { visibleDrives: [] });
-  expect((await screen.findAllByRole("heading", { level: 1, name: "Alpha" }))[0]).toBeTruthy();
+  expect(await screen.findByDisplayValue("Alpha")).toBeTruthy();
   expect(screen.queryByText("No drives are available to you.")).toBeNull();
 });
 
@@ -441,7 +421,7 @@ function renderView(view: ReactElement, rows: readonly Row[], dataProvider: Refi
     getList: vi.fn(async () => ({ data: [...rows], total: rows.length })),
     ...dataProvider,
   }} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
-    <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
+    <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, forms: storage.forms, routeHref: createRouteHref(storage.routes ?? []) }}>
       <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
     </AppRuntimeProvider>
   </Provider>);
@@ -456,12 +436,12 @@ test.each(["blocked", "cancel", "success"] as const)("the open file asks once th
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) =>
     meta?.gqlQuery === StorageFileById ? { data: { files_by_pk: row } } : trashMutation());
   function OpenFile() {
-    const actions = useFileActions();
-    return <FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} fileActions={actions} />;
+    return <FilePreviewFrame id="file-a" fileNavigation={null} closeDetail={close} />;
   }
   renderView(<OpenFile />, [row], { custom });
-  const trash = await screen.findByRole<HTMLButtonElement>("button", { name: "Move to trash" });
-  await waitFor(() => expect(trash.disabled).toBe(false));
+  await screen.findByDisplayValue("Alpha");
+  fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+  const trash = await screen.findByRole("menuitem", { name: "Move to trash" });
   expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   fireEvent.click(trash);
   const dialog = await screen.findByRole("alertdialog", { name: "Move “Alpha” to the trash?" });

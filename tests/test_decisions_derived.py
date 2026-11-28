@@ -1,5 +1,6 @@
 """An owning addon derives decision access through retained concern links."""
 
+
 import pytest
 from django.apps import apps
 from django.core.exceptions import PermissionDenied
@@ -20,7 +21,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.projects.testing.models import Task
 from angee.workflows import schema as workflow_schema
-from tests.conftest import SchemaAddon, create_platform_admin, create_user
+from tests.conftest import SchemaAddon, create_platform_admin, create_user, vault_for
 from tests.extcontrib.models import Record
 
 
@@ -77,6 +78,48 @@ def test_read_and_can_act_follow_the_typed_concern(schema, concerned_question, v
         }""", {"id": question.sqid, "revision": question.revision}, user=actor))
         question.refresh_from_db()
         assert question.verdict == ["confirm"] and question.answered_by_id == actor.pk
+
+
+def test_an_owner_eligible_writer_is_a_decider_and_a_reader_of_the_record_is_not(concerned_question):
+    admin, writer, reader, outsider, _record, question = concerned_question
+    assert Decision.system_queryset().filter(pk=question.pk).deciders() == {question.pk: [admin, writer]}
+    put = [person for person in (admin, writer, reader, outsider) if Decision.objects.put_to(person).exists()]
+    assert put == [admin, writer]
+
+
+def test_a_holder_of_act_who_may_not_read_the_question_is_no_decider(db):
+    actor = create_user("act-without-read-decider")
+    Need = apps.get_model("intake", "Need")
+    with actor_context(actor):
+        task = Task.objects.create(title="Access request")
+        need = Need.objects.capture(target=task, body="Please review access")
+    question = Decision.system_queryset().get(pk=need.access_decision_id)
+    with system_context(reason="test.decisions.deciders_without_read"):
+        question.assignees.clear()
+    assert question.with_actor(actor).has_access("act") and not question.with_actor(actor).has_access("read")
+    assert actor not in Decision.system_queryset().filter(pk=question.pk).deciders()[question.pk]
+    assert not Decision.objects.put_to(actor).filter(pk=question.pk).exists()
+
+
+def test_an_administrator_who_may_not_answer_an_owner_managed_question_is_not_put_it(db):
+    requester, reviewer = create_user("managed-requester"), create_user("managed-reviewer")
+    admin = create_platform_admin("managed-admin")
+    subject = vault_for(requester, name="Managed order")
+    write_relationships([RelationshipTuple(to_object_ref(subject), "viewer", to_subject_ref(reviewer))])
+    managed, free = (
+        Decision.objects.ask(DecisionRequest(
+            kind="managed_review", records=(subject,), assignees=(reviewer,), requester=requester,
+            proposal=DecisionProposal(alternatives=[{"key": "confirm", "label": "Confirm", "outcome": "confirmed"}]),
+        ), actor=requester)
+        for _ in range(2)
+    )
+    write_relationships([RelationshipTuple(to_object_ref(managed), "managed_user", to_subject_ref(admin))])
+    assert managed.with_actor(admin).has_access("read") and not managed.with_actor(admin).has_access("act")
+    rows = Decision.system_queryset().filter(pk__in=(managed.pk, free.pk))
+    assert rows.administrators() == {managed.pk: [], free.pk: [admin]}
+    assert list(Decision.objects.for_administrator(admin).filter(pk__in=(managed.pk, free.pk)).values_list(
+        "pk", flat=True,
+    )) == [free.pk]
 
 
 def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(schema, db):

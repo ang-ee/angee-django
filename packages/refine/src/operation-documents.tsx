@@ -8,6 +8,7 @@ export type ActionDocumentMap = Readonly<Record<string, unknown>>;
 export type AggregateDocumentMap = Readonly<Record<string, unknown>>;
 export type DeletePreviewDocumentMap = Readonly<Record<string, unknown>>;
 export type GroupDocumentMap = Readonly<Record<string, unknown>>;
+export type RepairChoicesDocumentMap = Readonly<Record<string, unknown>>;
 export type SaveDocumentMap = Readonly<Record<string, unknown>>;
 
 export interface SchemaOperationDocuments {
@@ -15,6 +16,8 @@ export interface SchemaOperationDocuments {
   aggregates?: AggregateDocumentMap;
   deletePreviews?: DeletePreviewDocumentMap;
   groups?: GroupDocumentMap;
+  /** Generated `<resource>_repair_choices(id, field)` reads: what choosing each implementation sets on a record. */
+  repairChoices?: RepairChoicesDocumentMap;
   /** Authored `<resource>_save(pk, patch, lines)` diff-apply documents (F6). */
   saves?: SaveDocumentMap;
 }
@@ -28,6 +31,7 @@ const OPERATION_DOCUMENT_LABELS = {
   aggregates: "aggregate",
   deletePreviews: "delete-preview",
   groups: "group",
+  repairChoices: "repair-choices",
   saves: "save",
 } as const satisfies Record<OperationDocumentKind, string>;
 

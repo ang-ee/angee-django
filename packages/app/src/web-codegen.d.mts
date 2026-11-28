@@ -48,3 +48,9 @@ export interface WebCodegenResult {
 
 /** Generate GraphQL documents and the composed frontend runtime once. */
 export function generateWebRuntime(options?: WebCodegenOptions): Promise<WebCodegenResult>;
+
+/**
+ * Throw if a theme stylesheet imports another stylesheet, or its text (comments and strings included)
+ * declares an `--elevation-*` property, names one in `@property`, or holds a backslash.
+ */
+export function assertThemeStylesheet(source: string, stylesheet: string, themeId: string): void;
