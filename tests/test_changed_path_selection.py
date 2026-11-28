@@ -16,7 +16,7 @@ from scripts.changed_path_selection import (
     collected,
     isolated_suites,
     select,
-    shared_pytest_args,
+    selection_plan,
     web_plan,
 )
 from scripts.postgres_selection import entries, groups, kept
@@ -40,7 +40,7 @@ def commit(root: Path) -> str:
 @pytest.fixture(scope="module")
 def framework():
     graph = addon_graph(ROOT, ())
-    paths, shared, _ = collected(ROOT, ())
+    paths, shared, _, _ = collected(ROOT, ())
     return graph, tuple(paths), shared
 
 
@@ -193,12 +193,48 @@ def test_owned_resource_and_inactive_permissions_select_actual_readers(addon_rep
     assert shared.mode == "full"
 
 
-def test_native_shared_args_exclude_standalone_suite_even_when_explicit(addon_repo) -> None:
-    root, graph, _ = addon_repo
-    addon = Path("fixture_addons/leaf")
-    tests = addon / "tests"
-    args = shared_pytest_args(root, ["tests", str(tests / "test_contract.py")], {addon: graph.owners[addon]})
-    assert args == ["tests", "--ignore", str(root / tests)]
+@pytest.mark.parametrize("scope", ["recursive", "explicit", "all excluded", "selected all excluded", "xdist"])
+def test_shared_execution_excludes_standalone_before_initial_conftests(tmp_path, scope) -> None:
+    source = tmp_path / "src/arp"
+    standalone = source / "test_standalone"
+    standalone.mkdir(parents=True)
+    (standalone / "conftest.py").write_text("raise AssertionError('standalone conftest imported')\n")
+    (standalone / "test_poison.py").write_text("raise AssertionError('standalone tests imported')\n")
+    config = standalone / "pytest.ini"
+    config.write_text("[pytest]\ntestpaths = .\n")
+    legacy = source / "test_legacy.py"
+    legacy.write_text("def test_shared(): pass\n")
+    targets = [str(source)] if scope in {"recursive", "xdist"} else [str(standalone)]
+    if scope == "explicit":
+        targets.append(str(legacy))
+    workers = ["-n", "2"] if scope == "xdist" else []
+    launcher = """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv.pop(1))
+from changed_path_selection import AppGraph, Inputs, run_selected
+import changed_path_selection
+
+root = Path.cwd()
+suites = {Path("src/arp/test_standalone"): "arp.test_standalone"}
+fallback = sys.argv.pop(1)
+changed_path_selection.inputs = lambda *args, **kwargs: Inputs(
+    [], [], AppGraph(suites, {}, {}), suites, {}, fallback, "",
+)
+raise SystemExit(run_selected(sys.argv[1:], root=root, base=None, head=None))
+"""
+    result = subprocess.run([
+        sys.executable, "-c", launcher, str(SCRIPT.parent),
+        "" if scope == "selected all excluded" else "no comparison",
+        "-c", str(config), "--rootdir", str(tmp_path), "--confcutdir", str(tmp_path),
+        "--deselect", str(standalone / "test_poison.py"),
+        "-p", "no:django", "-p", "no:randomly", "-q", *workers, *targets,
+    ], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = "empty" if scope.endswith("excluded") else "full"
+    assert json.loads(result.stdout.splitlines()[0])["mode"] == expected
+    assert ("1 passed" in result.stdout) == (expected == "full")
 
 
 def test_isolated_test_helper_can_reach_a_legacy_consumer_before_collection(addon_repo) -> None:
@@ -230,19 +266,46 @@ def test_package_edit_reaches_native_reverse_fragments(tmp_path, monkeypatch) ->
     assert stack.paths == ("angee.consumer",)
 
 
-def test_new_resource_owner_needs_only_its_composed_closure(addon_repo, monkeypatch) -> None:
+@pytest.mark.parametrize("package_edit", [False, True])
+def test_new_resource_owner_reaches_composed_validation(addon_repo, monkeypatch, package_edit) -> None:
     root, graph, _ = addon_repo
     directory = Path("fixture_addons/leaf")
     addon = graph.owners[directory]
     monkeypatch.setattr(
         "angee.base.addons.addon_facts", lambda name, capability, index: {"demo": []} if name == addon else {},
     )
+    package = Path("packages/library")
+    monkeypatch.setattr(changed_path_selection, "pnpm_projects", lambda root, projects=(): {package})
+    changes = [directory / "resources/demo/010_record.yaml"]
+    if package_edit:
+        changes.append(package / "src/index.ts")
     packages, stack = web_plan(
-        root, [directory / "resources/demo/010_record.yaml"], graph, {},
+        root, changes, graph, {},
         base=None, fallback="", additions={directory: addon}, graph_fallback="",
     )
-    assert packages.mode == "empty"
+    assert packages.mode == ("selected" if package_edit else "empty")
+    assert stack.mode == ("full" if package_edit else "selected")
     assert stack.paths == (addon,)
+
+
+def test_full_stack_keeps_known_new_addons_without_inventing_manual_roots(tmp_path, monkeypatch) -> None:
+    git(tmp_path, "init")
+    removed = tmp_path / "removed.py"
+    removed.touch()
+    base = commit(tmp_path)
+    removed.unlink()
+    new = Path("src/arp/new")
+    (tmp_path / new).mkdir(parents=True)
+    (tmp_path / new / "pyproject.toml").touch()
+    head = commit(tmp_path)
+    graph = AppGraph({new: "arp.new", Path("src/arp/optional"): "arp.optional"}, {}, {})
+    monkeypatch.setattr(changed_path_selection, "installed_graph", lambda root, apps: (graph, ""))
+    for baseline, expected in ((base, ("arp.new",)), (None, ())):
+        plan, _ = selection_plan(
+            tmp_path, baseline, head, framework=False, apps=(), extra=(), donor=None, pytest_args=(),
+        )
+        assert plan["stack"].mode == "full"
+        assert plan["stack"].paths == expected
 
 
 @pytest.mark.parametrize("existing_drift", [False, True])
@@ -270,7 +333,7 @@ def test_additive_rendered_lock_reaches_only_new_stack_project(tmp_path, existin
     assert stack.paths == (() if existing_drift else ("arp.new",))
 
 
-@pytest.mark.parametrize("delta", ["local", "plugin", "prior changed", "unattributed"])
+@pytest.mark.parametrize("delta", ["local", "plugin", "prior changed", "unattributed", "script collision"])
 def test_additive_workspace_requires_native_attribution(tmp_path, monkeypatch, delta) -> None:
     git(tmp_path, "init")
     manifest = tmp_path / "pyproject.toml"
@@ -293,7 +356,12 @@ members = {members}
         requirements='["demo-new==1"]', sources="demo-new = { workspace = true }", members='["src/demo/new"]',
     ))
     commit(tmp_path)
-    distribution = SimpleNamespace(version="1", entry_points=SimpleNamespace(select=lambda **kwargs: ()))
+    distribution = SimpleNamespace(
+        name="demo-new", version="1", entry_points=SimpleNamespace(
+            select=lambda group: [SimpleNamespace(name="pytest")]
+            if delta == "script collision" and group == "console_scripts" else [],
+        ),
+    )
     monkeypatch.setattr("django_compose.components.installed_components", lambda group: SimpleNamespace(
         providers={"demo.new": "demo-new"}, distributions={"demo-new": distribution},
     ))
@@ -416,6 +484,23 @@ def test_cli_preserves_pytest_patterns_and_skips_an_intentionally_empty_selectio
     record = json.loads(run.stdout)
     assert record["mode"] == "empty"
     assert record["paths"] == []
+
+
+@pytest.mark.parametrize("shard", [[], ["--splits", "1", "--group", "1"]])
+def test_unknown_input_keeps_native_no_tests_collected_for_required_full_run(tmp_path: Path, shard) -> None:
+    git(tmp_path, "init")
+    (tmp_path / "test_empty.py").write_text("# An empty pytest module.\n")
+    base = commit(tmp_path)
+    (tmp_path / "mystery.xml").write_text("<unknown/>\n")
+    head = commit(tmp_path)
+    run = subprocess.run([
+        sys.executable, str(SCRIPT), "pytest", "--root", str(tmp_path), "--base", base, "--head", head,
+        "--", "-p", "no:django", "-p", "no:randomly", "-q", *shard, "test_empty.py",
+    ], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert run.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, run.stdout + run.stderr
+    assert json.loads(run.stdout.splitlines()[0]) == {
+        "mode": "full", "reason": "shared or unowned input: mystery.xml", "paths": [],
+    }
 
 
 def test_consumer_collects_with_callers_prepopulated_registry_and_import_paths(tmp_path: Path) -> None:

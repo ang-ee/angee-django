@@ -27,6 +27,7 @@ import pytest
 from packaging.markers import Marker
 
 GROUP = "angee.addons"
+EMPTY_SHARED = "no shared pytest targets after standalone exclusion"
 GRAPH_INPUTS = {
     "pyproject.toml", "uv.lock", "pytest.ini", "setup.cfg", "tox.ini",
     ".python-version", "settings.py", "settings.yaml",
@@ -86,12 +87,14 @@ def changed_paths(root: Path, base: str | None, head: str | None) -> tuple[list[
         return [], "base or diff unavailable"
     fields = diff.stdout.rstrip(b"\0").split(b"\0") if diff.stdout else []
     paths = []
+    fallback = ""
     for status, name in zip(fields[::2], fields[1::2], strict=True):
         path = Path(os.fsdecode(name))
         if status not in {b"A", b"M"} or not (root / path).is_file():
-            return [], f"removed or replaced input: {path}"
-        paths.append(path)
-    return sorted(paths), ""
+            fallback = fallback or f"removed or replaced input: {path}"
+        else:
+            paths.append(path)
+    return sorted(paths), fallback
 
 
 def python_input(path: Path) -> bool:
@@ -184,6 +187,18 @@ def uv_export(root: Path, extra: Sequence[str], *, prune: Sequence[str] = ()) ->
     return tomllib.loads(result.stdout.decode())
 
 
+def global_entry_points(distribution: metadata.Distribution) -> bool:
+    """Check plugin autoload and collisions with installed executable entry points."""
+
+    if distribution.entry_points.select(group="pytest11"):
+        return True
+    scripts = {entry.name for entry in distribution.entry_points.select(group="console_scripts")}
+    return bool(scripts) and any(
+        entry.name in scripts and entry.dist.name != distribution.name
+        for entry in metadata.entry_points(group="console_scripts")
+    )
+
+
 def global_install_effect(records: Sequence[dict], donor: Path | None, root: Path) -> bool:
     """Detect changed effective donor records and installation-wide Python hooks."""
 
@@ -209,20 +224,13 @@ def global_install_effect(records: Sequence[dict], donor: Path | None, root: Pat
                 return True
             continue
         distribution = metadata.distribution(name)
-        if distribution.entry_points.select(group="pytest11") or distribution.files is None:
+        if global_entry_points(distribution) or distribution.files is None:
             return True
         if any(
             len(path.parts) == 1 and (path.suffix == ".pth" or path.stem in {"sitecustomize", "usercustomize"})
             for path in distribution.files
         ):
             return True
-        if distribution.entry_points.select(group="console_scripts"):
-            scripts = {entry.name for entry in distribution.entry_points.select(group="console_scripts")}
-            if any(
-                entry.name in scripts and entry.dist.name != distribution.name
-                for entry in metadata.entry_points(group="console_scripts")
-            ):
-                return True
     return False
 
 
@@ -259,7 +267,7 @@ def additive_addons(
         uv = current["tool"]["uv"]
         for name, path in distributions.items():
             distribution = index.distributions[name]
-            if distribution.entry_points.select(group="pytest11"):
+            if global_entry_points(distribution):
                 return {}
             current["project"]["dependencies"].remove(f"{name}=={distribution.version}")
             if uv["sources"].pop(name) != {"workspace": True}:
@@ -609,8 +617,9 @@ def web_plan(
     external = {name for name in graph.dependencies.keys() - local if name.startswith("angee.")}
     if framework and runtime_inputs and not external:
         return packages, Selection("full", "existing runtime input with no native external addon graph")
-    resource_roots = set(additions.values()) | (affected if runtime_inputs else set())
-    if resource_roots:
+    resource_candidates = set(additions.values()) | (affected if runtime_inputs else set())
+    resource_roots = set()
+    if resource_candidates:
         from django.core.exceptions import ImproperlyConfigured
         from django_compose.components import installed_components
 
@@ -618,9 +627,9 @@ def web_plan(
 
         try:
             index = installed_components(GROUP)
-            roots.update(
-                name for name in resource_roots if addon_facts(name, "angee.resources", index=index)
-            )
+            resource_roots = {
+                name for name in resource_candidates if addon_facts(name, "angee.resources", index=index)
+            }
         except (ImportError, ImproperlyConfigured):
             return packages, Selection("full", "native resource declarations unavailable")
     roots.update(
@@ -629,6 +638,9 @@ def web_plan(
         or any(path.is_relative_to(directory) for path in reached)
     )
     roots.update(affected & external)
+    roots.update(resource_roots)
+    if resource_roots and packages.mode != "empty":
+        return packages, Selection("full", "package and resource inputs both affect composition", tuple(sorted(roots)))
     return packages, Selection.reached(sorted(roots))
 
 
@@ -656,7 +668,7 @@ class Collection:
 
 def collected(
     root: Path, args: Sequence[str], *, setup_django: bool = False,
-) -> tuple[dict[Path, str], list[Path], frozenset[str]]:
+) -> tuple[dict[Path, str], list[Path], frozenset[str], bool]:
     command = [
         sys.executable, str(Path(__file__).resolve()), "_collect", "django" if setup_django else "pytest", *args,
     ]
@@ -670,29 +682,119 @@ def collected(
         {Path(path).relative_to(root): node for path, node in data["files"].items()},
         [Path(path).relative_to(root) for path in data["shared_paths"]],
         frozenset(data["apps"]),
+        data["excluded"],
     )
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Carry the shared scope through native pytest, including xdist workers."""
+
+    parser.addoption("--angee-isolated-root", action="append", default=[], help=argparse.SUPPRESS)
+
+
+def collection_path(config: pytest.Config, target: str, *, pyargs: bool) -> Path | None:
+    path: str | None = target.partition("::")[0]
+    if pyargs:
+        from _pytest.main import search_pypath
+
+        path = search_pypath(
+            path, consider_namespace_packages=config.getini("consider_namespace_packages"),
+        )
+    return (config.invocation_params.dir / path).resolve() if path is not None else None
+
+
+def eligible_targets(
+    config: pytest.Config, targets: Sequence[str], *, pyargs: bool, roots: Sequence[Path],
+) -> list[str]:
+    return [
+        target for target in targets
+        if (path := collection_path(config, target, pyargs=pyargs)) is None
+        or not any(path.is_relative_to(root) for root in roots)
+    ]
+
+
+def conftest_anchor(config: pytest.Config, target: str, *, pyargs: bool, roots: Sequence[Path]) -> str:
+    """Avoid pytest's early test* subdirectory expansion for an excluded addon."""
+
+    path = collection_path(config, target, pyargs=pyargs)
+    if path is None:
+        return target
+    anchor = path
+    while any(root.parent == anchor and root.name.startswith("test") for root in roots):
+        # A file anchor loads its ancestor conftests without scanning siblings.
+        file = next((child for child in sorted(anchor.iterdir()) if child.is_file()), None)
+        if file is not None:
+            return str(file)
+        anchor = anchor.parent
+    return str(anchor) if anchor != path else target
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config: pytest.Config) -> None:
+    options = early_config.known_args_namespace
+    roots = tuple(map(Path, options.angee_isolated_root))
+    if roots:
+        targets, _ = early_config._decide_args(
+            args=options.file_or_dir, pyargs=options.pyargs, testpaths=early_config.getini("testpaths"),
+            invocation_dir=early_config.invocation_params.dir, rootpath=early_config.rootpath, warn=False,
+        )
+        allowed = eligible_targets(early_config, targets, pyargs=options.pyargs, roots=roots)
+        if not allowed:
+            pytest.exit(EMPTY_SHARED, returncode=0)
+        options.file_or_dir = [
+            conftest_anchor(early_config, target, pyargs=options.pyargs, roots=roots) for target in allowed
+        ]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    roots = tuple(map(Path, config.getoption("angee_isolated_root")))
+    if not roots:
+        return None
+    config.args[:] = eligible_targets(config, config.args, pyargs=config.option.pyargs, roots=roots)
+    return None if config.args else pytest.ExitCode.OK
 
 
 def shared_pytest_args(root: Path, args: Sequence[str], suites: dict[Path, str]) -> list[str]:
     """Exclude native standalone addon suite roots before pytest loads their conftests."""
 
-    return [
-        *shared_targets(root, args, suites),
-        *(arg for path in standalone_test_roots(root, suites) for arg in ("--ignore", str(path))),
+    options = [
+        arg for path in sorted(suites) for arg in
+        (f"--angee-isolated-root={root / path}", f"--ignore={root / path}")
     ]
+    return ["-p", Path(__file__).stem, *options, *args] if options else list(args)
 
 
-def standalone_test_roots(root: Path, suites: dict[Path, str]) -> list[Path]:
-    return [root / (conventional_test_dir(root, directory) or directory) for directory in sorted(suites)]
-
-
-def shared_targets(root: Path, args: Sequence[str], suites: dict[Path, str]) -> list[str]:
-    excluded = standalone_test_roots(root, suites)
+def shared_targets(root: Path, args: Sequence[str], excluded: Sequence[Path]) -> list[str]:
     return [
         arg for arg in args if not any(
             (root / arg.partition("::")[0]).resolve().is_relative_to(directory) for directory in excluded
         )
     ]
+
+
+class FullReport:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    @pytest.hookimpl()
+    def pytest_cmdline_main(self) -> None:
+        print(json.dumps(asdict(Selection("full", self.reason))), flush=True)
+
+
+def run_pytest(args: Sequence[str], plugins: Sequence[object] = ()) -> tuple[int, bool]:
+    """Run native pytest and recognize an intentionally excluded shared invocation."""
+
+    original = sys.path.copy()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        return pytest.main(list(args), plugins=list(plugins)), False
+    except pytest.exit.Exception as error:
+        if error.returncode != 0 or str(error) != EMPTY_SHARED:
+            raise
+        return pytest.ExitCode.OK, True
+    finally:
+        sys.path[:] = original
 
 
 @dataclass(frozen=True)
@@ -765,10 +867,15 @@ def run_selected(
         if registry.ready and "DJANGO_SETTINGS_MODULE" not in os.environ:
             fallback = fallback or "caller Django settings are local to its interpreter"
         if fallback:
-            print(json.dumps(asdict(Selection("full", fallback))), flush=True)
-            return pytest.main(args)
+            status, empty = run_pytest(args, [FullReport(fallback)])
+            if empty:
+                print(json.dumps(asdict(Selection("empty", EMPTY_SHARED))), flush=True)
+            return status
 
-        tests, shared_tests, shared_apps = collected(root, args, setup_django=registry.ready)
+        tests, shared_tests, shared_apps, excluded = collected(root, args, setup_django=registry.ready)
+        if excluded:
+            print(json.dumps(asdict(Selection("empty", EMPTY_SHARED))), flush=True)
+            return 0
         selection, _ = select(
             root, plan.python, tuple(tests), plan.graph, isolated=plan.suites, shared_tests=shared_tests,
             shared_apps=shared_apps, added_apps=tuple(plan.additions.values()),
@@ -783,12 +890,12 @@ def run_selected(
             arg for path, node in tests.items() if path.as_posix() not in included
             for arg in ("--deselect", f"{node}::")
         ]
-        status = pytest.main([*args, *options])
+        status, _ = run_pytest([*options, *args])
     finally:
         sys.path[:] = import_path
         os.chdir(callers)
     # A successfully collected nonempty selection may have no items in a particular shard.
-    return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and "--splits" in pytest_args else status
+    return 0 if status == pytest.ExitCode.NO_TESTS_COLLECTED and included and "--splits" in pytest_args else status
 
 
 def installed_graph(root: Path, apps: Sequence[str]) -> tuple[AppGraph, str]:
@@ -810,19 +917,28 @@ def selection_plan(
         additions=plan.additions, graph_fallback=plan.graph_fallback, framework=framework,
     )
     if not plan.additions and WORKSPACE_INPUTS.intersection(plan.python):
-        stack = Selection("full", "unverified Python workspace change")
+        stack = Selection("full", "unverified Python workspace change", stack.paths)
+    if stack.mode == "full" and base:
+        new_roots = {
+            name for directory, name in plan.graph.owners.items()
+            if directory / "pyproject.toml" in plan.changes and absent_at(root, base, directory)
+        }
+        stack = Selection("full", stack.reason, tuple(sorted(new_roots | set(stack.paths))))
     changed = any(selectable(path, plan.graph) for path in plan.python)
     tests = {}
     shared_tests = []
     shared_apps = None
+    excluded = False
     if framework and not plan.fallback and (changed or plan.additions):
         args = shared_pytest_args(root, pytest_args, plan.suites)
-        tests, shared_tests, shared_apps = collected(root, args)
+        tests, shared_tests, shared_apps, excluded = collected(root, args)
     shared, hosts = select(
         root, plan.python, tuple(tests), plan.graph, fallback=plan.fallback,
         isolated=plan.suites, legacy=True, shared_tests=shared_tests,
         shared_apps=shared_apps, added_apps=tuple(plan.additions.values()), preflight=not framework,
     )
+    if excluded:
+        shared = Selection("empty", EMPTY_SHARED)
     groups = []
     if framework:
         from scripts.postgres_selection import GROUPS
@@ -830,7 +946,7 @@ def selection_plan(
 
         if shared.mode == "full":
             config = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
-            roots = shared_targets(root, config["testpaths"], plan.suites)
+            roots = shared_targets(root, config["testpaths"], [root / path for path in plan.suites])
             shared = Selection("full", shared.reason, tuple(roots))
             groups = list(range(1, GROUPS + 1))
         elif shared.mode == "selected":
@@ -847,10 +963,11 @@ def main(argv: Sequence[str]) -> int:
                 import django
 
                 django.setup()
-            status = pytest.main(["--collect-only", *argv[2:]], plugins=[probe])
+            status, excluded = run_pytest(["--collect-only", *argv[2:]], [probe])
         if status in {pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED}:
             print(json.dumps({
                 "files": probe.files, "shared_paths": sorted(probe.shared_paths), "apps": sorted(probe.apps),
+                "excluded": excluded,
             }))
         return status
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
