@@ -32,6 +32,7 @@ members = [
     "angee-iam",
     "angee-iam-integrate-oidc",
     "angee-iam-messaging",
+    "angee-impact-probe",
     "angee-intake",
     "angee-integrate",
     "angee-integrate-github",
@@ -163,6 +164,7 @@ dependencies = [
     { name = "angee-iam" },
     { name = "angee-iam-integrate-oidc" },
     { name = "angee-iam-messaging" },
+    { name = "angee-impact-probe" },
     { name = "angee-intake" },
     { name = "angee-integrate" },
     { name = "angee-integrate-github" },
@@ -296,6 +298,7 @@ requires-dist = [
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-iam-integrate-oidc", editable = "src/angee/iam_integrate_oidc" },
     { name = "angee-iam-messaging", editable = "src/angee/iam_messaging" },
+    { name = "angee-impact-probe", editable = "src/angee/impact_probe" },
     { name = "angee-intake", editable = "src/angee/intake" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-integrate-github", editable = "src/angee/integrate_github" },
@@ -990,6 +993,27 @@ requires-dist = [
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
+]
+
+[[package]]
+name = "angee-impact-probe"
+version = "3.0.0"
+source = { editable = "src/angee/impact_probe" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
 ]
 
 [[package]]

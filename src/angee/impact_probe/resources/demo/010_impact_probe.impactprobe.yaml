@@ -1,0 +1,13 @@
+# Demo impactprobe rows (demo tier). The owner xref resolves through the
+# iam demo users this file depends on in pyproject.toml; idempotency is the resource
+# ledger's (source_addon, xref) identity.
+_meta:
+  model: impact_probe.ImpactProbe
+rows:
+  - xref: welcome
+    fields:
+      title: Welcome to impact probe
+      body: This impactprobe is loaded from a demo resource file.
+      owner: iam.user_alice
+      created_by: iam.user_alice
+      updated_by: iam.user_alice
