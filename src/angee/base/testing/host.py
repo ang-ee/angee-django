@@ -24,7 +24,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
@@ -150,6 +150,34 @@ def host_environ(host_root: Path, environ: Mapping[str, str]) -> dict[str, str]:
     return host
 
 
+def _check() -> None:
+    """Run Django checks on composed declarations before test database setup."""
+    import django
+    from django.apps import apps
+    from django.core.management import call_command
+    from rebac import backend
+    from rebac.schema import Schema
+
+    from angee.base.permissions import declared_rebac_schema
+
+    django.setup()
+    call_command("rebac", "check", skip_checks=True)
+    # Native build-zed checks cross-app collisions, but drops field backings.
+    with TemporaryDirectory() as directory:
+        call_command("rebac", "build-zed", out=Path(directory) / "effective.zed", skip_checks=True)
+    # REBAC's checks inspect the active schema. Bind the emitted declarations
+    # in this process so those checks do not require a synchronized database.
+    schemas = [
+        schema for config in apps.get_app_configs() if (schema := declared_rebac_schema(config)) is not None
+    ]
+    backend().set_schema(Schema(
+        definitions=[definition for schema in schemas for definition in schema.definitions],
+        caveats=[caveat for schema in schemas for caveat in schema.caveats],
+    ))
+    # Django probes backend field capabilities when the database list is absent.
+    call_command("check", databases=[])
+
+
 def run(
     addon: str, pytest_args: Sequence[str], *, hosts_dir: Path, apps: Sequence[str] = (), timeout: int = 1500,
 ) -> int:
@@ -170,6 +198,11 @@ def run(
     write(host_root, [addon, *apps], database)
     environ = host_environ(host_root, os.environ)
     compose(host_root, environ, if_stale=True, timeout=timeout)
+    checks = subprocess.run([
+        sys.executable, "-c", "from angee.base.testing.host import _check; _check()",
+    ], cwd=host_root, env=environ, check=False, timeout=timeout)
+    if checks.returncode:
+        return checks.returncode
     return subprocess.run([
         # The host owns the import path: pytest-django must not add an enclosing project's.
         sys.executable, "-m", "pytest", "--ds", SETTINGS_MODULE, "-o", "django_find_project=false",

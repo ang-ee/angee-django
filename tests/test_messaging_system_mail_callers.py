@@ -91,7 +91,6 @@ def _unlisted(name: str, allowed: Mapping[Path, str], modules: Mapping[Path, ast
     }
 
 
-@pytest.mark.shared_inputs
 @pytest.mark.parametrize(("writer", "allowed"), [(WRITER, CALLERS), (PRIVATE_WRITER, OWN_FILE)])
 def test_every_caller_of_a_system_mail_writer_is_named_with_its_permission(
     writer: str, allowed: Mapping[Path, str],
@@ -130,7 +129,6 @@ def test_a_mention_in_prose_or_the_owners_definition_is_no_reference() -> None:
     assert _reference_lines(ast.parse(source), WRITER) == []
 
 
-@pytest.mark.shared_inputs
 def test_only_the_listed_modules_call_the_system_send_or_its_shared_step() -> None:
     """List every production caller of ``send_as_system`` and ``_render_and_record``.
 
