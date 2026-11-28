@@ -161,7 +161,9 @@ wires declarations only; the reference example throughout is `examples/src/examp
    ```
 
    `i18n.ts` exports the bundle and `useNotesT = createNamespaceT("notes", enNotesMessages)` (`web/src/i18n.ts`);
-   `tsconfig.json` extends `src/angee/tsconfig.base.json` by relative path. The template's `index.test.ts`
+   Each `web/tsconfig.json` extends its source namespace's `../../tsconfig.base.json`. The addon repository
+   template makes that config inherit the sibling framework's fragment policy. The web project template forwards
+   its local namespace to the project's web config. The template's `index.test.ts`
    calls `expectValidBaseAddon(addon)`; its `vitest.config.ts` passes `gqlAlias: []` until the fragment consumes
    `@angee/gql`. The stack's `pnpm-workspace.yaml` globs match `src/angee/*/web`, stack-local `src/*/*/web`
    and, under the full profile, `examples/src/*/*/web`; a fragment in another repository slot needs one explicit
